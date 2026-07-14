@@ -1,0 +1,75 @@
+{
+  "name": "pi-codex-adaptor",
+  "version": "0.0.0",
+  "description": "A Pi extension that adapts the official OpenAI Codex runtime contract.",
+  "type": "module",
+  "license": "Apache-2.0",
+  "packageManager": "bun@1.3.14",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mizuikki/pi-codex-adaptor.git"
+  },
+  "bugs": {
+    "url": "https://github.com/mizuikki/pi-codex-adaptor/issues"
+  },
+  "homepage": "https://github.com/mizuikki/pi-codex-adaptor#readme",
+  "keywords": [
+    "codex",
+    "openai",
+    "pi",
+    "pi-package"
+  ],
+  "files": [
+    "LICENSE",
+    "README.md",
+    "native/bin",
+    "src"
+  ],
+  "pi": {
+    "extensions": [
+      "./src/extension.ts"
+    ]
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "overrides": {
+    "@types/node": "24.13.3"
+  },
+  "scripts": {
+    "check": "bun run lint && bun run typecheck && bun test && bun run check:toolchain && bun run check:upstream && bun run check:native && bun run pack:verify",
+    "lint": "biome check .",
+    "format": "biome check --write .",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "bun test",
+    "check:toolchain": "bun scripts/verify-toolchain.ts",
+    "check:upstream": "bun scripts/sync-codex-upstream.ts --verify",
+    "test:official": "bun scripts/generate-official-fixtures.ts --check",
+    "check:native": "cargo fmt --manifest-path native/Cargo.toml --all --check && cargo clippy --manifest-path native/Cargo.toml --workspace --all-targets -- -D warnings && cargo test --manifest-path native/Cargo.toml --workspace",
+    "build:native": "bun scripts/build-native.ts",
+    "pack:assemble": "bun scripts/assemble-package.ts",
+    "pack:verify": "bun scripts/verify-package.ts",
+    "release:verify": "bun scripts/verify-release.ts",
+    "release": "bun scripts/publish-package.ts"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-agent-core": "*",
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.3",
+    "@earendil-works/pi-agent-core": "0.80.6",
+    "@earendil-works/pi-ai": "0.80.6",
+    "@earendil-works/pi-coding-agent": "0.80.6",
+    "@earendil-works/pi-tui": "0.80.6",
+    "@types/bun": "1.3.14",
+    "@types/node": "^24.13.3",
+    "smol-toml": "1.7.0",
+    "typebox": "1.3.6",
+    "typescript": "^7.0.2",
+    "yaml": "2.9.0"
+  }
+}

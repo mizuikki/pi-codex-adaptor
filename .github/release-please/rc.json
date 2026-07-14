@@ -1,0 +1,16 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/v17.10.3/schemas/config.json",
+  "packages": {
+    ".": {
+      "changelog-path": "CHANGELOG.md",
+      "include-component-in-tag": false,
+      "package-name": "pi-codex-adaptor",
+      "prerelease": true,
+      "prerelease-type": "rc",
+      "release-as": "0.1.0-rc.0",
+      "release-type": "node",
+      "skip-github-release": true,
+      "versioning": "prerelease"
+    }
+  }
+}

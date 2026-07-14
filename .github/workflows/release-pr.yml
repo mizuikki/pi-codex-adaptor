@@ -1,0 +1,42 @@
+name: Release Please
+
+on:
+  push:
+    branches:
+      - main
+      - "release/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release-pr:
+    name: Update release pull request
+    if: vars.RELEASE_AUTOMATION_READY == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Create short-lived GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+      - name: Select release configuration
+        id: config
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF_NAME}" == release/* ]]; then
+            echo "path=.github/release-please/rc.json" >> "${GITHUB_OUTPUT}"
+          else
+            echo "path=.github/release-please/stable.json" >> "${GITHUB_OUTPUT}"
+          fi
+      - name: Create or update release pull request
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          config-file: ${{ steps.config.outputs.path }}
+          manifest-file: .release-please-manifest.json

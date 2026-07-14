@@ -1,0 +1,12 @@
+node_modules/
+dist/
+coverage/
+*.tgz
+
+native/target/
+target/
+
+.DS_Store
+Thumbs.db
+*.log
+*.tmp

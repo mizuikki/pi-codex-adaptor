@@ -1,0 +1,23 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      project-tooling:
+        patterns:
+          - "@biomejs/*"
+          - "@types/*"
+          - typescript
+    ignore:
+      - dependency-name: "@openai/codex"
+      - dependency-name: "@openai/codex-sdk"
+  - package-ecosystem: cargo
+    directory: /native
+    schedule:
+      interval: weekly
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

@@ -1,0 +1,18 @@
+changelog:
+  categories:
+    - title: Breaking Changes
+      labels:
+        - release:major
+    - title: Features
+      labels:
+        - release:minor
+    - title: Fixes and Performance
+      labels:
+        - release:patch
+  exclude:
+    labels:
+      - autorelease: pending
+      - autorelease: tagged
+      - release:none
+    authors:
+      - release-please[bot]

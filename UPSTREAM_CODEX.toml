@@ -1,0 +1,27 @@
+schema_version = 1
+
+[official]
+version = "0.144.3"
+tag = "rust-v0.144.3"
+annotated_tag_object = "13307a9036baccd2c51b685d1457a4b89b5b2f3b"
+source_commit = "78ad6e6bfd1d3b6a209acd3ef82172a96b25179c"
+repository = "https://github.com/openai/codex"
+license = "Apache-2.0"
+rust_toolchain = "1.95.0"
+
+[conformance.cli]
+package = "@openai/codex"
+version = "0.144.3"
+integrity = "sha512-8Re3wp5CdYiM7nsF4StFa5js6IT11N7srhxfvwtol7ENHDht05C+HS4e1CTmYjqkhgsUzl2R1gB27iN2pdbVnA=="
+
+[conformance.sdk]
+package = "@openai/codex-sdk"
+version = "0.144.3"
+integrity = "sha512-WPtEx38iVyksWujOwmsxnJznRR8T/YF+lAJghMhHL1xIWdJrrvZ1iafhIsw4egY5CRoRmFm2ta8NQsK4f4XDZA=="
+
+[vendor]
+status = "pending"
+tree_sha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+allowlist = []
+patches = []
+excluded_crates = ["codex-core", "codex-app-server"]

@@ -1,0 +1,46 @@
+name: Native artifacts
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+
+jobs:
+  build:
+    name: Native skeleton (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            executable: codex-bridge
+          - os: macos-15
+            target: aarch64-apple-darwin
+            executable: codex-bridge
+          - os: windows-2025
+            target: x86_64-pc-windows-msvc
+            executable: codex-bridge.exe
+    steps:
+      - name: Check out source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Build native skeleton
+        run: cargo build --locked --release --manifest-path native/Cargo.toml --target ${{ matrix.target }}
+      - name: Verify bridge identity
+        shell: bash
+        run: native/target/${{ matrix.target }}/release/${{ matrix.executable }} --version
+      - name: Attest native executable
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: native/target/${{ matrix.target }}/release/${{ matrix.executable }}
+      - name: Upload native executable
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: codex-bridge-${{ matrix.target }}-${{ github.sha }}-codex-78ad6e6bfd1d3b6a
+          path: native/target/${{ matrix.target }}/release/${{ matrix.executable }}
+          if-no-files-found: error

@@ -1,0 +1,17 @@
+[package]
+name = "codex-bridge"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "codex-bridge"
+path = "src/main.rs"
+
+[dependencies]
+pi-codex-bridge-protocol = { path = "../bridge-protocol" }
+
+[lints]
+workspace = true
