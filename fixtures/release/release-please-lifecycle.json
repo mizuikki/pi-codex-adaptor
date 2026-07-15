@@ -1,0 +1,90 @@
+{
+  "schemaVersion": 1,
+  "allowedBootstrapVersions": ["0.1.0-rc.0", "0.1.0"],
+  "configs": {
+    "rc": {
+      "path": ".github/release-please/rc.json",
+      "required": {
+        "prerelease": true,
+        "prerelease-type": "rc",
+        "release-type": "node",
+        "skip-github-release": true,
+        "versioning": "prerelease"
+      }
+    },
+    "stable": {
+      "path": ".github/release-please/stable.json",
+      "required": {
+        "release-type": "node",
+        "skip-github-release": true
+      },
+      "forbidden": ["prerelease", "prerelease-type", "versioning"]
+    }
+  },
+  "progression": [
+    {
+      "name": "bootstrap-rc0",
+      "channel": "rc",
+      "from": "0.0.0",
+      "releaseAs": "0.1.0-rc.0",
+      "to": "0.1.0-rc.0",
+      "npmDistTag": "rc",
+      "clearReleaseAsAfterTag": true
+    },
+    {
+      "name": "automatic-rc1",
+      "channel": "rc",
+      "from": "0.1.0-rc.0",
+      "releaseAs": null,
+      "to": "0.1.0-rc.1",
+      "npmDistTag": "rc",
+      "strategy": "prerelease"
+    },
+    {
+      "name": "bootstrap-stable",
+      "channel": "stable",
+      "from": "0.1.0-rc.1",
+      "releaseAs": "0.1.0",
+      "to": "0.1.0",
+      "npmDistTag": "latest",
+      "clearReleaseAsAfterTag": true
+    }
+  ],
+  "releaseAsLifecycle": [
+    {
+      "name": "bootstrap-allowed-before-tag",
+      "bootstrapVersion": "0.1.0-rc.0",
+      "packageVersion": "0.0.0",
+      "taggedVersions": [],
+      "ok": true
+    },
+    {
+      "name": "bootstrap-must-clear-after-tag",
+      "bootstrapVersion": "0.1.0-rc.0",
+      "packageVersion": "0.1.0-rc.0",
+      "taggedVersions": ["0.1.0-rc.0"],
+      "ok": false
+    },
+    {
+      "name": "stable-bootstrap-allowed",
+      "bootstrapVersion": "0.1.0",
+      "packageVersion": "0.1.0-rc.1",
+      "taggedVersions": ["0.1.0-rc.0", "0.1.0-rc.1"],
+      "ok": true
+    },
+    {
+      "name": "unsupported-bootstrap",
+      "bootstrapVersion": "0.2.0",
+      "packageVersion": "0.1.0",
+      "taggedVersions": ["0.1.0"],
+      "ok": false
+    },
+    {
+      "name": "cleared-bootstrap",
+      "bootstrapVersion": "",
+      "packageVersion": "0.1.0-rc.0",
+      "taggedVersions": ["0.1.0-rc.0"],
+      "ok": true
+    }
+  ]
+}

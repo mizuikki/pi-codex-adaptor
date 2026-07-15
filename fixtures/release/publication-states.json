@@ -1,0 +1,77 @@
+{
+  "schemaVersion": 1,
+  "cases": [
+    {
+      "name": "fresh-publish",
+      "snapshot": {
+        "npmPublished": false,
+        "gitTagExists": false,
+        "githubReleaseExists": false
+      },
+      "expected": {
+        "action": "publish",
+        "needsFinalize": true
+      }
+    },
+    {
+      "name": "finalize-only-missing-tag",
+      "snapshot": {
+        "npmPublished": true,
+        "gitTagExists": false,
+        "githubReleaseExists": false
+      },
+      "expected": {
+        "action": "finalize-only",
+        "needsFinalize": true
+      }
+    },
+    {
+      "name": "finalize-only-missing-github-release",
+      "snapshot": {
+        "npmPublished": true,
+        "gitTagExists": true,
+        "githubReleaseExists": false
+      },
+      "expected": {
+        "action": "finalize-only",
+        "needsFinalize": true
+      }
+    },
+    {
+      "name": "already-complete",
+      "snapshot": {
+        "npmPublished": true,
+        "gitTagExists": true,
+        "githubReleaseExists": true
+      },
+      "expected": {
+        "action": "complete",
+        "needsFinalize": false
+      }
+    },
+    {
+      "name": "impossible-tag-without-npm",
+      "snapshot": {
+        "npmPublished": false,
+        "gitTagExists": true,
+        "githubReleaseExists": false
+      },
+      "expected": {
+        "action": "impossible",
+        "needsFinalize": false
+      }
+    },
+    {
+      "name": "impossible-github-release-without-npm",
+      "snapshot": {
+        "npmPublished": false,
+        "gitTagExists": false,
+        "githubReleaseExists": true
+      },
+      "expected": {
+        "action": "impossible",
+        "needsFinalize": false
+      }
+    }
+  ]
+}
