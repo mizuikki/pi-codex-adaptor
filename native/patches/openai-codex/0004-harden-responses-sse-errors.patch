@@ -1,0 +1,171 @@
+diff --git a/codex-rs/codex-api/src/sse/responses.rs b/codex-rs/codex-api/src/sse/responses.rs
+index 70f96cb855..3f85210860 100644
+--- a/codex-rs/codex-api/src/sse/responses.rs
++++ b/codex-rs/codex-api/src/sse/responses.rs
+@@ -328,12 +328,17 @@ pub fn process_responses_event(
+ ) -> std::result::Result<Option<ResponseEvent>, ResponsesEventError> {
+     match event.kind.as_str() {
+         "response.output_item.done" => {
+-            if let Some(item_val) = event.item {
+-                if let Ok(item) = serde_json::from_value::<ResponseItem>(item_val) {
+-                    return Ok(Some(ResponseEvent::OutputItemDone(item)));
+-                }
+-                debug!("failed to parse ResponseItem from output_item.done");
+-            }
++            let item_val = event.item.ok_or_else(|| {
++                ResponsesEventError::Api(ApiError::Stream(
++                    "response.output_item.done is missing item".into(),
++                ))
++            })?;
++            let item = serde_json::from_value::<ResponseItem>(item_val).map_err(|error| {
++                ResponsesEventError::Api(ApiError::Stream(format!(
++                    "failed to parse ResponseItem from response.output_item.done: {error}"
++                )))
++            })?;
++            return Ok(Some(ResponseEvent::OutputItemDone(item)));
+         }
+         "response.output_text.delta" => {
+             if let Some(delta) = event.delta {
+@@ -449,12 +454,17 @@ pub fn process_responses_event(
+             }
+         }
+         "response.output_item.added" => {
+-            if let Some(item_val) = event.item {
+-                if let Ok(item) = serde_json::from_value::<ResponseItem>(item_val) {
+-                    return Ok(Some(ResponseEvent::OutputItemAdded(item)));
+-                }
+-                debug!("failed to parse ResponseItem from output_item.added");
+-            }
++            let item_val = event.item.ok_or_else(|| {
++                ResponsesEventError::Api(ApiError::Stream(
++                    "response.output_item.added is missing item".into(),
++                ))
++            })?;
++            let item = serde_json::from_value::<ResponseItem>(item_val).map_err(|error| {
++                ResponsesEventError::Api(ApiError::Stream(format!(
++                    "failed to parse ResponseItem from response.output_item.added: {error}"
++                )))
++            })?;
++            return Ok(Some(ResponseEvent::OutputItemAdded(item)));
+         }
+         "response.reasoning_summary_part.added" => {
+             if let Some(summary_index) = event.summary_index {
+@@ -496,7 +506,6 @@ async fn process_sse_with_treatment(
+     safety_buffering_treatment: SafetyBufferingTreatment,
+ ) {
+     let mut stream = stream.eventsource();
+-    let mut response_error: Option<ApiError> = None;
+     let mut last_server_model: Option<String> = None;
+ 
+     loop {
+@@ -513,10 +522,11 @@ async fn process_sse_with_treatment(
+                 return;
+             }
+             Ok(None) => {
+-                let error = response_error.unwrap_or(ApiError::Stream(
+-                    "stream closed before response.completed".into(),
+-                ));
+-                let _ = tx_event.send(Err(error)).await;
++                let _ = tx_event
++                    .send(Err(ApiError::Stream(
++                        "stream closed before response.completed".into(),
++                    )))
++                    .await;
+                 return;
+             }
+             Err(_) => {
+@@ -527,12 +537,21 @@ async fn process_sse_with_treatment(
+             }
+         };
+ 
+-        trace!("SSE event: {}", &sse.data);
++        trace!(
++            event_type = %sse.event,
++            payload_bytes = sse.data.len(),
++            "SSE event received"
++        );
+ 
+         let event: ResponsesStreamEvent = match serde_json::from_str(&sse.data) {
+             Ok(event) => event,
+             Err(e) => {
+-                debug!("Failed to parse SSE event: {e}, data: {}", &sse.data);
++                debug!(
++                    event_type = %sse.event,
++                    payload_bytes = sse.data.len(),
++                    error = %e,
++                    "Failed to parse SSE event"
++                );
+                 continue;
+             }
+         };
+@@ -589,7 +608,8 @@ async fn process_sse_with_treatment(
+             }
+             Ok(None) => {}
+             Err(error) => {
+-                response_error = Some(error.into_api_error());
++                let _ = tx_event.send(Err(error.into_api_error())).await;
++                return;
+             }
+         };
+     }
+@@ -805,6 +825,60 @@ mod tests {
+         }
+     }
+ 
++    #[test]
++    fn malformed_or_missing_output_items_are_errors() {
++        for kind in ["response.output_item.done", "response.output_item.added"] {
++            for value in [json!({ "type": kind }), json!({ "type": kind, "item": 7 })] {
++                let event = serde_json::from_value(value).expect("event should deserialize");
++                let error = process_responses_event(event).expect_err("item should be rejected");
++                assert_matches!(error.into_api_error(), ApiError::Stream(_));
++            }
++        }
++    }
++
++    #[tokio::test]
++    async fn terminal_error_is_emitted_without_waiting_for_stream_end() {
++        let incomplete = json!({
++            "type": "response.incomplete",
++            "response": { "incomplete_details": { "reason": "max_output_tokens" } }
++        });
++        let sse = format!("event: response.incomplete\ndata: {incomplete}\n\n");
++        let stream = stream::iter(vec![Ok(Bytes::from(sse))]).chain(stream::pending());
++        let (tx, mut rx) = mpsc::channel::<Result<ResponseEvent, ApiError>>(8);
++        tokio::spawn(process_sse(
++            Box::pin(stream),
++            tx,
++            idle_timeout(),
++            /*telemetry*/ None,
++        ));
++
++        let event = tokio::time::timeout(Duration::from_millis(100), rx.recv())
++            .await
++            .expect("terminal error should not wait for idle timeout")
++            .expect("terminal error event should be sent");
++        assert_matches!(event, Err(ApiError::Stream(message)) if message.contains("max_output_tokens"));
++        assert!(rx.recv().await.is_none());
++    }
++
++    #[tokio::test]
++    async fn completed_event_cannot_replace_an_earlier_terminal_error() {
++        let incomplete = json!({
++            "type": "response.incomplete",
++            "response": { "incomplete_details": { "reason": "content_filter" } }
++        });
++        let completed = json!({
++            "type": "response.completed",
++            "response": { "id": "must-not-complete" }
++        });
++        let first = format!("event: response.incomplete\ndata: {incomplete}\n\n");
++        let second = format!("event: response.completed\ndata: {completed}\n\n");
++
++        let events = collect_events(&[first.as_bytes(), second.as_bytes()]).await;
++
++        assert_eq!(events.len(), 1);
++        assert_matches!(&events[0], Err(ApiError::Stream(message)) if message.contains("content_filter"));
++    }
++
+     #[tokio::test]
+     async fn parses_reasoning_summary_done() {
+         let events = run_sse(vec![

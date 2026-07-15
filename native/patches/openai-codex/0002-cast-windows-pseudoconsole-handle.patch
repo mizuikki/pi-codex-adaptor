@@ -1,0 +1,12 @@
+diff --git a/codex-rs/utils/pty/src/win/conpty.rs b/codex-rs/utils/pty/src/win/conpty.rs
+--- a/codex-rs/utils/pty/src/win/conpty.rs
++++ b/codex-rs/utils/pty/src/win/conpty.rs
+@@ -79,7 +79,7 @@ impl RawConPty {
+     }
+ 
+     pub fn pseudoconsole_handle(&self) -> RawHandle {
+-        self.con.raw_handle()
++        self.con.raw_handle().cast()
+     }
+ 
+     pub fn into_handles(self) -> (PsuedoCon, FileDescriptor, FileDescriptor) {

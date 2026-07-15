@@ -1,0 +1,127 @@
+{
+  "schema_version": 1,
+  "official_version": "0.144.3",
+  "source_commit": "78ad6e6bfd1d3b6a209acd3ef82172a96b25179c",
+  "license": "Apache-2.0",
+  "license_files": [
+    "LICENSE",
+    "NOTICE"
+  ],
+  "packages": [
+    {
+      "name": "codex-api",
+      "source_path": "codex-rs/codex-api",
+      "license": "Apache-2.0"
+    },
+    {
+      "name": "codex-async-utils",
+      "source_path": "codex-rs/async-utils",
+      "license": "Apache-2.0"
+    },
+    {
+      "name": "codex-client",
+      "source_path": "codex-rs/codex-client",
+      "license": "Apache-2.0"
+    },
+    {
+      "name": "codex-execpolicy",
+      "source_path": "codex-rs/execpolicy",
+      "license": "Apache-2.0"
+    },
+    {
+      "name": "codex-extension-items",
+      "source_path": "codex-rs/ext/items",
+      "license": "Apache-2.0"
+    },
+    {
+      "name": "codex-http-client",
+      "source_path": "codex-rs/http-client",
+      "license": "Apache-2.0"
+    },
+    {
+      "name": "codex-network-proxy",
+      "source_path": "codex-rs/network-proxy",
+      "license": "Apache-2.0"
+    },
+    {
+      "name": "codex-protocol",
+      "source_path": "codex-rs/protocol",
+      "license": "Apache-2.0"
+    },
+    {
+      "name": "codex-utils-absolute-path",
+      "source_path": "codex-rs/utils/absolute-path",
+      "license": "Apache-2.0"
+    },
+    {
+      "name": "codex-utils-cache",
+      "source_path": "codex-rs/utils/cache",
+      "license": "Apache-2.0"
+    },
+    {
+      "name": "codex-utils-home-dir",
+      "source_path": "codex-rs/utils/home-dir",
+      "license": "Apache-2.0"
+    },
+    {
+      "name": "codex-utils-image",
+      "source_path": "codex-rs/utils/image",
+      "license": "Apache-2.0"
+    },
+    {
+      "name": "codex-utils-output-truncation",
+      "source_path": "codex-rs/utils/output-truncation",
+      "license": "Apache-2.0"
+    },
+    {
+      "name": "codex-utils-path-uri",
+      "source_path": "codex-rs/utils/path-uri",
+      "license": "Apache-2.0"
+    },
+    {
+      "name": "codex-utils-pty",
+      "source_path": "codex-rs/utils/pty",
+      "license": "Apache-2.0"
+    },
+    {
+      "name": "codex-utils-rustls-provider",
+      "source_path": "codex-rs/utils/rustls-provider",
+      "license": "Apache-2.0"
+    },
+    {
+      "name": "codex-utils-string",
+      "source_path": "codex-rs/utils/string",
+      "license": "Apache-2.0"
+    },
+    {
+      "name": "codex-websocket-client",
+      "source_path": "codex-rs/websocket-client",
+      "license": "Apache-2.0"
+    },
+    {
+      "name": "codex-tools-p0-modules",
+      "source_path": "codex-rs/tools",
+      "license": "Apache-2.0"
+    },
+    {
+      "name": "codex-core-p0-tool-specs",
+      "source_path": "codex-rs/core/src/tools",
+      "license": "Apache-2.0"
+    },
+    {
+      "name": "codex-apply-patch-parser-modules",
+      "source_path": "codex-rs/apply-patch/src",
+      "license": "Apache-2.0"
+    },
+    {
+      "name": "codex-image-generation-tool-contract",
+      "source_path": "codex-rs/ext/image-generation",
+      "license": "Apache-2.0"
+    },
+    {
+      "name": "codex-standalone-web-search-contract",
+      "source_path": "codex-rs/ext/web-search",
+      "license": "Apache-2.0"
+    }
+  ]
+}
