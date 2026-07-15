@@ -1,0 +1,25 @@
+[package]
+name = "codex-tools"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+codex-api.workspace = true
+codex-protocol.workspace = true
+codex-utils-output-truncation.workspace = true
+jsonptr.workspace = true
+rmcp = { workspace = true, features = ["base64", "macros", "schemars", "server"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+schemars.workspace = true
+urlencoding.workspace = true
+
+[lib]
+path = "src/lib.rs"
+doctest = false
+
+[lints]
+workspace = true

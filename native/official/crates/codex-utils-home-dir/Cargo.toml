@@ -1,0 +1,17 @@
+[package]
+name = "codex-utils-home-dir"
+version = "0.144.3"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+rust-version = "1.95"
+
+[lib]
+doctest = false
+path = "../../../vendor/openai-codex/codex-rs/utils/home-dir/src/lib.rs"
+
+[dependencies.codex-utils-absolute-path]
+workspace = true
+
+[dependencies.dirs]
+workspace = true

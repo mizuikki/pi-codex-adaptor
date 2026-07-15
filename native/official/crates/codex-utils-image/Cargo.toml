@@ -1,0 +1,31 @@
+[package]
+name = "codex-utils-image"
+version = "0.144.3"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+rust-version = "1.95"
+
+[lib]
+doctest = false
+path = "../../../vendor/openai-codex/codex-rs/utils/image/src/lib.rs"
+
+[dependencies.base64]
+workspace = true
+
+[dependencies.image]
+workspace = true
+features = [ "jpeg", "png", "gif", "webp" ]
+
+[dependencies.codex-utils-cache]
+workspace = true
+
+[dependencies.mime_guess]
+workspace = true
+
+[dependencies.thiserror]
+workspace = true
+
+[dependencies.tokio]
+workspace = true
+features = [ "fs", "rt", "rt-multi-thread", "macros" ]

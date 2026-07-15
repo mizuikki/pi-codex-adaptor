@@ -1,0 +1,25 @@
+[package]
+name = "codex-extension-items"
+version = "0.144.3"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+rust-version = "1.95"
+
+[lib]
+name = "codex_extension_items"
+path = "../../../vendor/openai-codex/codex-rs/ext/items/src/lib.rs"
+doctest = false
+
+[dependencies.codex-utils-absolute-path]
+workspace = true
+
+[dependencies.schemars]
+workspace = true
+
+[dependencies.serde]
+workspace = true
+features = [ "derive" ]
+
+[dependencies.ts-rs]
+workspace = true

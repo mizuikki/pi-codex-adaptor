@@ -1,0 +1,31 @@
+[package]
+name = "codex-client"
+version = "0.144.3"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+rust-version = "1.95"
+
+[lib]
+doctest = false
+test = false
+path = "../../../vendor/openai-codex/codex-rs/codex-client/src/lib.rs"
+
+[dependencies.codex-http-client]
+workspace = true
+
+[dependencies.eventsource-stream]
+workspace = true
+
+[dependencies.futures]
+workspace = true
+
+[dependencies.http]
+workspace = true
+
+[dependencies.rand]
+workspace = true
+
+[dependencies.tokio]
+workspace = true
+features = [ "macros", "rt", "time", "sync" ]

@@ -6,6 +6,7 @@
       "!!dist",
       "!!node_modules",
       "!!native/target",
+      "!!native/official/target",
       "!!native/upstream",
       "!!native/vendor/openai-codex"
     ]

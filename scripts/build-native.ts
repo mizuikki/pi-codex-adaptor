@@ -27,6 +27,12 @@ if (target !== undefined) {
 
 const processResult = Bun.spawn(command, {
 	cwd: repositoryRoot,
+	env: {
+		...process.env,
+		PI_CODEX_ADAPTOR_SOURCE_COMMIT: (await Bun.$`git rev-parse HEAD`.cwd(repositoryRoot).quiet())
+			.text()
+			.trim(),
+	},
 	stderr: "inherit",
 	stdout: "inherit",
 });

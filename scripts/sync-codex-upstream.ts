@@ -492,7 +492,40 @@ async function verifySbom(manifest: UpstreamManifest): Promise<void> {
 	} catch (error) {
 		throw new Error("Native SBOM is not valid JSON", { cause: error });
 	}
-	assertNativeSbom(sbom, manifest);
+	const cargoLock = await readFile(resolve(repositoryRoot, "native/Cargo.lock"));
+	assertNativeSbom(sbom, manifest, sha256(cargoLock));
+}
+
+export function readAssignedStringConstant(source: string, name: string): string {
+	const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+	const assignments = [
+		...source.matchAll(new RegExp(`\\b${escapedName}\\b[^=\\n]*=\\s*["']([^"']+)["']`, "g")),
+	];
+	const value = assignments[0]?.[1];
+	if (assignments.length !== 1 || value === undefined) {
+		throw new Error(`Bridge identity constant ${name} must have exactly one string assignment`);
+	}
+	return value;
+}
+
+async function verifyIdentitySources(manifest: UpstreamManifest): Promise<void> {
+	const [rustSource, typeScriptSource] = await Promise.all([
+		readFile(resolve(repositoryRoot, "native/crates/bridge-protocol/src/lib.rs"), "utf8"),
+		readFile(resolve(repositoryRoot, "src/infrastructure/codex-bridge/identity.ts"), "utf8"),
+	]);
+	for (const [name, expected] of Object.entries({
+		OFFICIAL_CODEX_TAG: manifest.official.tag,
+		OFFICIAL_CODEX_VERSION: manifest.official.version,
+		OFFICIAL_SOURCE_COMMIT: manifest.official.source_commit,
+		VENDOR_TREE_SHA256: manifest.vendor.tree_sha256,
+	})) {
+		if (
+			readAssignedStringConstant(rustSource, name) !== expected ||
+			readAssignedStringConstant(typeScriptSource, name) !== expected
+		) {
+			throw new Error(`Bridge identity field ${name} is not synchronized with UPSTREAM_CODEX.toml`);
+		}
+	}
 }
 
 async function writeSelectedVendor(
@@ -639,6 +672,7 @@ async function main(): Promise<void> {
 		) {
 			throw new Error("Pending vendor state must contain only the recorded empty tree");
 		}
+		await verifyIdentitySources(manifest);
 		console.log(`Verified pending OpenAI Codex ${manifest.official.version} vendor state.`);
 	} else {
 		const { value: fileManifest } = await readVendorFileManifest(manifest);
@@ -650,6 +684,7 @@ async function main(): Promise<void> {
 		await verifyVendorFiles(manifest, fileManifest);
 		await verifyLicenseInventory(manifest);
 		await verifySbom(manifest);
+		await verifyIdentitySources(manifest);
 		console.log(
 			`Verified OpenAI Codex ${manifest.official.version} vendor tree ${manifest.vendor.tree_sha256}.`,
 		);

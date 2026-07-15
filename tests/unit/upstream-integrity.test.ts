@@ -12,6 +12,7 @@ import {
 	collectFiles,
 	type LicenseInventory,
 	type NativeSbom,
+	readAssignedStringConstant,
 	type UpstreamManifest,
 	verifyPinnedSourceHashes,
 } from "../../scripts/sync-codex-upstream.ts";
@@ -177,6 +178,17 @@ describe("upstream integrity", () => {
 		};
 		expect(() => assertNativeSbom(sbom, value, "d".repeat(64))).not.toThrow();
 		expect(() => assertNativeSbom(sbom, value, "e".repeat(64))).toThrow("Cargo.lock identity");
+	});
+
+	test("reads bridge identity values from their named assignments only", () => {
+		const source = `
+const UNRELATED = "expected";
+export const OFFICIAL_CODEX_VERSION = "0.144.3";
+`;
+		expect(readAssignedStringConstant(source, "OFFICIAL_CODEX_VERSION")).toBe("0.144.3");
+		expect(() => readAssignedStringConstant(source, "OFFICIAL_SOURCE_COMMIT")).toThrow(
+			"exactly one string assignment",
+		);
 	});
 
 	test("verifies recorded hashes against a pinned source without mutation", async () => {
