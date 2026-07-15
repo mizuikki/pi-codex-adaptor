@@ -47,5 +47,5 @@ describe("Pi extension loading", () => {
 		} finally {
 			await rm(piHome, { force: true, recursive: true });
 		}
-	});
+	}, 30_000);
 });

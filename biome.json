@@ -8,7 +8,10 @@
       "!!native/target",
       "!!native/official/target",
       "!!native/upstream",
-      "!!native/vendor/openai-codex"
+      "!!native/vendor/openai-codex",
+      "!!fixtures/app-server-schema",
+      "!!fixtures/official-conformance",
+      "!!src/integration/pi/generated"
     ]
   },
   "formatter": {

@@ -9,8 +9,11 @@ use separate screens. Resize preserves the section, focus, scroll position, and 
 
 Settings are edited as a draft and saved as one validated transaction. `Ctrl+S` validates and writes
 atomically. Leaving with unsaved changes offers Continue editing, Discard changes, and Save, with
-Continue editing selected by default. Unsupported capability-dependent settings include a textual
-reason; color is never the only state signal.
+Continue editing selected by default. `R` opens an explicit reset-to-defaults confirmation with Cancel
+selected by default. Unsupported capability-dependent settings include a textual reason; color is never
+the only state signal.
 
-Headless mode does not open an overlay, animate, or wait for input. Diagnostics have a stable plain
-text or machine-readable form and exclude user content and secrets.
+Approval prompts owned by the terminal UI default to Decline, then Cancel, then Allow once. Headless
+mode does not open an overlay, animate, or wait for input. Diagnostics have a stable plain text or
+machine-readable form and exclude user content and secrets. Overlay disposal aborts in-flight UI tasks
+and ignores late updates.
