@@ -1,0 +1,15 @@
+[package]
+name = "codex-utils-rustls-provider"
+version = "0.144.3"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+rust-version = "1.95"
+
+[lib]
+test = false
+doctest = false
+path = "../../../vendor/openai-codex/codex-rs/utils/rustls-provider/src/lib.rs"
+
+[dependencies.rustls]
+workspace = true

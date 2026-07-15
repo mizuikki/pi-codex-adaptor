@@ -1,0 +1,9 @@
+{"type":"initialize","requestId":"init-1","protocolVersion":1,"client":{"name":"pi-codex-adaptor","version":"0.0.0"}}
+{"type":"request","requestId":"request-1","method":"models.resolve","params":{"provider":"openai"}}
+{"type":"cancel","requestId":"cancel-1","targetRequestId":"request-1"}
+{"type":"approval_decision","requestId":"decision-1","approvalId":"approval-1","decision":"decline"}
+{"type":"session_write","requestId":"write-1","sessionId":"session-1","data":"sample input"}
+{"type":"session_resize","requestId":"resize-1","sessionId":"session-1","columns":100,"rows":30}
+{"type":"session_terminate","requestId":"terminate-1","sessionId":"session-1"}
+{"type":"acknowledge","targetRequestId":"request-1","sequence":4}
+{"type":"shutdown","requestId":"shutdown-1"}

@@ -4,9 +4,12 @@ coverage/
 *.tgz
 
 native/target/
+native/official/target/
+native/artifacts/
 target/
 
 .DS_Store
 Thumbs.db
 *.log
 *.tmp
+tmp/

@@ -1,0 +1,87 @@
+[package]
+name = "codex-api"
+version = "0.144.3"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+rust-version = "1.95"
+
+[lib]
+doctest = false
+path = "../../../vendor/openai-codex/codex-rs/codex-api/src/lib.rs"
+
+[dependencies.async-channel]
+workspace = true
+
+[dependencies.base64]
+workspace = true
+
+[dependencies.bytes]
+workspace = true
+
+[dependencies.chrono]
+workspace = true
+
+[dependencies.codex-client]
+workspace = true
+
+[dependencies.codex-http-client]
+workspace = true
+
+[dependencies.codex-protocol]
+workspace = true
+
+[dependencies.codex-utils-rustls-provider]
+workspace = true
+
+[dependencies.codex-websocket-client]
+workspace = true
+
+[dependencies.futures]
+workspace = true
+
+[dependencies.http]
+workspace = true
+
+[dependencies.reqwest]
+workspace = true
+features = [ "json", "stream" ]
+
+[dependencies.schemars]
+workspace = true
+
+[dependencies.serde]
+workspace = true
+features = [ "derive" ]
+
+[dependencies.serde_json]
+workspace = true
+
+[dependencies.thiserror]
+workspace = true
+
+[dependencies.tokio]
+workspace = true
+features = [ "fs", "macros", "net", "rt", "sync", "time" ]
+
+[dependencies.tokio-tungstenite]
+workspace = true
+
+[dependencies.tungstenite]
+workspace = true
+
+[dependencies.tracing]
+workspace = true
+
+[dependencies.eventsource-stream]
+workspace = true
+
+[dependencies.regex-lite]
+workspace = true
+
+[dependencies.tokio-util]
+workspace = true
+features = [ "codec", "io" ]
+
+[dependencies.url]
+workspace = true

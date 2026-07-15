@@ -1,0 +1,33 @@
+[package]
+name = "codex-websocket-client"
+version = "0.144.3"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+rust-version = "1.95"
+
+[lib]
+doctest = false
+path = "../../../vendor/openai-codex/codex-rs/websocket-client/src/lib.rs"
+
+[dependencies.codex-http-client]
+workspace = true
+
+[dependencies.futures]
+workspace = true
+
+[dependencies.rustls]
+workspace = true
+
+[dependencies.tokio]
+workspace = true
+features = [ "net", "rt", "time" ]
+
+[dependencies.tokio-rustls]
+workspace = true
+
+[dependencies.tokio-tungstenite]
+workspace = true
+
+[dependencies.url]
+workspace = true

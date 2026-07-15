@@ -1,0 +1,7 @@
+{"type":"handshake","requestId":"init-1","handshake":{"bridgeProtocolVersion":1,"officialCodexVersion":"0.144.3","officialCodexTag":"rust-v0.144.3","officialSourceCommit":"78ad6e6bfd1d3b6a209acd3ef82172a96b25179c","buildTarget":"x86_64-unknown-linux-musl","buildSourceCommit":"0000000000000000000000000000000000000000","vendorTreeSha256":"834ba149cf49f8df840d3dac6c612c312535f27c47c813013022776190d43178","maxFrameBytes":16777216,"maxPendingEvents":256,"capabilities":["responses_sse","responses_websocket","compact_endpoint","remote_compaction_v2","model_metadata","update_plan","hosted_web_search","unified_exec","shell_command","apply_patch","view_image","image_generation","standalone_web_search"]}}
+{"type":"event","requestId":"request-1","sequence":1,"event":{"type":"sample.delta","text":"sample output"}}
+{"type":"approval_request","requestId":"request-1","approval":{"approvalId":"approval-1","operation":"network","summary":"Example network request","details":{"host":"example.invalid"},"availableDecisions":["decline","cancel","allow_once"]}}
+{"type":"backpressure","requestId":"request-1","state":"paused","pendingEvents":256,"capacity":256}
+{"type":"backpressure","requestId":"request-1","state":"resumed","pendingEvents":0,"capacity":256}
+{"type":"result","requestId":"request-1","status":"completed","result":{"accepted":true}}
+{"type":"error","requestId":"request-2","error":{"category":"CapabilityError","code":"unsupported","message":"The requested capability is unavailable","retryable":false}}

@@ -1,0 +1,41 @@
+[package]
+name = "codex-execpolicy"
+version = "0.144.3"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+rust-version = "1.95"
+
+[lib]
+name = "codex_execpolicy"
+path = "../../../vendor/openai-codex/codex-rs/execpolicy/src/lib.rs"
+doctest = false
+
+[dependencies.anyhow]
+workspace = true
+
+[dependencies.clap]
+workspace = true
+features = [ "derive" ]
+
+[dependencies.codex-utils-absolute-path]
+workspace = true
+
+[dependencies.multimap]
+workspace = true
+
+[dependencies.serde]
+workspace = true
+features = [ "derive" ]
+
+[dependencies.serde_json]
+workspace = true
+
+[dependencies.shlex]
+workspace = true
+
+[dependencies.starlark]
+workspace = true
+
+[dependencies.thiserror]
+workspace = true

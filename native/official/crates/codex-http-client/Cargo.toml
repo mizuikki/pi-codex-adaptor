@@ -1,0 +1,72 @@
+[package]
+name = "codex-http-client"
+version = "0.144.3"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+rust-version = "1.95"
+
+[lib]
+doctest = false
+path = "../../../vendor/openai-codex/codex-rs/http-client/src/lib.rs"
+
+[dependencies.bytes]
+workspace = true
+
+[dependencies.codex-utils-rustls-provider]
+workspace = true
+
+[dependencies.futures]
+workspace = true
+
+[dependencies.http]
+workspace = true
+
+[dependencies.opentelemetry]
+workspace = true
+
+[dependencies.reqwest]
+workspace = true
+features = [ "json", "rustls-tls-native-roots", "stream" ]
+
+[dependencies.rustls]
+workspace = true
+
+[dependencies.rustls-native-certs]
+workspace = true
+
+[dependencies.rustls-pki-types]
+workspace = true
+
+[dependencies.serde]
+workspace = true
+features = [ "derive" ]
+
+[dependencies.serde_json]
+workspace = true
+
+[dependencies.thiserror]
+workspace = true
+
+[dependencies.tokio]
+workspace = true
+features = [ "macros", "rt", "time", "sync" ]
+
+[dependencies.tracing]
+workspace = true
+
+[dependencies.tracing-opentelemetry]
+workspace = true
+
+[dependencies.zstd]
+workspace = true
+
+[target."cfg(any(target_os = \"windows\", target_os = \"macos\"))".dependencies.sha2]
+workspace = true
+
+[target."cfg(target_os = \"macos\")".dependencies.system-configuration]
+workspace = true
+
+[target."cfg(target_os = \"windows\")".dependencies.windows-sys]
+version = "0.52"
+features = [ "Win32_Foundation", "Win32_Networking_WinHttp" ]

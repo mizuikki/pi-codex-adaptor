@@ -1,0 +1,115 @@
+[package]
+name = "codex-protocol"
+version = "0.144.3"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+rust-version = "1.95"
+
+[lib]
+name = "codex_protocol"
+path = "../../../vendor/openai-codex/codex-rs/protocol/src/lib.rs"
+doctest = false
+
+[dependencies.chardetng]
+workspace = true
+
+[dependencies.chrono]
+workspace = true
+features = [ "serde" ]
+
+[dependencies.codex-async-utils]
+workspace = true
+
+[dependencies.codex-execpolicy]
+workspace = true
+
+[dependencies.codex-extension-items]
+workspace = true
+
+[dependencies.codex-network-proxy]
+workspace = true
+
+[dependencies.codex-utils-absolute-path]
+workspace = true
+
+[dependencies.codex-utils-image]
+workspace = true
+
+[dependencies.codex-utils-path-uri]
+workspace = true
+
+[dependencies.codex-utils-string]
+workspace = true
+
+[dependencies.encoding_rs]
+workspace = true
+
+[dependencies.globset]
+workspace = true
+
+[dependencies.icu_decimal]
+workspace = true
+
+[dependencies.icu_locale_core]
+workspace = true
+
+[dependencies.icu_provider]
+workspace = true
+features = [ "sync" ]
+
+[dependencies.quick-xml]
+workspace = true
+features = [ "serialize" ]
+
+[dependencies.reqwest]
+workspace = true
+
+[dependencies.schemars]
+workspace = true
+
+[dependencies.serde]
+workspace = true
+features = [ "derive" ]
+
+[dependencies.serde_json]
+workspace = true
+
+[dependencies.serde_with]
+workspace = true
+features = [ "macros", "base64" ]
+
+[dependencies.strum]
+workspace = true
+
+[dependencies.strum_macros]
+workspace = true
+
+[dependencies.sys-locale]
+workspace = true
+
+[dependencies.thiserror]
+workspace = true
+
+[dependencies.tokio]
+workspace = true
+
+[dependencies.tracing]
+workspace = true
+
+[dependencies.ts-rs]
+workspace = true
+features = [ "uuid-impl", "serde-json-impl", "no-serde-warnings" ]
+
+[dependencies.uuid]
+workspace = true
+features = [ "serde", "v7", "v4" ]
+
+[dependencies.wildmatch]
+workspace = true
+
+[target."cfg(target_os = \"linux\")".dependencies.landlock]
+workspace = true
+
+[target."cfg(target_os = \"linux\")".dependencies.seccompiler]
+workspace = true

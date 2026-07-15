@@ -1,0 +1,20 @@
+[package]
+name = "codex-apply-patch-adapter"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+rust-version.workspace = true
+
+[dependencies]
+codex-utils-path-uri = { path = "../../official/crates/codex-utils-path-uri" }
+thiserror = "2.0.17"
+
+[dev-dependencies]
+codex-utils-absolute-path = { path = "../../official/crates/codex-utils-absolute-path" }
+pretty_assertions = "=1.4.1"
+tempfile = "=3.23.0"
+
+[lints]
+workspace = true

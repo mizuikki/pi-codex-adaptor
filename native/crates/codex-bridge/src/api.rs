@@ -1,0 +1,375 @@
+use std::sync::Arc;
+use std::time::Duration;
+
+use bridge_protocol::Authentication;
+use bridge_protocol::BridgeError;
+use bridge_protocol::ErrorCategory;
+use codex_api::ApiError;
+use codex_api::AuthProvider;
+use codex_api::Provider;
+use codex_api::ReqwestTransport;
+use codex_api::ResponseEvent;
+use codex_api::RetryConfig;
+use codex_api::SharedAuthProvider;
+use codex_api::TransportError;
+use codex_http_client::build_reqwest_client_with_custom_ca;
+use http::HeaderMap;
+use http::HeaderValue;
+use serde_json::Value;
+use serde_json::json;
+
+const OPENAI_API_BASE_URL: &str = "https://api.openai.com/v1";
+const CHATGPT_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
+
+pub struct ApiConnection {
+    pub transport: ReqwestTransport,
+    pub provider: Provider,
+    pub authentication: SharedAuthProvider,
+}
+
+struct BridgeAuthProvider {
+    headers: HeaderMap,
+}
+
+impl BridgeAuthProvider {
+    fn new(authentication: &Authentication) -> Result<Self, BridgeError> {
+        let credential = match authentication {
+            Authentication::OauthBearer { token, .. } => token,
+            Authentication::OpenaiApiKey { api_key } => api_key,
+        };
+        let mut authorization = HeaderValue::from_str(&format!("Bearer {credential}"))
+            .map_err(|_| invalid_authentication())?;
+        authorization.set_sensitive(true);
+        let mut headers = HeaderMap::new();
+        headers.insert(http::header::AUTHORIZATION, authorization);
+        if let Authentication::OauthBearer { account_id, .. } = authentication {
+            let mut account_id =
+                HeaderValue::from_str(account_id).map_err(|_| invalid_authentication())?;
+            account_id.set_sensitive(true);
+            headers.insert("ChatGPT-Account-ID", account_id);
+        }
+        Ok(Self { headers })
+    }
+}
+
+impl AuthProvider for BridgeAuthProvider {
+    fn add_auth_headers(&self, headers: &mut HeaderMap) {
+        headers.extend(self.headers.clone());
+    }
+}
+
+pub fn authentication_headers_are_valid(authentication: &Authentication) -> bool {
+    BridgeAuthProvider::new(authentication).is_ok()
+}
+
+pub fn connect(
+    authentication: &Authentication,
+    base_url_override: Option<String>,
+) -> Result<ApiConnection, BridgeError> {
+    let authentication_provider = BridgeAuthProvider::new(authentication)?;
+    let default_base_url = match authentication {
+        Authentication::OauthBearer { .. } => CHATGPT_CODEX_BASE_URL,
+        Authentication::OpenaiApiKey { .. } => OPENAI_API_BASE_URL,
+    };
+    let base_url = base_url_override.unwrap_or_else(|| default_base_url.to_owned());
+    let client = build_reqwest_client_with_custom_ca(reqwest::Client::builder()).map_err(|_| {
+        BridgeError {
+            category: ErrorCategory::ConfigurationError,
+            code: "http_client_initialization_failed".to_owned(),
+            message: "the native HTTP client could not be initialized".to_owned(),
+            retryable: false,
+        }
+    })?;
+
+    Ok(ApiConnection {
+        transport: ReqwestTransport::new(client),
+        provider: Provider {
+            name: "OpenAI".to_owned(),
+            base_url,
+            query_params: None,
+            headers: HeaderMap::new(),
+            retry: RetryConfig {
+                max_attempts: 4,
+                base_delay: Duration::from_millis(200),
+                retry_429: false,
+                retry_5xx: true,
+                retry_transport: true,
+            },
+            stream_idle_timeout: Duration::from_mins(5),
+        },
+        authentication: Arc::new(authentication_provider),
+    })
+}
+
+fn invalid_authentication() -> BridgeError {
+    BridgeError {
+        category: ErrorCategory::AuthenticationError,
+        code: "invalid_authentication".to_owned(),
+        message: "bridge authentication is invalid".to_owned(),
+        retryable: false,
+    }
+}
+
+pub struct MappedResponseEvent {
+    pub event: Value,
+    pub completion: Option<Value>,
+}
+
+#[allow(clippy::too_many_lines)]
+pub fn map_response_event(event: ResponseEvent) -> Option<MappedResponseEvent> {
+    let (event, completion) = match event {
+        ResponseEvent::Created => (json!({ "type": "response.created" }), None),
+        ResponseEvent::SafetyBuffering(buffering) => (
+            json!({
+                "type": "response.safety_buffering",
+                "useCases": buffering.use_cases,
+                "reasons": buffering.reasons,
+                "fasterModel": buffering.faster_model,
+            }),
+            None,
+        ),
+        ResponseEvent::OutputItemDone(item) => (
+            json!({ "type": "response.output_item.done", "item": item }),
+            None,
+        ),
+        ResponseEvent::OutputItemAdded(item) => (
+            json!({ "type": "response.output_item.added", "item": item }),
+            None,
+        ),
+        ResponseEvent::ServerModel(model) => (
+            json!({ "type": "response.server_model", "model": model }),
+            None,
+        ),
+        ResponseEvent::ModelVerifications(verifications) => (
+            json!({
+                "type": "response.model_verifications",
+                "verifications": verifications,
+            }),
+            None,
+        ),
+        ResponseEvent::TurnModerationMetadata(metadata) => (
+            json!({
+                "type": "response.turn_moderation_metadata",
+                "metadata": metadata.metadata,
+            }),
+            None,
+        ),
+        ResponseEvent::ServerReasoningIncluded(included) => (
+            json!({
+                "type": "response.server_reasoning_included",
+                "included": included,
+            }),
+            None,
+        ),
+        ResponseEvent::Completed {
+            response_id,
+            token_usage,
+            end_turn,
+        } => {
+            let completion = json!({
+                "responseId": response_id,
+                "tokenUsage": token_usage,
+                "endTurn": end_turn,
+            });
+            (
+                json!({
+                    "type": "response.completed",
+                    "responseId": completion["responseId"],
+                    "tokenUsage": completion["tokenUsage"],
+                    "endTurn": completion["endTurn"],
+                }),
+                Some(completion),
+            )
+        }
+        ResponseEvent::OutputTextDelta(delta) => (
+            json!({ "type": "response.output_text.delta", "delta": delta }),
+            None,
+        ),
+        ResponseEvent::ToolCallInputDelta {
+            item_id,
+            call_id,
+            delta,
+        } => (
+            json!({
+                "type": "response.custom_tool_call_input.delta",
+                "itemId": item_id,
+                "callId": call_id,
+                "delta": delta,
+            }),
+            None,
+        ),
+        ResponseEvent::ReasoningSummaryDelta {
+            delta,
+            summary_index,
+        } => (
+            json!({
+                "type": "response.reasoning_summary_text.delta",
+                "delta": delta,
+                "summaryIndex": summary_index,
+            }),
+            None,
+        ),
+        ResponseEvent::ReasoningSummaryDone {
+            item_id,
+            text,
+            summary_index,
+        } => (
+            json!({
+                "type": "response.reasoning_summary_text.done",
+                "itemId": item_id,
+                "text": text,
+                "summaryIndex": summary_index,
+            }),
+            None,
+        ),
+        ResponseEvent::ReasoningContentDelta {
+            delta,
+            content_index,
+        } => (
+            json!({
+                "type": "response.reasoning_text.delta",
+                "delta": delta,
+                "contentIndex": content_index,
+            }),
+            None,
+        ),
+        ResponseEvent::ReasoningSummaryPartAdded { summary_index } => (
+            json!({
+                "type": "response.reasoning_summary_part.added",
+                "summaryIndex": summary_index,
+            }),
+            None,
+        ),
+        ResponseEvent::ModelsEtag(etag) => (
+            json!({ "type": "response.models_etag", "etag": etag }),
+            None,
+        ),
+        ResponseEvent::RateLimits(_) => return None,
+    };
+    Some(MappedResponseEvent { event, completion })
+}
+
+pub fn map_api_error(error: &ApiError) -> BridgeError {
+    let (category, code, message, retryable) = match error {
+        ApiError::Transport(TransportError::Http { status, .. })
+            if *status == http::StatusCode::UNAUTHORIZED
+                || *status == http::StatusCode::FORBIDDEN =>
+        {
+            (
+                ErrorCategory::AuthenticationError,
+                "upstream_authentication_failed",
+                "OpenAI rejected the bridge authentication",
+                false,
+            )
+        }
+        ApiError::ContextWindowExceeded => (
+            ErrorCategory::CapabilityError,
+            "context_window_exceeded",
+            "the request exceeded the model context window",
+            false,
+        ),
+        ApiError::QuotaExceeded | ApiError::UsageNotIncluded => (
+            ErrorCategory::AuthenticationError,
+            "upstream_access_unavailable",
+            "OpenAI access is unavailable for this request",
+            false,
+        ),
+        ApiError::InvalidRequest { .. } => (
+            ErrorCategory::ProtocolError,
+            "upstream_invalid_request",
+            "OpenAI rejected the request",
+            false,
+        ),
+        ApiError::CyberPolicy { .. } => (
+            ErrorCategory::CapabilityError,
+            "upstream_policy_rejected",
+            "OpenAI policy rejected the request",
+            false,
+        ),
+        ApiError::ServerOverloaded => (
+            ErrorCategory::CapabilityError,
+            "upstream_overloaded",
+            "OpenAI is temporarily overloaded",
+            true,
+        ),
+        ApiError::Retryable { .. } | ApiError::RateLimit(_) => (
+            ErrorCategory::CapabilityError,
+            "upstream_temporarily_unavailable",
+            "OpenAI is temporarily unavailable",
+            true,
+        ),
+        ApiError::Transport(_) | ApiError::Api { .. } | ApiError::Stream(_) => (
+            ErrorCategory::CapabilityError,
+            "upstream_request_failed",
+            "the OpenAI request failed",
+            true,
+        ),
+    };
+    BridgeError {
+        category,
+        code: code.to_owned(),
+        message: message.to_owned(),
+        retryable,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_protocol::protocol::RateLimitSnapshot;
+
+    #[test]
+    fn drops_account_rate_limit_events() {
+        let snapshot = RateLimitSnapshot {
+            limit_id: None,
+            limit_name: None,
+            primary: None,
+            secondary: None,
+            credits: None,
+            individual_limit: None,
+            plan_type: None,
+            rate_limit_reached_type: None,
+        };
+        assert!(map_response_event(ResponseEvent::RateLimits(snapshot)).is_none());
+    }
+
+    #[test]
+    fn upstream_error_messages_never_cross_the_bridge() {
+        let error = map_api_error(&ApiError::InvalidRequest {
+            message: "private upstream detail".to_owned(),
+        });
+        assert_eq!(error.code, "upstream_invalid_request");
+        assert!(!error.message.contains("private upstream detail"));
+    }
+
+    #[test]
+    fn oauth_authentication_adds_the_required_account_header() {
+        let authentication = Arc::new(Authentication::OauthBearer {
+            token: "fixture-token".to_owned(),
+            account_id: "fixture-account".to_owned(),
+        });
+        let provider = BridgeAuthProvider::new(authentication.as_ref())
+            .expect("fixture authentication should be valid");
+        let headers = provider.to_auth_headers();
+
+        assert_eq!(
+            headers
+                .get("ChatGPT-Account-ID")
+                .and_then(|value| value.to_str().ok()),
+            Some("fixture-account")
+        );
+        assert!(headers.contains_key(http::header::AUTHORIZATION));
+    }
+
+    #[test]
+    fn rejects_authentication_that_cannot_be_encoded_as_headers() {
+        let authentication = Authentication::OauthBearer {
+            token: "fixture\ntoken".to_owned(),
+            account_id: "fixture-account".to_owned(),
+        };
+        let Err(error) = BridgeAuthProvider::new(&authentication) else {
+            panic!("invalid header values must be rejected");
+        };
+        assert_eq!(error.code, "invalid_authentication");
+    }
+}
