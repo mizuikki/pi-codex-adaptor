@@ -22,7 +22,8 @@ The first stable release will provide:
 - the official shell resolver and its `exec_command`/`write_stdin` or `shell_command` surface;
 - `apply_patch`, `view_image`, and `image_gen.imagegen` when their official capabilities resolve;
 - standalone `web.run` or hosted `web_search`, selected by provider capability;
-- Pi approvals before native command, patch, filesystem, or network execution;
+- Pi approvals before native command, patch, filesystem, image, network, or non-empty session stdin
+  execution;
 - one `/codex` settings and diagnostics entry point.
 
 This contract does not promise complete Codex CLI parity. P1 and P2 capabilities are tracked in
@@ -35,10 +36,11 @@ This contract does not promise complete Codex CLI parity. P1 and P2 capabilities
 
 ## Protocol and errors
 
-Bridge protocol v1 is newline-delimited JSON with bounded frames and request IDs. It will define
+Bridge protocol v1 is newline-delimited JSON with bounded frames and request IDs. It defines
 handshake, request, stream event, cancellation, session write/resize/terminate, result, error, and
 backpressure envelopes. Unknown events are retained for safe diagnostics and never imply successful
-termination.
+termination. The normative envelope contract and limits are documented in
+[`docs/bridge-protocol.md`](./docs/bridge-protocol.md).
 
 Terminal states are `completed`, `incomplete`, `failed`, `aborted`, and `timed_out`. Public error
 categories are `ConfigurationError`, `AuthenticationError`, `ProtocolError`, `CapabilityError`, and
@@ -87,9 +89,24 @@ The new-install default is:
 
 Shell and web tool surfaces are resolver outputs, not user-forced configuration. Optional image tools
 accept only `auto | off`; transport accepts `auto | sse`; compaction accepts `off` or `auto` with a
-model threshold or a positive integer below the model context window.
+model threshold or a positive integer below the model context window. `backgroundSessions` applies
+only to Unified Exec: when disabled, a process still running after its initial yield is terminated
+instead of being retained for `write_stdin` polling.
 
 ## Current implementation status
 
-The `0.0.0` repository skeleton establishes boundaries, toolchains, packaging, and verification. It
-does not yet claim the runtime capabilities listed above. The first prerelease is `0.1.0-rc.0`.
+The package version is `0.0.0` and has not been published. The worktree defines and tests protocol v1
+envelopes, the baseline handshake, concurrent request correlation, cancellation, bounded event
+backpressure, and safe process shutdown. The bridge compiles and links the pinned official wire
+modules and advertises Responses SSE/WebSocket, the Compact endpoint, RemoteCompactionV2, model
+metadata, update-plan, hosted and standalone web, Unified Exec, shell-command, apply-patch,
+view-image, and image generation capabilities. It resolves the official tool contracts, including
+hidden unified-exec fallback dispatch, and requires Pi approval for command, patch, filesystem,
+image, and network work. Separately, canonical workspace roots constrain command working
+directories, patch targets, viewed images, and referenced image-generation inputs. Unified Exec
+pipe/PTY sessions support bounded polling, approval-gated non-empty stdin writes, resize,
+termination, cancellation, and shutdown cleanup. Pi activation is reversible, preserves third-party
+tools, replays opaque compaction output, and renders compact tool state inline.
+`/codex` exposes settings, manual compaction, and a confirmed, redacted diagnostics export. Remaining
+release gates, including Trusted Publishing and a published prerelease, are not complete. The planned
+first prerelease version is `0.1.0-rc.0`.

@@ -37,7 +37,7 @@
     "@types/node": "24.13.3"
   },
   "scripts": {
-    "check": "bun run lint && bun run typecheck && bun test && bun run check:toolchain && bun run check:upstream && bun run check:native && bun run pack:verify",
+    "check": "bun run lint && bun run typecheck && bun run check:native && bun test && bun run check:toolchain && bun run check:upstream && bun run pack:verify",
     "lint": "biome check .",
     "format": "biome check --write .",
     "typecheck": "tsc -p tsconfig.json --noEmit",
@@ -46,7 +46,7 @@
     "check:upstream": "bun scripts/sync-codex-upstream.ts --verify",
     "check:upstream-source": "bun scripts/sync-codex-upstream.ts --verify-source",
     "test:official": "bun scripts/generate-official-fixtures.ts --check",
-    "check:native": "cargo fmt --manifest-path native/Cargo.toml --all --check && cargo clippy --manifest-path native/Cargo.toml --workspace --all-targets -- -D warnings && cargo test --manifest-path native/Cargo.toml --workspace",
+    "check:native": "bun scripts/check-native.ts",
     "build:native": "bun scripts/build-native.ts",
     "pack:assemble": "bun scripts/assemble-package.ts",
     "pack:verify": "bun scripts/verify-package.ts",

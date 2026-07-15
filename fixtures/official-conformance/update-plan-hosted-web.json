@@ -1,0 +1,70 @@
+{
+  "dispatchTools": [],
+  "imageGenerationSurface": "disabled",
+  "modelTools": [
+    {
+      "description": "Updates the task plan.\nProvide an optional explanation and a list of plan items, each with a step and status.\nAt most one step can be in_progress at a time.\n",
+      "name": "update_plan",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "explanation": {
+            "description": "Optional explanation for this plan update.",
+            "type": "string"
+          },
+          "plan": {
+            "description": "The list of steps",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "status": {
+                  "description": "Step status.",
+                  "enum": [
+                    "pending",
+                    "in_progress",
+                    "completed"
+                  ],
+                  "type": "string"
+                },
+                "step": {
+                  "description": "Task step text.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "step",
+                "status"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "plan"
+        ],
+        "type": "object"
+      },
+      "strict": false,
+      "type": "function"
+    },
+    {
+      "description": "Use the `apply_patch` tool to edit files. This is a FREEFORM tool, so do not wrap the patch in JSON.",
+      "format": {
+        "definition": "start: begin_patch hunk+ end_patch\nbegin_patch: \"*** Begin Patch\" LF\nend_patch: \"*** End Patch\" LF?\n\nhunk: add_hunk | delete_hunk | update_hunk\nadd_hunk: \"*** Add File: \" filename LF add_line+\ndelete_hunk: \"*** Delete File: \" filename LF\nupdate_hunk: \"*** Update File: \" filename LF change_move? change?\n\nfilename: /(.+)/\nadd_line: \"+\" /(.*)/ LF -> line\n\nchange_move: \"*** Move to: \" filename LF\nchange: (change_context | change_line)+ eof_line?\nchange_context: (\"@@\" | \"@@ \" /(.+)/) LF\nchange_line: (\"+\" | \"-\" | \" \") /(.*)/ LF\neof_line: \"*** End of File\" LF\n\n%import common.LF\n",
+        "syntax": "lark",
+        "type": "grammar"
+      },
+      "name": "apply_patch",
+      "type": "custom"
+    },
+    {
+      "external_web_access": true,
+      "indexed_web_access": true,
+      "type": "web_search"
+    }
+  ],
+  "shellSurface": "disabled",
+  "webReason": "hosted_provider_capability",
+  "webSurface": "hosted"
+}
