@@ -1,0 +1,12 @@
+{
+  "model": "fixture-model",
+  "instructions": "",
+  "input": [],
+  "tools": null,
+  "tool_choice": "auto",
+  "parallel_tool_calls": false,
+  "reasoning": null,
+  "store": false,
+  "stream": true,
+  "include": []
+}

@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "officialCodexVersion": "0.144.3",
+  "officialSourceCommit": "78ad6e6bfd1d3b6a209acd3ef82172a96b25179c",
+  "generation": {
+    "stable": true,
+    "jsonBundleCanonicalSha256": "ee43110fdd690609d1de85b2a41a26b745f7ff4287271fb8b379835c3ece22ef",
+    "jsonV2BundleCanonicalSha256": "f76d741a299026cf4a1c75847b41562078d54c6f0aab9faae8781831e73d97d4",
+    "typescriptTreeSha256": "2d45f217312bfe9fa64e74289cd02ec95de947fba8a1059c4a361072d9efcb7f"
+  },
+  "typescriptSubset": [
+    { "source": "InitializeParams.ts", "file": "InitializeParams.ts" },
+    { "source": "InitializeResponse.ts", "file": "InitializeResponse.ts" },
+    { "source": "v2/ItemCompletedNotification.ts", "file": "ItemCompletedNotification.ts" },
+    { "source": "v2/ItemStartedNotification.ts", "file": "ItemStartedNotification.ts" },
+    { "source": "ResponseItem.ts", "file": "ResponseItem.ts" },
+    { "source": "v2/Thread.ts", "file": "Thread.ts" },
+    { "source": "v2/ThreadItem.ts", "file": "ThreadItem.ts" },
+    { "source": "v2/ThreadStartParams.ts", "file": "ThreadStartParams.ts" },
+    { "source": "v2/ThreadStartResponse.ts", "file": "ThreadStartResponse.ts" },
+    { "source": "v2/Turn.ts", "file": "Turn.ts" },
+    { "source": "v2/TurnStartParams.ts", "file": "TurnStartParams.ts" },
+    { "source": "v2/TurnStartResponse.ts", "file": "TurnStartResponse.ts" }
+  ]
+}
