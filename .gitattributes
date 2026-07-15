@@ -1,0 +1,4 @@
+* text=auto eol=lf
+
+native/patches/openai-codex/** -whitespace
+native/vendor/openai-codex/** -whitespace

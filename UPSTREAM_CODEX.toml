@@ -20,8 +20,50 @@ version = "0.144.3"
 integrity = "sha512-WPtEx38iVyksWujOwmsxnJznRR8T/YF+lAJghMhHL1xIWdJrrvZ1iafhIsw4egY5CRoRmFm2ta8NQsK4f4XDZA=="
 
 [vendor]
-status = "pending"
-tree_sha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-allowlist = []
-patches = []
-excluded_crates = ["codex-core", "codex-app-server"]
+status = "ready"
+tree_sha256 = "834ba149cf49f8df840d3dac6c612c312535f27c47c813013022776190d43178"
+allowlist_manifest = "native/upstream/openai-codex-files.json"
+allowlist_sha256 = "0370932d71e4a926b201df4e42bface0f0b678bc298d742431517670486aa595"
+license_inventory = "native/upstream/openai-codex-licenses.json"
+license_inventory_sha256 = "97398d1c71bd22fb7444cb24c3bacc2738d22ef89d08a6f5e64616f16f2ca44f"
+sbom = "native/upstream/openai-codex-sbom.json"
+sbom_sha256 = "0537af4a1414313a937ebec5380475fde634b3edcdf64dd72f88abf30187cce7"
+patches = [
+  "native/patches/openai-codex/0001-deserialize-responses-requests.patch",
+  "native/patches/openai-codex/0002-cast-windows-pseudoconsole-handle.patch",
+  "native/patches/openai-codex/0003-fix-apply-patch-eof-fallback.patch",
+  "native/patches/openai-codex/0004-harden-responses-sse-errors.patch",
+  "native/patches/openai-codex/0005-redact-http-client-tracing.patch",
+]
+# Complete codex-core is excluded; selected P0 tool specs are imported as a file-level closure.
+selected_crates = [
+  "codex-api",
+  "codex-apply-patch-parser-modules",
+  "codex-async-utils",
+  "codex-client",
+  "codex-core-p0-tool-specs",
+  "codex-execpolicy",
+  "codex-extension-items",
+  "codex-http-client",
+  "codex-image-generation-tool-contract",
+  "codex-network-proxy",
+  "codex-protocol",
+  "codex-tools-p0-modules",
+  "codex-utils-absolute-path",
+  "codex-utils-cache",
+  "codex-utils-home-dir",
+  "codex-utils-image",
+  "codex-utils-output-truncation",
+  "codex-utils-path-uri",
+  "codex-utils-pty",
+  "codex-utils-rustls-provider",
+  "codex-utils-string",
+  "codex-standalone-web-search-contract",
+  "codex-websocket-client",
+]
+excluded_crates = [
+  "codex-core",
+  "codex-app-server",
+  "codex-login",
+  "codex-exec-server",
+]

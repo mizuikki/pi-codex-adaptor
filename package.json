@@ -44,6 +44,7 @@
     "test": "bun test",
     "check:toolchain": "bun scripts/verify-toolchain.ts",
     "check:upstream": "bun scripts/sync-codex-upstream.ts --verify",
+    "check:upstream-source": "bun scripts/sync-codex-upstream.ts --verify-source",
     "test:official": "bun scripts/generate-official-fixtures.ts --check",
     "check:native": "cargo fmt --manifest-path native/Cargo.toml --all --check && cargo clippy --manifest-path native/Cargo.toml --workspace --all-targets -- -D warnings && cargo test --manifest-path native/Cargo.toml --workspace",
     "build:native": "bun scripts/build-native.ts",

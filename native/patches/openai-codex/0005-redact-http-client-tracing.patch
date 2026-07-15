@@ -1,0 +1,63 @@
+diff --git a/codex-rs/http-client/src/default_client.rs b/codex-rs/http-client/src/default_client.rs
+index b4465e7f8c..219cb9c46d 100644
+--- a/codex-rs/http-client/src/default_client.rs
++++ b/codex-rs/http-client/src/default_client.rs
+@@ -41,8 +41,7 @@ impl HttpClient {
+     where
+         U: IntoUrl,
+     {
+-        let url_str = url.as_str().to_string();
+-        RequestBuilder::new(self.inner.request(method.clone(), url), method, url_str)
++        RequestBuilder::new(self.inner.request(method.clone(), url), method)
+     }
+ }
+ 
+@@ -51,23 +50,17 @@ impl HttpClient {
+ pub struct RequestBuilder {
+     builder: reqwest::RequestBuilder,
+     method: Method,
+-    url: String,
+ }
+ 
+ impl RequestBuilder {
+-    fn new(builder: reqwest::RequestBuilder, method: Method, url: String) -> Self {
+-        Self {
+-            builder,
+-            method,
+-            url,
+-        }
++    fn new(builder: reqwest::RequestBuilder, method: Method) -> Self {
++        Self { builder, method }
+     }
+ 
+     fn map(self, f: impl FnOnce(reqwest::RequestBuilder) -> reqwest::RequestBuilder) -> Self {
+         Self {
+             builder: f(self.builder),
+             method: self.method,
+-            url: self.url,
+         }
+     }
+ 
+@@ -117,9 +110,7 @@ impl RequestBuilder {
+             Ok(response) => {
+                 tracing::debug!(
+                     method = %self.method,
+-                    url = %self.url,
+                     status = %response.status(),
+-                    headers = ?response.headers(),
+                     version = ?response.version(),
+                     "Request completed"
+                 );
+@@ -130,9 +121,10 @@ impl RequestBuilder {
+                 let status = error.status();
+                 tracing::debug!(
+                     method = %self.method,
+-                    url = %self.url,
+                     status = status.map(|s| s.as_u16()),
+-                    error = %error,
++                    is_timeout = error.is_timeout(),
++                    is_connect = error.is_connect(),
++                    is_request = error.is_request(),
+                     "Request failed"
+                 );
+                 Err(error)

@@ -1,0 +1,31 @@
+diff --git a/codex-rs/apply-patch/src/seek_sequence.rs b/codex-rs/apply-patch/src/seek_sequence.rs
+index 3555963120..8f40e8e910 100644
+--- a/codex-rs/apply-patch/src/seek_sequence.rs
++++ b/codex-rs/apply-patch/src/seek_sequence.rs
+@@ -106,6 +106,10 @@ pub(crate) fn seek_sequence(
+         }
+     }
+ 
++    if eof {
++        return seek_sequence(lines, pattern, start, /*eof*/ false);
++    }
++
+     None
+ }
+ 
+@@ -160,4 +164,15 @@ mod tests {
+             None
+         );
+     }
++
++    #[test]
++    fn test_eof_match_falls_back_to_search_start() {
++        let lines = to_vec(&["header", "target", "trailer"]);
++        let pattern = to_vec(&["target"]);
++
++        assert_eq!(
++            seek_sequence(&lines, &pattern, /*start*/ 0, /*eof*/ true),
++            Some(1)
++        );
++    }
+ }

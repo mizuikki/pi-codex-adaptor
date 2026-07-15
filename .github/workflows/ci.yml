@@ -38,6 +38,9 @@ jobs:
         run: bun ci
       - name: Run checks
         run: bun run check
+      - name: Verify pinned upstream source
+        if: runner.os == 'Linux'
+        run: bun run check:upstream-source
 
   pull-request-contract:
     name: Pull request contract
@@ -68,6 +71,11 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: Review dependency changes
         uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          # Codex 0.144.3 pins Rama alpha and Hickory 0.25.2 on Rust 1.95. DNSSEC is
+          # disabled, and DNS name encoding is bounded by the protocol length limit.
+          # Remove both exceptions when the pinned Codex baseline supports Hickory 0.26.1.
+          allow-ghsas: GHSA-3v94-mw7p-v465,GHSA-q2qq-hmj6-3wpp
 
   codeql:
     name: CodeQL
