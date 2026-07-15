@@ -14,10 +14,21 @@ import { createIntegrationRuntime } from "./helpers/native-bridge.ts";
 
 const cleanups: Array<() => Promise<void> | void> = [];
 
+function removeCleanup(cleanup: () => Promise<void> | void): void {
+	const index = cleanups.lastIndexOf(cleanup);
+	if (index >= 0) cleanups.splice(index, 1);
+}
+
 afterEach(async () => {
+	let failure: unknown;
 	while (cleanups.length > 0) {
-		await cleanups.pop()?.();
+		try {
+			await cleanups.pop()?.();
+		} catch (error) {
+			failure ??= error;
+		}
 	}
+	if (failure !== undefined) throw failure;
 });
 
 async function configurationService(): Promise<ConfigurationService> {
@@ -46,7 +57,8 @@ describe("fake Pi + real native lifecycle", () => {
 
 		const token = fixtureToken();
 		const { runtime } = await createIntegrationRuntime({ testBaseUrl: server.baseUrl });
-		cleanups.push(async () => runtime.shutdown());
+		const shutdownRuntime = async () => runtime.shutdown();
+		cleanups.push(shutdownRuntime);
 
 		const service = await configurationService();
 		const pi = createFakePi({ token });
@@ -107,7 +119,7 @@ describe("fake Pi + real native lifecycle", () => {
 		expect(pi.activeTools).toEqual(["third_party"]);
 
 		await runtime.shutdown();
-		cleanups.pop();
+		removeCleanup(shutdownRuntime);
 	}, 60_000);
 
 	test("streams assistant text through fake Pi provider + real native + fake Responses", async () => {
@@ -154,7 +166,6 @@ describe("fake Pi + real native lifecycle", () => {
 			fixtureModelSpec({
 				slug: "fixture-model",
 				shellType: "shell_command",
-				inputModalities: ["text"],
 			}),
 		]);
 		cleanups.push(() => server.stop());
@@ -168,6 +179,15 @@ describe("fake Pi + real native lifecycle", () => {
 		const repository = new FileConfigurationRepository(configFile);
 		const service = new ConfigurationService(repository);
 		const defaults = await service.load();
+
+		const pi = createFakePi({ token });
+		registerCodexTools(pi.api, runtime, service);
+		const ctx = pi.context(fixtureModel());
+		await emit(pi, "session_start", ctx);
+		expect(pi.activeTools).toContain("view_image");
+		expect(pi.activeTools).toContain("image_gen.imagegen");
+		expect(pi.status.get("codex-adaptor")).toContain("hosted");
+
 		await writeFile(
 			configFile,
 			JSON.stringify({
@@ -184,13 +204,11 @@ describe("fake Pi + real native lifecycle", () => {
 			"utf8",
 		);
 
-		const pi = createFakePi({ token });
-		registerCodexTools(pi.api, runtime, service);
-		const ctx = pi.context(fixtureModel());
 		await emit(pi, "session_start", ctx);
 		expect(pi.activeTools).toEqual(["third_party", "update_plan", "apply_patch", "shell_command"]);
 		expect(pi.activeTools).not.toContain("view_image");
 		expect(pi.activeTools).not.toContain("image_gen.imagegen");
 		expect(pi.activeTools).not.toContain("web.run");
+		expect(pi.status.get("codex-adaptor")).toContain("disabled");
 	}, 60_000);
 });

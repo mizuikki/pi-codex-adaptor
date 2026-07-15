@@ -9,10 +9,21 @@ import { connectIntegrationBridge, createIntegrationRuntime } from "./helpers/na
 
 const cleanups: Array<() => Promise<void> | void> = [];
 
+function removeCleanup(cleanup: () => Promise<void> | void): void {
+	const index = cleanups.lastIndexOf(cleanup);
+	if (index >= 0) cleanups.splice(index, 1);
+}
+
 afterEach(async () => {
+	let failure: unknown;
 	while (cleanups.length > 0) {
-		await cleanups.pop()?.();
+		try {
+			await cleanups.pop()?.();
+		} catch (error) {
+			failure ??= error;
+		}
 	}
+	if (failure !== undefined) throw failure;
 });
 
 describe("native child integration", () => {
@@ -108,7 +119,8 @@ describe("native child integration", () => {
 	test("retains a background unified-exec session until shutdown cleanup", async () => {
 		const token = fixtureToken();
 		const { client, repositoryRoot } = await connectIntegrationBridge({ token });
-		cleanups.push(async () => client.shutdown());
+		const shutdownClient = async () => client.shutdown();
+		cleanups.push(shutdownClient);
 
 		const workspace = await mkdtemp(join(tmpdir(), "pi-codex-adaptor-bg-"));
 		cleanups.push(async () => rm(workspace, { recursive: true, force: true }));
@@ -134,8 +146,7 @@ describe("native child integration", () => {
 
 		await client.terminateSession(String(sessionId));
 		await client.shutdown();
-		// Remove shutdown from cleanups since already done.
-		cleanups.pop();
+		removeCleanup(shutdownClient);
 	}, 60_000);
 
 	test("forwards OAuth bearer credentials on stdin-only auth to OpenAI requests", async () => {
@@ -275,7 +286,7 @@ describe("native child integration", () => {
 			"tools.execute",
 			{
 				tool: "shell_command",
-				command: "printf fixture",
+				command: "echo fixture",
 				workdir: repositoryRoot,
 				workspaceRoots: [repositoryRoot],
 				timeoutMs: 10_000,
@@ -300,7 +311,7 @@ describe("native child integration", () => {
 			"tools.execute",
 			{
 				tool: "shell_command",
-				command: "printf next",
+				command: "echo next",
 				workdir: repositoryRoot,
 				workspaceRoots: [repositoryRoot],
 				timeoutMs: 10_000,
@@ -331,7 +342,7 @@ describe("native child integration", () => {
 			authentication,
 			tool: "shell_command",
 			argumentsValue: {
-				command: "printf should-not-run",
+				command: "echo should-not-run",
 				login: false,
 				timeoutMs: 10_000,
 			},
@@ -351,7 +362,7 @@ describe("native child integration", () => {
 			authentication,
 			tool: "shell_command",
 			argumentsValue: {
-				command: "printf next",
+				command: "echo next",
 				login: false,
 				timeoutMs: 10_000,
 			},

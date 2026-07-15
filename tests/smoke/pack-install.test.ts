@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveInstalledPackageExtension } from "../../scripts/verify-package.ts";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const piCli = resolve(repositoryRoot, "node_modules/@earendil-works/pi-coding-agent/dist/cli.js");
@@ -67,14 +68,11 @@ describe("exact npm tarball smoke", () => {
 
 			const metadata = JSON.parse(
 				await readFile(resolve(installRoot, "node_modules/pi-codex-adaptor/package.json"), "utf8"),
-			) as { name?: string; pi?: { extensions?: string[] } };
+			) as { name?: string; pi?: { extensions?: unknown[] } };
 			expect(metadata.name).toBe("pi-codex-adaptor");
-			const extensionEntry = metadata.pi?.extensions?.[0];
-			expect(typeof extensionEntry).toBe("string");
-			const extensionPath = resolve(
-				installRoot,
-				"node_modules/pi-codex-adaptor",
-				extensionEntry as string,
+			const extensionPath = await resolveInstalledPackageExtension(
+				resolve(installRoot, "node_modules/pi-codex-adaptor"),
+				metadata.pi?.extensions,
 			);
 
 			const child = Bun.spawn(

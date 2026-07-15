@@ -23,34 +23,36 @@ async function copyIfPresent(source: string, destination: string): Promise<void>
 	await cp(source, destination, { recursive: true });
 }
 
-await rm(stagingDirectory, { force: true, recursive: true });
-await mkdir(stagingDirectory, { recursive: true });
+async function main(): Promise<void> {
+	await rm(stagingDirectory, { force: true, recursive: true });
+	await mkdir(stagingDirectory, { recursive: true });
 
-await Promise.all([
-	cp(resolve(repositoryRoot, "LICENSE"), resolve(stagingDirectory, "LICENSE")),
-	cp(resolve(repositoryRoot, "README.md"), resolve(stagingDirectory, "README.md")),
-	cp(resolve(repositoryRoot, "src"), resolve(stagingDirectory, "src"), { recursive: true }),
-	copyIfPresent(resolve(repositoryRoot, "native/bin"), resolve(stagingDirectory, "native/bin")),
-]);
+	await Promise.all([
+		cp(resolve(repositoryRoot, "LICENSE"), resolve(stagingDirectory, "LICENSE")),
+		cp(resolve(repositoryRoot, "README.md"), resolve(stagingDirectory, "README.md")),
+		cp(resolve(repositoryRoot, "src"), resolve(stagingDirectory, "src"), { recursive: true }),
+		copyIfPresent(resolve(repositoryRoot, "native/bin"), resolve(stagingDirectory, "native/bin")),
+	]);
 
-if (nativeArtifactsDirectory !== undefined) {
-	await copyNativeArtifacts(nativeArtifactsDirectory);
+	if (nativeArtifactsDirectory !== undefined) {
+		await copyNativeArtifacts(nativeArtifactsDirectory);
+	}
+
+	const packageJson = JSON.parse(
+		await readFile(resolve(repositoryRoot, "package.json"), "utf8"),
+	) as Record<string, unknown>;
+
+	delete packageJson.devDependencies;
+	delete packageJson.files;
+	delete packageJson.scripts;
+
+	await writeFile(
+		resolve(stagingDirectory, "package.json"),
+		`${JSON.stringify(packageJson, null, 2)}\n`,
+	);
+
+	console.log(stagingDirectory);
 }
-
-const packageJson = JSON.parse(
-	await readFile(resolve(repositoryRoot, "package.json"), "utf8"),
-) as Record<string, unknown>;
-
-delete packageJson.devDependencies;
-delete packageJson.files;
-delete packageJson.scripts;
-
-await writeFile(
-	resolve(stagingDirectory, "package.json"),
-	`${JSON.stringify(packageJson, null, 2)}\n`,
-);
-
-console.log(stagingDirectory);
 
 async function copyNativeArtifacts(sourceRoot: string): Promise<void> {
 	const targets = (await readdir(sourceRoot, { withFileTypes: true }))
@@ -66,6 +68,9 @@ async function copyNativeArtifacts(sourceRoot: string): Promise<void> {
 		if (manifest.schemaVersion !== 1 || manifest.target !== target) {
 			throw new Error(`Native artifact manifest is invalid for ${target}`);
 		}
+		if (!isSafeFileName(manifest.executable)) {
+			throw new Error(`Native artifact executable path is invalid for ${target}`);
+		}
 		const executable = resolve(source, manifest.executable);
 		const bytes = await readFile(executable);
 		const hash = createHash("sha256").update(bytes).digest("hex");
@@ -77,6 +82,18 @@ async function copyNativeArtifacts(sourceRoot: string): Promise<void> {
 		await cp(executable, resolve(destination, manifest.executable));
 		await cp(manifestPath, resolve(destination, "native-artifact.json"));
 	}
+}
+
+export function isSafeFileName(value: unknown): value is string {
+	return (
+		typeof value === "string" &&
+		value.length > 0 &&
+		value !== "." &&
+		value !== ".." &&
+		!value.includes("/") &&
+		!value.includes("\\") &&
+		!value.includes(":")
+	);
 }
 
 interface NativeArtifactManifest {
@@ -93,4 +110,8 @@ function argument(name: string): string | undefined {
 	const value = process.argv[index + 1];
 	if (value === undefined || value.startsWith("--")) throw new Error(`${name} requires a value`);
 	return value;
+}
+
+if (import.meta.main) {
+	await main();
 }
