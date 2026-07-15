@@ -1,0 +1,6 @@
+{
+  "eventTypes": ["response.output_text.delta", "response.output_item.done", "response.completed"],
+  "terminalStatus": "completed",
+  "responseId": "fixture-response",
+  "text": "fixture"
+}

@@ -41,6 +41,7 @@ const client = await BridgeClient.connect({
 let generated: string;
 let generatedCoreTools: string;
 let generatedTypeScript: string;
+let generatedContracts: Record<string, unknown>;
 try {
 	const result = await client.request("tools.resolve", {
 		model: fixtureModel(),
@@ -57,24 +58,23 @@ try {
 	const shell = await resolveTools("shell_command");
 	const standaloneWeb = await resolveTools("disabled", true);
 	const contracts = collectCoreContracts(unified, shell, standaloneWeb);
+	generatedContracts = contracts;
 	generatedCoreTools = `${JSON.stringify(contracts, null, 2)}\n`;
-	generatedTypeScript = [
-		"// Generated from the pinned official Codex tool builders. Do not edit.",
-		`export const OFFICIAL_CORE_TOOL_CONTRACTS = ${JSON.stringify(contracts, null, 2)} as const;`,
-		`export const PI_CORE_TOOL_PARAMETERS = ${JSON.stringify(piExecutionParameters(contracts), null, 2)} as const;`,
-		"",
-	].join("\n");
+	generatedTypeScript = renderGeneratedTypeScript(contracts);
 } finally {
 	await client.shutdown();
 }
 
 if (process.argv.includes("--check")) {
+	const committedCoreToolsText = await readFile(coreToolsPath, "utf8");
+	const committedCoreTools = JSON.parse(committedCoreToolsText) as Record<string, unknown>;
 	if (
 		(await readFile(outputPath, "utf8")) !== generated ||
-		(await readFile(coreToolsPath, "utf8")) !== generatedCoreTools ||
-		(await readFile(generatedToolsPath, "utf8")) !== generatedTypeScript
+		JSON.stringify(platformStableContracts(committedCoreTools)) !==
+			JSON.stringify(platformStableContracts(generatedContracts)) ||
+		(await readFile(generatedToolsPath, "utf8")) !== renderGeneratedTypeScript(committedCoreTools)
 	) {
-		throw new Error("Official update-plan and hosted-web fixture is stale");
+		throw new Error("Official fixture or generated core tool contract is stale");
 	}
 } else {
 	await Promise.all([
@@ -82,6 +82,39 @@ if (process.argv.includes("--check")) {
 		writeFile(coreToolsPath, generatedCoreTools),
 		writeFile(generatedToolsPath, generatedTypeScript),
 	]);
+}
+
+function renderGeneratedTypeScript(contracts: Record<string, unknown>): string {
+	return [
+		"// Generated from the pinned official Codex tool builders. Do not edit.",
+		`export const OFFICIAL_CORE_TOOL_CONTRACTS = ${JSON.stringify(contracts, null, 2)} as const;`,
+		`export const PI_CORE_TOOL_PARAMETERS = ${JSON.stringify(piExecutionParameters(contracts), null, 2)} as const;`,
+		"",
+	].join("\n");
+}
+
+function platformStableContracts(contracts: Record<string, unknown>): Record<string, unknown> {
+	const stable: Record<string, unknown> = {};
+	for (const [name, value] of Object.entries(contracts)) {
+		if (
+			(name === "exec_command" || name === "shell_command") &&
+			typeof value === "object" &&
+			value !== null &&
+			!Array.isArray(value)
+		) {
+			const contract = value as Record<string, unknown>;
+			if (typeof contract.description !== "string" || contract.description.length === 0) {
+				throw new Error(`Official ${name} description must be non-empty`);
+			}
+			stable[name] = {
+				...contract,
+				description: "<official platform-specific shell description>",
+			};
+			continue;
+		}
+		stable[name] = value;
+	}
+	return stable;
 }
 
 async function resolveTools(

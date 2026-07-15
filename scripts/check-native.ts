@@ -7,6 +7,7 @@ const target = nativeTargetFor(process.platform, process.arch);
 if (target === undefined) {
 	throw new Error(`Unsupported native build target: ${process.platform}/${process.arch}`);
 }
+const executable = process.platform === "win32" ? "codex-bridge.exe" : "codex-bridge";
 
 await run(["cargo", "fmt", "--manifest-path", "native/Cargo.toml", "--all", "--check"]);
 await run([
@@ -40,6 +41,14 @@ await run([
 	"codex-bridge",
 	"--target",
 	target,
+]);
+await run([
+	"bun",
+	"scripts/verify-bridge-integration.ts",
+	"--target",
+	target,
+	"--executable",
+	resolve(root, "native", "target", target, "debug", executable),
 ]);
 
 async function run(command: string[]): Promise<void> {

@@ -1,0 +1,196 @@
+import { afterEach, describe, expect, test } from "bun:test";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { CodexCompactionStore } from "../../src/application/compaction.ts";
+import { ConfigurationService } from "../../src/application/configuration.ts";
+import { FileConfigurationRepository } from "../../src/infrastructure/configuration/file-config-repository.ts";
+import { createCodexStreamSimple } from "../../src/integration/pi/codex-provider.ts";
+import { registerCodexTools } from "../../src/integration/pi/codex-tools.ts";
+
+import { createFakePi, emit, fixtureModel, fixtureToken } from "./helpers/fake-pi.ts";
+import { fixtureModelSpec, startFakeResponsesServer } from "./helpers/fake-responses-server.ts";
+import { createIntegrationRuntime } from "./helpers/native-bridge.ts";
+
+const cleanups: Array<() => Promise<void> | void> = [];
+
+afterEach(async () => {
+	while (cleanups.length > 0) {
+		await cleanups.pop()?.();
+	}
+});
+
+async function configurationService(): Promise<ConfigurationService> {
+	const directory = await mkdtemp(join(tmpdir(), "pi-codex-adaptor-cfg-"));
+	cleanups.push(async () => rm(directory, { recursive: true, force: true }));
+	const configFile = join(directory, "pi-codex-adaptor.json");
+	const repository = new FileConfigurationRepository(configFile);
+	return new ConfigurationService(repository);
+}
+
+describe("fake Pi + real native lifecycle", () => {
+	test("switches models, recomputes resolvers, updates plan, and shuts down cleanly", async () => {
+		const server = await startFakeResponsesServer([
+			fixtureModelSpec({
+				slug: "fixture-unified",
+				shellType: "unified_exec",
+				useResponsesLite: false,
+			}),
+			fixtureModelSpec({
+				slug: "fixture-shell",
+				shellType: "shell_command",
+				useResponsesLite: true,
+			}),
+		]);
+		cleanups.push(() => server.stop());
+
+		const token = fixtureToken();
+		const { runtime } = await createIntegrationRuntime({ testBaseUrl: server.baseUrl });
+		cleanups.push(async () => runtime.shutdown());
+
+		const service = await configurationService();
+		const pi = createFakePi({ token });
+		registerCodexTools(pi.api, runtime, service);
+
+		const unified = pi.context(fixtureModel("fixture-unified"));
+		await emit(pi, "session_start", unified);
+		expect(pi.activeTools).toEqual([
+			"third_party",
+			"update_plan",
+			"apply_patch",
+			"exec_command",
+			"write_stdin",
+			"view_image",
+			"image_gen.imagegen",
+		]);
+		expect(pi.status.get("codex-adaptor")).toContain("unified-exec");
+		expect(pi.status.get("codex-adaptor")).toContain("hosted");
+
+		const shell = pi.context(fixtureModel("fixture-shell"));
+		await emit(pi, "model_select", shell);
+		expect(pi.activeTools).toEqual([
+			"third_party",
+			"update_plan",
+			"apply_patch",
+			"shell_command",
+			"view_image",
+			"image_gen.imagegen",
+			"web.run",
+		]);
+		expect(pi.status.get("codex-adaptor")).toContain("shell-command");
+		expect(pi.status.get("codex-adaptor")).toContain("standalone");
+
+		const plan = await pi.tools.get("update_plan")?.execute(
+			"plan-call",
+			{
+				explanation: "fixture plan",
+				plan: [
+					{ step: "First", status: "in_progress" },
+					{ step: "Second", status: "pending" },
+				],
+			} as never,
+			undefined,
+			undefined,
+			shell,
+		);
+		expect(plan?.content).toEqual([{ type: "text", text: "Plan updated" }]);
+		expect(pi.widgets.get("codex-plan")).toEqual(["Plan", "[>] First", "[ ] Second"]);
+
+		// Reload recomputes the same surface without deleting third-party tools.
+		await emit(pi, "session_start", shell);
+		expect(pi.activeTools).toContain("third_party");
+		expect(pi.activeTools).toContain("web.run");
+		expect(pi.activeTools).toContain("shell_command");
+
+		const other = pi.context(fixtureModel("fixture-shell", "other-provider"));
+		await emit(pi, "model_select", other);
+		expect(pi.activeTools).toEqual(["third_party"]);
+
+		await runtime.shutdown();
+		cleanups.pop();
+	}, 60_000);
+
+	test("streams assistant text through fake Pi provider + real native + fake Responses", async () => {
+		const server = await startFakeResponsesServer([
+			fixtureModelSpec({ slug: "fixture-model", shellType: "disabled" }),
+		]);
+		cleanups.push(() => server.stop());
+
+		const token = fixtureToken();
+		const { runtime } = await createIntegrationRuntime({ testBaseUrl: server.baseUrl });
+		cleanups.push(async () => runtime.shutdown());
+		const service = await configurationService();
+		const streamSimple = createCodexStreamSimple(runtime, service, new CodexCompactionStore());
+		const stream = streamSimple(
+			fixtureModel(),
+			{
+				systemPrompt: "",
+				messages: [{ role: "user", content: "fixture input", timestamp: 1 }],
+			},
+			{ apiKey: token },
+		);
+
+		const events: string[] = [];
+		let finalText = "";
+		for await (const event of stream) {
+			events.push(event.type);
+			if (event.type === "done" && event.message) {
+				const content = event.message.content.find((item) => item.type === "text");
+				finalText =
+					content !== undefined && content.type === "text" && typeof content.text === "string"
+						? content.text
+						: "";
+			}
+			if (event.type === "done" || event.type === "error") break;
+		}
+		expect(events).toContain("text_delta");
+		expect(events).toContain("done");
+		expect(finalText).toBe("fixture");
+		expect(server.requests.some((entry) => entry.path.endsWith("/responses"))).toBe(true);
+	}, 60_000);
+
+	test("config reload recomputes optional tool activation without native credentials", async () => {
+		const server = await startFakeResponsesServer([
+			fixtureModelSpec({
+				slug: "fixture-model",
+				shellType: "shell_command",
+				inputModalities: ["text"],
+			}),
+		]);
+		cleanups.push(() => server.stop());
+		const token = fixtureToken();
+		const { runtime } = await createIntegrationRuntime({ testBaseUrl: server.baseUrl });
+		cleanups.push(async () => runtime.shutdown());
+
+		const directory = await mkdtemp(join(tmpdir(), "pi-codex-adaptor-reload-"));
+		cleanups.push(async () => rm(directory, { recursive: true, force: true }));
+		const configFile = join(directory, "pi-codex-adaptor.json");
+		const repository = new FileConfigurationRepository(configFile);
+		const service = new ConfigurationService(repository);
+		const defaults = await service.load();
+		await writeFile(
+			configFile,
+			JSON.stringify({
+				...defaults,
+				tools: {
+					...defaults.tools,
+					optional: { viewImage: "off", imageGeneration: "off" },
+				},
+				openai: {
+					...defaults.openai,
+					webSearch: { mode: "disabled" },
+				},
+			}),
+			"utf8",
+		);
+
+		const pi = createFakePi({ token });
+		registerCodexTools(pi.api, runtime, service);
+		const ctx = pi.context(fixtureModel());
+		await emit(pi, "session_start", ctx);
+		expect(pi.activeTools).toEqual(["third_party", "update_plan", "apply_patch", "shell_command"]);
+		expect(pi.activeTools).not.toContain("view_image");
+		expect(pi.activeTools).not.toContain("image_gen.imagegen");
+		expect(pi.activeTools).not.toContain("web.run");
+	}, 60_000);
+});

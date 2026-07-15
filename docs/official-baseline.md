@@ -19,5 +19,14 @@ Conformance uses `@openai/codex@0.144.3` and `@openai/codex-sdk@0.144.3` only in
 and CI jobs. Their expected npm integrity values are recorded in `UPSTREAM_CODEX.toml`. They are not
 production dependencies and do not run inside Pi.
 
-The vendor allowlist, patches, and tree hash are intentionally pending during the `0.0.0` skeleton
-stage. They must be complete before native Codex modules enter the build.
+The vendor selection contains 257 files from the recorded production closure. Its allowlist, source
+hashes, license inventory, patch list, and deterministic tree hash are pinned by
+`UPSTREAM_CODEX.toml`. Offline verification checks the committed tree; replay verification fetches
+and peels the immutable official tag without reading a local checkout.
+
+The stable app-server schema is a conformance-only oracle. The repository records canonical SHA-256
+checksums for the complete generated JSON bundles and commits only the allowlisted initialization,
+response-item, thread, turn, and item TypeScript subset under
+[`fixtures/app-server-schema`](../fixtures/app-server-schema/manifest.json). The schema check runs the
+pinned CLI with an empty temporary `CODEX_HOME`, verifies those checksums and subset files, and then
+deletes the complete generated output. No app-server process or account API enters production.

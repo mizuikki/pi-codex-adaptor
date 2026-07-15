@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 1,
+  "officialCodexVersion": "0.144.3",
+  "officialSourceCommit": "78ad6e6bfd1d3b6a209acd3ef82172a96b25179c",
+  "requestBody": [
+    "model",
+    "tools",
+    "tool_choice",
+    "parallel_tool_calls",
+    "store",
+    "stream",
+    "include"
+  ],
+  "requestBodyComparable": [
+    "model",
+    "tool_choice",
+    "parallel_tool_calls",
+    "store",
+    "stream",
+    "include"
+  ],
+  "requestHeaders": ["content-type", "authorization"],
+  "eventTypes": ["response.output_text.delta", "response.output_item.done", "response.completed"],
+  "terminalStatuses": ["completed"],
+  "toolContractFields": ["name", "type", "description", "parameters", "strict", "format", "tools"],
+  "toolSurfaceFields": [
+    "shellSurface",
+    "webSurface",
+    "webReason",
+    "imageGenerationSurface",
+    "modelToolNames",
+    "dispatchToolNames"
+  ],
+  "coreTools": [
+    "update_plan",
+    "apply_patch",
+    "image_gen",
+    "web",
+    "exec_command",
+    "write_stdin",
+    "shell_command",
+    "view_image"
+  ],
+  "requestPresence": ["input", "instructions"]
+}

@@ -1,0 +1,4 @@
+{"direction":"client","type":"response.create","request":{"model":"fixture-model","instructions":"","input":[],"tools":null,"tool_choice":"auto","parallel_tool_calls":false,"reasoning":null,"store":false,"stream":true,"include":[]}}
+{"direction":"server","type":"response.output_text.delta","delta":"fixture"}
+{"direction":"server","type":"response.output_item.done","item":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"fixture"}]}}
+{"direction":"server","type":"response.completed","response":{"id":"fixture-response"}}
