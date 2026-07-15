@@ -291,10 +291,12 @@ describe("native child integration", () => {
 				workspaceRoots: [repositoryRoot],
 				timeoutMs: 10_000,
 				login: false,
+				allowLoginShell: false,
+				...(process.platform === "win32" ? { shell: "cmd.exe" } : {}),
 			},
 			{
 				signal: controller.signal,
-				onApprovalRequest: async () => {
+				onApprovalRequest: () => {
 					sawApproval = true;
 					controller.abort();
 					// Intentionally do not send a decision for the expired approval id.
@@ -316,6 +318,8 @@ describe("native child integration", () => {
 				workspaceRoots: [repositoryRoot],
 				timeoutMs: 10_000,
 				login: false,
+				allowLoginShell: false,
+				...(process.platform === "win32" ? { shell: "cmd.exe" } : {}),
 			},
 			{
 				onApprovalRequest: (approval) => client.decideApproval(approval.approvalId, "allow_once"),
@@ -344,7 +348,9 @@ describe("native child integration", () => {
 			argumentsValue: {
 				command: "echo should-not-run",
 				login: false,
+				allowLoginShell: false,
 				timeoutMs: 10_000,
+				...(process.platform === "win32" ? { shell: "cmd.exe" } : {}),
 			},
 			workdir: repositoryRoot,
 			workspaceRoots: [repositoryRoot],
@@ -364,7 +370,9 @@ describe("native child integration", () => {
 			argumentsValue: {
 				command: "echo next",
 				login: false,
+				allowLoginShell: false,
 				timeoutMs: 10_000,
+				...(process.platform === "win32" ? { shell: "cmd.exe" } : {}),
 			},
 			workdir: repositoryRoot,
 			workspaceRoots: [repositoryRoot],
