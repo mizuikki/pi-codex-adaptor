@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "package": "pi-codex-adaptor",
+  "version": "0.1.0-rc.1",
+  "projectSourceCommit": "0123456789abcdef0123456789abcdef01234567",
+  "bridgeProtocolVersion": 1,
+  "officialCodexVersion": "0.144.3",
+  "officialCodexTag": "rust-v0.144.3",
+  "officialSourceCommit": "78ad6e6bfd1d3b6a209acd3ef82172a96b25179c",
+  "vendorTreeSha256": "834ba149cf49f8df840d3dac6c612c312535f27c47c813013022776190d43178",
+  "npmDistTag": "rc",
+  "toolchain": {
+    "bun": "1.3.14",
+    "node": "24.18.0",
+    "npm": "12.0.1",
+    "rust": "1.95.0",
+    "typescript": "7.0.2",
+    "typesNode": "24.13.3",
+    "biome": "2.5.3",
+    "pi": "0.80.6",
+    "typebox": "1.3.6"
+  },
+  "conformance": {
+    "cli": {
+      "package": "@openai/codex",
+      "version": "0.144.3",
+      "integrity": "sha512-8Re3wp5CdYiM7nsF4StFa5js6IT11N7srhxfvwtol7ENHDht05C+HS4e1CTmYjqkhgsUzl2R1gB27iN2pdbVnA=="
+    },
+    "sdk": {
+      "package": "@openai/codex-sdk",
+      "version": "0.144.3",
+      "integrity": "sha512-WPtEx38iVyksWujOwmsxnJznRR8T/YF+lAJghMhHL1xIWdJrrvZ1iafhIsw4egY5CRoRmFm2ta8NQsK4f4XDZA=="
+    }
+  },
+  "tarball": {
+    "filename": "pi-codex-adaptor-0.1.0-rc.1.tgz",
+    "size": 128,
+    "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "integrity": "sha512-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb=="
+  },
+  "native": [],
+  "artifactRetentionDays": 30
+}

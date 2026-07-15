@@ -7,7 +7,6 @@
       "package-name": "pi-codex-adaptor",
       "prerelease": true,
       "prerelease-type": "rc",
-      "release-as": "0.1.0-rc.0",
       "release-type": "node",
       "skip-github-release": true,
       "versioning": "prerelease"

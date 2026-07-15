@@ -1,0 +1,345 @@
+import { describe, expect, test } from "bun:test";
+import { readFile } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+import {
+	buildNpmPublishArgs,
+	buildReleaseManifest,
+	tarballIntegrity,
+} from "../../scripts/publish-package.ts";
+import { PACKAGE_PATH_ALLOWLIST, unexpectedPackagePaths } from "../../scripts/verify-package.ts";
+import {
+	classifyPublicationState,
+	npmDistTagForVersion,
+	releaseArtifactName,
+	validateReleaseAsLifecycle,
+	verifyPublishedIntegrity,
+	verifyReleaseDecision,
+} from "../../scripts/verify-release.ts";
+
+const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+
+interface PublicationFixture {
+	schemaVersion: number;
+	cases: Array<{
+		name: string;
+		snapshot: {
+			npmPublished: boolean;
+			gitTagExists: boolean;
+			githubReleaseExists: boolean;
+		};
+		expected: {
+			action: "publish" | "finalize-only" | "complete" | "impossible";
+			needsFinalize: boolean;
+		};
+	}>;
+}
+
+interface LifecycleFixture {
+	schemaVersion: number;
+	allowedBootstrapVersions: string[];
+	configs: {
+		rc: {
+			path: string;
+			required: Record<string, unknown>;
+		};
+		stable: {
+			path: string;
+			required: Record<string, unknown>;
+			forbidden: string[];
+		};
+	};
+	progression: Array<{
+		name: string;
+		channel: "rc" | "stable";
+		from: string;
+		releaseAs: string | null;
+		to: string;
+		npmDistTag: "rc" | "latest";
+		clearReleaseAsAfterTag?: boolean;
+		strategy?: string;
+	}>;
+	releaseAsLifecycle: Array<{
+		name: string;
+		bootstrapVersion: string;
+		packageVersion: string;
+		taggedVersions: string[];
+		ok: boolean;
+	}>;
+}
+
+const publicationFixture = JSON.parse(
+	await readFile(resolve(repositoryRoot, "fixtures/release/publication-states.json"), "utf8"),
+) as PublicationFixture;
+const lifecycleFixture = JSON.parse(
+	await readFile(resolve(repositoryRoot, "fixtures/release/release-please-lifecycle.json"), "utf8"),
+) as LifecycleFixture;
+const sampleManifest = JSON.parse(
+	await readFile(resolve(repositoryRoot, "fixtures/release/sample-release-manifest.json"), "utf8"),
+) as {
+	package: string;
+	version: string;
+	projectSourceCommit: string;
+	tarball: { filename: string; size: number; sha256: string; integrity: string };
+	toolchain: {
+		bun: string;
+		node: string;
+		npm: string;
+		rust: string;
+		typescript: string;
+		typesNode: string;
+		biome: string;
+		pi: string;
+		typebox: string;
+	};
+	conformance: {
+		cli: { package: string; version: string; integrity: string };
+		sdk: { package: string; version: string; integrity: string };
+	};
+};
+
+describe("release publication state machine", () => {
+	for (const testCase of publicationFixture.cases) {
+		test(testCase.name, () => {
+			const decision = classifyPublicationState(testCase.snapshot);
+			expect(decision.action).toBe(testCase.expected.action);
+			expect(decision.needsFinalize).toBe(testCase.expected.needsFinalize);
+		});
+	}
+});
+
+describe("npm dist-tag selection", () => {
+	test("uses rc for prerelease versions and latest for stable versions", () => {
+		expect(npmDistTagForVersion("0.1.0-rc.0")).toBe("rc");
+		expect(npmDistTagForVersion("0.1.0-rc.1")).toBe("rc");
+		expect(npmDistTagForVersion("0.1.0")).toBe("latest");
+		expect(buildNpmPublishArgs({ tarballPath: "pkg.tgz", version: "0.1.0-rc.1" })).toEqual([
+			"npm",
+			"publish",
+			"pkg.tgz",
+			"--access",
+			"public",
+			"--tag",
+			"rc",
+			"--provenance",
+		]);
+		expect(buildNpmPublishArgs({ tarballPath: "pkg.tgz", version: "0.1.0" })).toEqual([
+			"npm",
+			"publish",
+			"pkg.tgz",
+			"--access",
+			"public",
+			"--tag",
+			"latest",
+			"--provenance",
+		]);
+	});
+});
+
+describe("release-as and Release Please lifecycle", () => {
+	test("rc and stable configs match the pinned Release Please contract", async () => {
+		for (const [channel, config] of Object.entries(lifecycleFixture.configs)) {
+			const raw = JSON.parse(await readFile(resolve(repositoryRoot, config.path), "utf8")) as {
+				packages: Record<string, Record<string, unknown>>;
+			};
+			const packageConfig = raw.packages["."];
+			expect(packageConfig).toBeDefined();
+			if (packageConfig === undefined) {
+				throw new Error(`Missing package config in ${config.path}`);
+			}
+			for (const [key, value] of Object.entries(config.required)) {
+				expect(packageConfig[key]).toEqual(value);
+			}
+			if (channel === "stable") {
+				for (const key of lifecycleFixture.configs.stable.forbidden) {
+					expect(packageConfig[key]).toBeUndefined();
+				}
+			}
+		}
+	});
+
+	test("documents rc0 -> rc1 -> stable progression without network", () => {
+		expect(lifecycleFixture.progression.map((step) => step.to)).toEqual([
+			"0.1.0-rc.0",
+			"0.1.0-rc.1",
+			"0.1.0",
+		]);
+		for (const step of lifecycleFixture.progression) {
+			expect(npmDistTagForVersion(step.to)).toBe(step.npmDistTag);
+			if (step.releaseAs !== null) {
+				expect(step.clearReleaseAsAfterTag).toBe(true);
+			}
+		}
+	});
+
+	for (const testCase of lifecycleFixture.releaseAsLifecycle) {
+		test(testCase.name, () => {
+			const result = validateReleaseAsLifecycle({
+				bootstrapVersion: testCase.bootstrapVersion || undefined,
+				packageVersion: testCase.packageVersion,
+				taggedVersions: new Set(testCase.taggedVersions),
+				allowedBootstrapVersions: lifecycleFixture.allowedBootstrapVersions,
+			});
+			expect(result.ok).toBe(testCase.ok);
+		});
+	}
+});
+
+describe("verify-release decision helpers", () => {
+	const sourceCommit = "0123456789abcdef0123456789abcdef01234567";
+
+	test("accepts a release-please publish candidate on an RC branch", () => {
+		const result = verifyReleaseDecision({
+			packageName: "pi-codex-adaptor",
+			version: "0.1.0-rc.1",
+			manifestVersion: "0.1.0-rc.1",
+			sourceCommit,
+			parentPackageVersion: "0.1.0-rc.0",
+			commitSubject: "chore(main): release 0.1.0-rc.1",
+			changelog: "## 0.1.0-rc.1\n\n### Features\n\n* demo\n",
+			branchName: "release/0.1",
+			eventName: "push",
+			publication: {
+				npmPublished: false,
+				gitTagExists: false,
+				githubReleaseExists: false,
+			},
+		});
+		expect(result.release).toBe(true);
+		expect(result.alreadyPublished).toBe(false);
+		expect(result.needsFinalize).toBe(true);
+		expect(result.publicationAction).toBe("publish");
+		expect(result.npmDistTag).toBe("rc");
+	});
+
+	test("routes already-published packages to finalize-only recovery", () => {
+		const result = verifyReleaseDecision({
+			packageName: "pi-codex-adaptor",
+			version: "0.1.0-rc.1",
+			manifestVersion: "0.1.0-rc.1",
+			sourceCommit,
+			parentPackageVersion: "0.1.0-rc.0",
+			commitSubject: "chore(main): release 0.1.0-rc.1",
+			changelog: "## 0.1.0-rc.1\n\n### Features\n\n* demo\n",
+			branchName: "release/0.1",
+			eventName: "workflow_dispatch",
+			dispatchVersion: "0.1.0-rc.1",
+			dispatchCommit: sourceCommit,
+			publication: {
+				npmPublished: true,
+				gitTagExists: false,
+				githubReleaseExists: false,
+			},
+		});
+		expect(result.publicationAction).toBe("finalize-only");
+		expect(result.alreadyPublished).toBe(true);
+		expect(result.needsFinalize).toBe(true);
+	});
+
+	test("rejects impossible tag-without-npm state", () => {
+		expect(() =>
+			verifyReleaseDecision({
+				packageName: "pi-codex-adaptor",
+				version: "0.1.0",
+				manifestVersion: "0.1.0",
+				sourceCommit,
+				parentPackageVersion: "0.1.0-rc.1",
+				commitSubject: "chore(main): release 0.1.0",
+				changelog: "## 0.1.0\n\n### Features\n\n* stable\n",
+				branchName: "main",
+				eventName: "push",
+				publication: {
+					npmPublished: false,
+					gitTagExists: true,
+					githubReleaseExists: false,
+				},
+			}),
+		).toThrow(/without a matching npm publication/i);
+	});
+
+	test("rejects channel mismatches", () => {
+		expect(() =>
+			verifyReleaseDecision({
+				packageName: "pi-codex-adaptor",
+				version: "0.1.0-rc.1",
+				manifestVersion: "0.1.0-rc.1",
+				sourceCommit,
+				parentPackageVersion: "0.1.0-rc.0",
+				commitSubject: "chore(main): release 0.1.0-rc.1",
+				changelog: "## 0.1.0-rc.1\n\n### Features\n\n* demo\n",
+				branchName: "main",
+				eventName: "push",
+				publication: {
+					npmPublished: false,
+					gitTagExists: false,
+					githubReleaseExists: false,
+				},
+			}),
+		).toThrow(/does not match release channel/i);
+	});
+
+	test("verifies registry integrity against the saved release manifest", () => {
+		expect(() =>
+			verifyPublishedIntegrity({
+				packageName: sampleManifest.package,
+				sourceCommit: sampleManifest.projectSourceCommit,
+				registry: {
+					version: sampleManifest.version,
+					integrity: sampleManifest.tarball.integrity,
+				},
+				manifest: sampleManifest,
+			}),
+		).not.toThrow();
+
+		expect(() =>
+			verifyPublishedIntegrity({
+				packageName: sampleManifest.package,
+				sourceCommit: sampleManifest.projectSourceCommit,
+				registry: {
+					version: sampleManifest.version,
+					integrity: "sha512-deadbeef",
+				},
+				manifest: sampleManifest,
+			}),
+		).toThrow(/integrity/i);
+	});
+});
+
+describe("release manifest and package path helpers", () => {
+	test("builds a richer release manifest with locked toolchain and conformance fields", () => {
+		const bytes = Buffer.from("exact-tarball-bytes");
+		const manifest = buildReleaseManifest({
+			packageName: "pi-codex-adaptor",
+			version: "0.1.0-rc.1",
+			sourceCommit: sampleManifest.projectSourceCommit,
+			toolchain: sampleManifest.toolchain,
+			conformance: sampleManifest.conformance,
+			tarball: {
+				filename: "pi-codex-adaptor-0.1.0-rc.1.tgz",
+				size: bytes.byteLength,
+				sha256: "a".repeat(64),
+				integrity: tarballIntegrity(bytes),
+			},
+			native: [],
+		});
+		expect(manifest.schemaVersion).toBe(1);
+		expect(manifest.npmDistTag).toBe("rc");
+		expect(manifest.toolchain.bun).toBe("1.3.14");
+		expect(manifest.toolchain.rust).toBe("1.95.0");
+		expect(manifest.conformance.sdk.version).toBe("0.144.3");
+		expect(manifest.artifactRetentionDays).toBe(30);
+		expect(releaseArtifactName(manifest.version, manifest.projectSourceCommit)).toBe(
+			`pi-codex-adaptor-${manifest.version}-${manifest.projectSourceCommit}`,
+		);
+	});
+
+	test("rejects unexpected package paths for exact-tarball verification", () => {
+		expect(
+			unexpectedPackagePaths(
+				["LICENSE", "README.md", "package.json", "src/extension.ts", "secrets.env"],
+				PACKAGE_PATH_ALLOWLIST,
+			),
+		).toEqual(["secrets.env"]);
+	});
+});
