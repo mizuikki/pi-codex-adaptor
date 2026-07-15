@@ -508,7 +508,6 @@ export class BridgeClient {
 				);
 				break;
 			case "result":
-				this.#cleanupPending(pending);
 				void pending.eventChain.then(
 					() => this.#resolvePending(requestId, message),
 					(error) => this.#rejectPending(requestId, toError(error)),

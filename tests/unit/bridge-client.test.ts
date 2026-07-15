@@ -413,6 +413,35 @@ describe("bridge process client", () => {
 		await client.shutdown();
 	});
 
+	test("keeps cancellation active until queued approval handlers finish", async () => {
+		const transport = new FakeBridgeTransport();
+		transport.approvalMode = "hold";
+		const client = await connect(transport);
+		const controller = new AbortController();
+
+		const pending = client.request(
+			"tools.execute",
+			{},
+			{
+				signal: controller.signal,
+				onApprovalRequest: () => controller.abort(),
+			},
+		);
+		const request = transport.requestMessages.at(-1);
+		expect(request?.type).toBe("request");
+		if (request?.type !== "request") throw new Error("Expected a bridge request");
+		transport.emit({
+			type: "result",
+			requestId: request.requestId,
+			status: "timed_out",
+			result: {},
+		});
+
+		await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+		expect(client.isReady).toBe(true);
+		await client.shutdown();
+	});
+
 	test("bounds control requests and ignores their late terminal frames", async () => {
 		const transport = new FakeBridgeTransport();
 		transport.suppressedControlTypes.add("session_resize");
