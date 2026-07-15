@@ -51,8 +51,11 @@ export function normalizeRequestHeaders(
 		headers instanceof Headers
 			? (name: string) => headers.get(name)
 			: (name: string) => {
-					const direct = headers[name] ?? headers[name.toLowerCase()];
-					return direct ?? null;
+					const expected = name.toLowerCase();
+					for (const [headerName, value] of Object.entries(headers)) {
+						if (headerName.toLowerCase() === expected) return value ?? null;
+					}
+					return null;
 				};
 
 	for (const name of allowlist.requestHeaders) {
@@ -218,22 +221,29 @@ export function normalizeCoreToolContracts(
 
 export function parseSseEvents(body: string): Array<Record<string, unknown>> {
 	const events: Array<Record<string, unknown>> = [];
-	for (const block of body.split("\n\n")) {
-		const dataLines = block
-			.split("\n")
+	for (const block of body.replace(/\r\n?/g, "\n").split("\n\n")) {
+		const lines = block.split("\n");
+		let eventType: string | undefined;
+		for (const line of lines) {
+			if (line.startsWith("event:")) eventType = line.slice(6).trim();
+		}
+		const dataLines = lines
 			.filter((line) => line.startsWith("data:"))
 			.map((line) => line.slice(5).trimStart());
 		if (dataLines.length === 0) {
-			const eventLine = block.split("\n").find((line) => line.startsWith("event:"));
-			if (eventLine !== undefined) {
-				events.push({ type: eventLine.slice(6).trim() });
-			}
+			if (eventType !== undefined) events.push({ type: eventType });
 			continue;
 		}
 		const payload = dataLines.join("\n");
+		if (payload === "[DONE]") break;
 		const parsed = JSON.parse(payload) as unknown;
 		if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
-			events.push(parsed as Record<string, unknown>);
+			const event = parsed as Record<string, unknown>;
+			events.push({
+				...event,
+				...(eventType === undefined ? {} : { event: eventType }),
+				...(eventType !== undefined && typeof event.type !== "string" ? { type: eventType } : {}),
+			});
 		}
 	}
 	return events;
@@ -245,7 +255,7 @@ export function assertCredentialFree(text: string, label: string): void {
 		/Bearer\s+(?!redacted\b)[A-Za-z0-9._~+/=-]{8,}/i,
 		/chatgpt_account_id/i,
 		/\/home\/[A-Za-z0-9._-]+/,
-		/\\\\Users\\\\[A-Za-z0-9._-]+/,
+		/\\{1,2}Users\\{1,2}[A-Za-z0-9._-]+/i,
 		/CODEX_API_KEY/i,
 		/OPENAI_API_KEY/i,
 	];

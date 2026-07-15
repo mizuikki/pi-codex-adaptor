@@ -6,6 +6,7 @@ import {
 	assertCredentialFree,
 	normalizeEventTypes,
 	normalizeRequestBody,
+	normalizeRequestHeaders,
 	parseSseEvents,
 	type ResponsesAllowlist,
 } from "../conformance/allowlist.ts";
@@ -55,5 +56,39 @@ describe("responses wire fixtures", () => {
 		expect(expected.responseId).toBe("fixture-response");
 		expect(normalizeRequestBody(request, allowlist).model).toBe("fixture-model");
 		expect(normalizeRequestBody(request, allowlist).stream).toBe(true);
+	});
+
+	test("normalizes record header names case-insensitively", async () => {
+		const allowlist = JSON.parse(
+			await readFile(resolve(responsesRoot, "allowlist.json"), "utf8"),
+		) as ResponsesAllowlist;
+		expect(
+			normalizeRequestHeaders(
+				{ Authorization: "Bearer fixture-token", "Content-Type": "Application/JSON" },
+				allowlist,
+			),
+		).toMatchObject({
+			authorization: "bearer redacted",
+			"content-type": "application/json",
+		});
+	});
+
+	test("parses CRLF SSE framing and preserves explicit event metadata", () => {
+		const events = parseSseEvents(
+			'event: response.created\r\ndata: {"id":"fixture"}\r\n\r\n' +
+				'event: stale-name\revent: transport-name\rdata: {"type":"payload-type"}\r\r' +
+				'data: [DONE]\r\n\r\ndata: {"type":"after-done"}\r\n\r\n',
+		);
+		expect(events).toEqual([
+			{ id: "fixture", event: "response.created", type: "response.created" },
+			{ type: "payload-type", event: "transport-name" },
+		]);
+	});
+
+	test("rejects raw and JSON-escaped Windows user paths", () => {
+		const raw = "C:\\Users\\fixture-user\\project";
+		expect(() => assertCredentialFree(raw, "raw path")).toThrow();
+		expect(() => assertCredentialFree(JSON.stringify({ path: raw }), "escaped path")).toThrow();
+		expect(() => assertCredentialFree("C:\\USERS\\fixture-user\\project", "case path")).toThrow();
 	});
 });

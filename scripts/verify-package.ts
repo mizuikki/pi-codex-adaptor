@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, resolve } from "node:path";
+import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { SUPPORTED_NATIVE_TARGETS } from "../src/infrastructure/codex-bridge/identity.ts";
 
 interface PackFile {
 	path: string;
@@ -81,19 +82,22 @@ async function main(): Promise<void> {
 	}
 
 	const nativeFiles = paths.filter((path) => path.startsWith("native/bin/"));
-	if (requireNative && nativeFiles.length === 0) {
+	if (requireNative && !hasCompleteNativeArtifact(nativeFiles)) {
 		throw new Error("Release package must contain native bridge artifacts");
 	}
-	if (tarball !== undefined) await verifyTarball(resolve(tarball), paths);
-	if (tarball !== undefined && smokeInstall) {
-		await smokeInstallExactTarball(resolve(tarball));
-	}
-
+	const tarballResult =
+		tarball === undefined ? undefined : await verifyTarball(resolve(tarball), paths);
 	const maximumUnpackedSize = requireNative ? 250 * 1024 * 1024 : 5 * 1024 * 1024;
 	const unpackedSize =
-		result.unpackedSize ?? result.files.reduce((sum, file) => sum + file.size, 0);
+		tarballResult?.unpackedSize ??
+		tarballResult?.files.reduce((sum, file) => sum + file.size, 0) ??
+		result.unpackedSize ??
+		result.files.reduce((sum, file) => sum + file.size, 0);
 	if (unpackedSize > maximumUnpackedSize) {
 		throw new Error(`Package is too large: ${unpackedSize} bytes`);
+	}
+	if (tarball !== undefined && smokeInstall) {
+		await smokeInstallExactTarball(resolve(tarball));
 	}
 
 	console.log(
@@ -134,16 +138,16 @@ async function smokeInstallExactTarball(tarballPath: string): Promise<void> {
 		const metadata = JSON.parse(await readFile(installedPackageJson, "utf8")) as {
 			name?: unknown;
 			version?: unknown;
-			pi?: { extensions?: string[] };
+			pi?: { extensions?: unknown[] };
 		};
 		if (metadata.name !== "pi-codex-adaptor" || typeof metadata.version !== "string") {
 			throw new Error("Clean install did not produce the expected package metadata");
 		}
-		const extensionEntry = metadata.pi?.extensions?.[0];
-		if (extensionEntry === undefined) {
-			throw new Error("Installed package does not declare a Pi extension entry");
-		}
-		const extensionPath = resolve(installRoot, "node_modules", "pi-codex-adaptor", extensionEntry);
+		const packageRoot = resolve(installRoot, "node_modules", "pi-codex-adaptor");
+		const extensionPath = await resolveInstalledPackageExtension(
+			packageRoot,
+			metadata.pi?.extensions,
+		);
 		const piCli = resolve(
 			repositoryRoot,
 			"node_modules/@earendil-works/pi-coding-agent/dist/cli.js",
@@ -186,21 +190,87 @@ async function smokeInstallExactTarball(tarballPath: string): Promise<void> {
 	}
 }
 
-async function verifyTarball(path: string, expectedPaths: readonly string[]): Promise<void> {
-	const listing = await run(["tar", "-tzf", path]);
-	const actual = listing
-		.split("\n")
-		.map((value) => value.trim())
-		.filter(Boolean)
-		.map((value) => (value.startsWith("package/") ? value.slice("package/".length) : value))
-		.filter((value) => !value.endsWith("/"))
-		.sort();
+async function verifyTarball(path: string, expectedPaths: readonly string[]): Promise<PackResult> {
+	const actualResult = parsePackResult(await run(["npm", "pack", path, "--dry-run", "--json"]));
+	const actual = actualResult.files.map((file) => normalizePackagePath(file.path)).sort();
 	const expected = [...expectedPaths].sort();
 	if (JSON.stringify(actual) !== JSON.stringify(expected)) {
 		throw new Error("Exact tarball file list differs from the verified staging file list");
 	}
 	const bytes = await readFile(path);
 	console.log(`Tarball SHA-256: ${createHash("sha256").update(bytes).digest("hex")}`);
+	return actualResult;
+}
+
+export function hasCompleteNativeArtifact(paths: readonly string[]): boolean {
+	const supportedTargets = new Set<string>(SUPPORTED_NATIVE_TARGETS);
+	const targets = new Map<string, Set<string>>();
+	for (const path of paths) {
+		const match = /^native\/bin\/([^/]+)\/(codex-bridge(?:\.exe)?|native-artifact\.json)$/.exec(
+			path,
+		);
+		if (match === null) continue;
+		const target = match[1];
+		const file = match[2];
+		if (target === undefined || file === undefined || !supportedTargets.has(target)) continue;
+		const files = targets.get(target) ?? new Set<string>();
+		files.add(file);
+		targets.set(target, files);
+	}
+	return [...targets].some(([target, files]) => {
+		const executable = target.includes("windows") ? "codex-bridge.exe" : "codex-bridge";
+		return files.has("native-artifact.json") && files.has(executable);
+	});
+}
+
+export function resolveDeclaredPackageExtension(packageRoot: string, entries: unknown): string {
+	if (!Array.isArray(entries) || entries.length !== 1) {
+		throw new Error("Installed package must declare exactly one Pi extension entry");
+	}
+	return resolvePackageExtension(packageRoot, entries[0]);
+}
+
+export async function resolveInstalledPackageExtension(
+	packageRoot: string,
+	entries: unknown,
+): Promise<string> {
+	const extension = resolveDeclaredPackageExtension(packageRoot, entries);
+	const [realRoot, realExtension] = await Promise.all([realpath(packageRoot), realpath(extension)]);
+	const relativePath = relative(realRoot, realExtension);
+	if (
+		relativePath.length === 0 ||
+		relativePath === ".." ||
+		relativePath.startsWith(`..${sep}`) ||
+		isAbsolute(relativePath)
+	) {
+		throw new Error("Installed Pi extension entry escapes the package root");
+	}
+	return realExtension;
+}
+
+export function resolvePackageExtension(packageRoot: string, entry: unknown): string {
+	if (
+		typeof entry !== "string" ||
+		entry.length === 0 ||
+		entry !== entry.trim() ||
+		entry.includes("\\") ||
+		entry.includes("\0") ||
+		/^[A-Za-z]:/.test(entry)
+	) {
+		throw new Error("Installed package does not declare a valid Pi extension entry");
+	}
+	const root = resolve(packageRoot);
+	const extension = resolve(root, entry);
+	const relativePath = relative(root, extension);
+	if (
+		relativePath.length === 0 ||
+		relativePath === ".." ||
+		relativePath.startsWith(`..${sep}`) ||
+		isAbsolute(relativePath)
+	) {
+		throw new Error("Installed Pi extension entry escapes the package root");
+	}
+	return extension;
 }
 
 function parsePackResult(output: string): PackResult {
