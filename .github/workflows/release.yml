@@ -27,6 +27,9 @@ jobs:
   detect:
     name: Detect release commit
     runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: read
     outputs:
       release: ${{ steps.verify.outputs.release }}
       already_published: ${{ steps.verify.outputs.alreadyPublished }}
@@ -46,6 +49,33 @@ jobs:
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.3.14
+          no-cache: true
+      - name: Restore an existing release bundle for complete-state verification
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          version="$(node -p 'require("./package.json").version')"
+          source_commit="$(git rev-parse HEAD)"
+          artifact_name="pi-codex-adaptor-${version}-${source_commit}"
+          mkdir -p dist/release tmp/release-recovery
+          mapfile -t run_ids < <(
+            gh run list \
+              --workflow release.yml \
+              --commit "${source_commit}" \
+              --limit 100 \
+              --json databaseId,conclusion \
+              --jq '.[] | select(.conclusion != null and .conclusion != "") | .databaseId'
+          )
+          for run_id in "${run_ids[@]}"; do
+            candidate="tmp/release-recovery/${run_id}"
+            rm -rf "${candidate}"
+            if gh run download "${run_id}" --name "${artifact_name}" --dir "${candidate}" 2>/dev/null && \
+              [[ -f "${candidate}/release-manifest.json" ]]; then
+              cp -R "${candidate}/." dist/release/
+              break
+            fi
+          done
       - name: Verify release state
         id: verify
         env:
@@ -53,7 +83,10 @@ jobs:
           INPUT_SOURCE_COMMIT: ${{ github.event_name == 'workflow_dispatch' && inputs.source_commit || '' }}
           INPUT_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || '' }}
           RELEASE_BOOTSTRAP_VERSION: ${{ vars.RELEASE_BOOTSTRAP_VERSION }}
-        run: bun scripts/verify-release.ts --github-output
+        run: >-
+          bun scripts/verify-release.ts
+          --github-output
+          --manifest dist/release/release-manifest.json
 
   native:
     name: Build release native artifacts
@@ -94,6 +127,7 @@ jobs:
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.3.14
+          no-cache: true
       - name: Set up Node.js
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
@@ -124,37 +158,26 @@ jobs:
             exit 1
           fi
           verification_file="tmp/release-attestation/attestation-verification.json"
-          echo '[' > "${verification_file}"
+          results_directory="tmp/release-attestation/results"
+          mkdir -p "${results_directory}"
           for index in "${!subjects[@]}"; do
             subject="${subjects[$index]}"
             echo "Verifying attestation for ${subject}"
-            result="$(gh attestation verify "${subject}" --repo "${GITHUB_REPOSITORY}" --format json)"
-            if [[ "${index}" -gt 0 ]]; then
-              echo ',' >> "${verification_file}"
-            fi
-            printf '%s\n' "${result}" >> "${verification_file}"
+            gh attestation verify \
+              "${subject}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --format json > "${results_directory}/${index}.json"
           done
-          echo ']' >> "${verification_file}"
-      - name: Assemble and publish the exact tarball
-        id: publish
+          jq -e -s 'if all(.[]; type == "array") then add | if length > 0 then . else error("attestation result is empty") end else error("attestation result is not an array") end' \
+            "${results_directory}"/*.json > "${verification_file}"
+      - name: Assemble the exact tarball
         env:
-          NPM_TRUSTED_PUBLISHING_READY: ${{ vars.NPM_TRUSTED_PUBLISHING_READY }}
-          RELEASE_VERSION: ${{ needs.detect.outputs.version }}
           NPM_DIST_TAG: ${{ needs.detect.outputs.npm_dist_tag }}
         shell: bash
         run: |
-          args=(--native-artifacts-dir native/artifacts)
-          if [[ "${NPM_TRUSTED_PUBLISHING_READY}" != "true" ]]; then
-            if [[ "${RELEASE_VERSION}" != "0.1.0-rc.0" ]]; then
-              echo "Trusted Publishing is not configured for this release" >&2
-              exit 1
-            fi
-            args+=(--prepare-only)
-            echo "published=false" >> "${GITHUB_OUTPUT}"
-          else
-            echo "published=true" >> "${GITHUB_OUTPUT}"
-          fi
-          bun scripts/publish-package.ts "${args[@]}"
+          bun scripts/publish-package.ts \
+            --native-artifacts-dir native/artifacts \
+            --prepare-only
           cp tmp/release-attestation/attestation-verification.json dist/release/attestation-verification.json
           echo "Selected npm dist-tag: ${NPM_DIST_TAG}"
       - name: Upload exact tarball and release manifest
@@ -164,6 +187,23 @@ jobs:
           path: dist/release
           if-no-files-found: error
           retention-days: 30
+      - name: Publish the saved exact tarball
+        id: publish
+        env:
+          NPM_TRUSTED_PUBLISHING_READY: ${{ vars.NPM_TRUSTED_PUBLISHING_READY }}
+          RELEASE_VERSION: ${{ needs.detect.outputs.version }}
+        shell: bash
+        run: |
+          if [[ "${NPM_TRUSTED_PUBLISHING_READY}" != "true" ]]; then
+            if [[ "${RELEASE_VERSION}" != "0.1.0-rc.0" ]]; then
+              echo "Trusted Publishing is not configured for this release" >&2
+              exit 1
+            fi
+            echo "published=false" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          bun scripts/publish-package.ts --publish-prepared
+          echo "published=true" >> "${GITHUB_OUTPUT}"
 
   finalize:
     name: Create tag and GitHub release
@@ -173,8 +213,13 @@ jobs:
     if: >-
       always() &&
       needs.detect.result == 'success' &&
-      needs.detect.outputs.release == 'true' &&
-      needs.detect.outputs.needs_finalize == 'true' &&
+      (
+        (
+          needs.detect.outputs.release == 'true' &&
+          needs.detect.outputs.needs_finalize == 'true'
+        ) ||
+        needs.detect.outputs.publication_action == 'complete'
+      ) &&
       (
         needs.publish.result == 'success' ||
         (
@@ -196,10 +241,12 @@ jobs:
         with:
           ref: ${{ needs.detect.outputs.source_commit }}
           fetch-depth: 0
+          persist-credentials: false
       - name: Set up Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.3.14
+          no-cache: true
       - name: Restore release artifacts for recovery
         if: needs.detect.outputs.already_published == 'true'
         env:
@@ -211,18 +258,30 @@ jobs:
           mkdir -p dist/release
           artifact_name="pi-codex-adaptor-${VERSION}-${SOURCE_COMMIT}"
           if [[ ! -f dist/release/release-manifest.json ]]; then
-            run_id="$(
+            mkdir -p tmp/release-recovery
+            mapfile -t run_ids < <(
               gh run list \
                 --workflow release.yml \
                 --commit "${SOURCE_COMMIT}" \
+                --limit 100 \
                 --json databaseId,conclusion \
-                --jq '[.[] | select(.conclusion == "success" or .conclusion == "failure" or .conclusion == "cancelled")][0].databaseId'
-            )"
-            if [[ -z "${run_id}" || "${run_id}" == "null" ]]; then
-              echo "Unable to locate a prior release workflow run for ${SOURCE_COMMIT}" >&2
+                --jq '.[] | select(.conclusion != null and .conclusion != "") | .databaseId'
+            )
+            found="false"
+            for run_id in "${run_ids[@]}"; do
+              candidate="tmp/release-recovery/${run_id}"
+              rm -rf "${candidate}"
+              if gh run download "${run_id}" --name "${artifact_name}" --dir "${candidate}" 2>/dev/null && \
+                [[ -f "${candidate}/release-manifest.json" ]]; then
+                cp -R "${candidate}/." dist/release/
+                found="true"
+                break
+              fi
+            done
+            if [[ "${found}" != "true" ]]; then
+              echo "Unable to locate a prior release workflow run with artifact ${artifact_name}" >&2
               exit 1
             fi
-            gh run download "${run_id}" --name "${artifact_name}" --dir dist/release
           fi
           test -f dist/release/release-manifest.json
       - name: Download current-run release artifacts
@@ -258,20 +317,24 @@ jobs:
           fi
 
           if git ls-remote --exit-code --tags origin "refs/tags/v${VERSION}" >/dev/null 2>&1; then
-            remote_target="$(git ls-remote --tags origin "refs/tags/v${VERSION}" | awk '{print $1}')"
+            remote_target="$(
+              git ls-remote --tags origin "refs/tags/v${VERSION}" "refs/tags/v${VERSION}^{}" |
+                awk '$2 ~ /\^\{\}$/ { peeled=$1 } $2 !~ /\^\{\}$/ { direct=$1 } END { print peeled ? peeled : direct }'
+            )"
             if [[ "${remote_target}" != "${SOURCE_COMMIT}" ]]; then
               echo "Existing tag v${VERSION} points at ${remote_target}, expected ${SOURCE_COMMIT}" >&2
               exit 1
             fi
           else
-            git tag "v${VERSION}" "${SOURCE_COMMIT}"
-            git push origin "v${VERSION}"
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+              -f ref="refs/tags/v${VERSION}" \
+              -f sha="${SOURCE_COMMIT}"
           fi
 
           if gh release view "v${VERSION}" >/dev/null 2>&1; then
-            current_target="$(gh release view "v${VERSION}" --json targetCommitish --jq .targetCommitish)"
-            if [[ "${current_target}" != "${SOURCE_COMMIT}" && "${current_target}" != "v${VERSION}" ]]; then
-              echo "Existing GitHub Release v${VERSION} target ${current_target} does not match ${SOURCE_COMMIT}" >&2
+            release_tag="$(gh release view "v${VERSION}" --json tagName --jq .tagName)"
+            if [[ "${release_tag}" != "v${VERSION}" ]]; then
+              echo "Existing GitHub Release tag ${release_tag} does not match v${VERSION}" >&2
               exit 1
             fi
           else

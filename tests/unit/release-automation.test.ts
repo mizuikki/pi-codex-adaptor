@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { readFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -11,9 +13,12 @@ import {
 import { PACKAGE_PATH_ALLOWLIST, unexpectedPackagePaths } from "../../scripts/verify-package.ts";
 import {
 	classifyPublicationState,
+	commandFailureMeansMissing,
+	isReleasePleaseCommit,
 	npmDistTagForVersion,
 	releaseArtifactName,
 	validateReleaseAsLifecycle,
+	verifyLocalReleaseTarball,
 	verifyPublishedIntegrity,
 	verifyReleaseDecision,
 } from "../../scripts/verify-release.ts";
@@ -114,6 +119,7 @@ describe("npm dist-tag selection", () => {
 		expect(npmDistTagForVersion("0.1.0-rc.0")).toBe("rc");
 		expect(npmDistTagForVersion("0.1.0-rc.1")).toBe("rc");
 		expect(npmDistTagForVersion("0.1.0")).toBe("latest");
+		expect(npmDistTagForVersion("1.0.0+build-1")).toBe("latest");
 		expect(buildNpmPublishArgs({ tarballPath: "pkg.tgz", version: "0.1.0-rc.1" })).toEqual([
 			"npm",
 			"publish",
@@ -196,7 +202,7 @@ describe("verify-release decision helpers", () => {
 			manifestVersion: "0.1.0-rc.1",
 			sourceCommit,
 			parentPackageVersion: "0.1.0-rc.0",
-			commitSubject: "chore(main): release 0.1.0-rc.1",
+			commitSubject: "chore(release-0.1): release pi-codex-adaptor v0.1.0-rc.1",
 			changelog: "## 0.1.0-rc.1\n\n### Features\n\n* demo\n",
 			branchName: "release/0.1",
 			eventName: "push",
@@ -220,7 +226,7 @@ describe("verify-release decision helpers", () => {
 			manifestVersion: "0.1.0-rc.1",
 			sourceCommit,
 			parentPackageVersion: "0.1.0-rc.0",
-			commitSubject: "chore(main): release 0.1.0-rc.1",
+			commitSubject: "chore(release-0.1): release pi-codex-adaptor v0.1.0-rc.1",
 			changelog: "## 0.1.0-rc.1\n\n### Features\n\n* demo\n",
 			branchName: "release/0.1",
 			eventName: "workflow_dispatch",
@@ -237,6 +243,55 @@ describe("verify-release decision helpers", () => {
 		expect(result.needsFinalize).toBe(true);
 	});
 
+	test("returns a non-release decision only for complete objects on the source commit", () => {
+		const result = verifyReleaseDecision({
+			packageName: "pi-codex-adaptor",
+			version: "0.1.0",
+			manifestVersion: "0.1.0",
+			sourceCommit,
+			parentPackageVersion: "0.1.0-rc.1",
+			commitSubject: "chore(main): release pi-codex-adaptor v0.1.0",
+			changelog: "## 0.1.0\n\n### Features\n\n* stable\n",
+			branchName: "main",
+			eventName: "push",
+			publication: {
+				npmPublished: true,
+				gitTagExists: true,
+				githubReleaseExists: true,
+				gitTagTarget: sourceCommit,
+				githubReleaseTarget: sourceCommit,
+			},
+		});
+		expect(result.release).toBe(false);
+		expect(result.publicationAction).toBe("complete");
+	});
+
+	test("rejects release objects that target another commit", () => {
+		expect(
+			classifyPublicationState(
+				{
+					npmPublished: true,
+					gitTagExists: true,
+					githubReleaseExists: true,
+					gitTagTarget: "f".repeat(40),
+					githubReleaseTarget: sourceCommit,
+				},
+				sourceCommit,
+			).action,
+		).toBe("impossible");
+	});
+
+	test("matches only the exact Release Please subject for the package version", () => {
+		expect(isReleasePleaseCommit("chore(main): release pi-codex-adaptor v0.1.0", "0.1.0")).toBe(
+			true,
+		);
+		expect(isReleasePleaseCommit("fix: release resource handles", "0.1.0")).toBe(false);
+		expect(isReleasePleaseCommit("chore(main): release pi-codex-adaptor v0.1.1", "0.1.0")).toBe(
+			false,
+		);
+		expect(isReleasePleaseCommit("anything", "0.1.0", true)).toBe(true);
+	});
+
 	test("rejects impossible tag-without-npm state", () => {
 		expect(() =>
 			verifyReleaseDecision({
@@ -245,7 +300,7 @@ describe("verify-release decision helpers", () => {
 				manifestVersion: "0.1.0",
 				sourceCommit,
 				parentPackageVersion: "0.1.0-rc.1",
-				commitSubject: "chore(main): release 0.1.0",
+				commitSubject: "chore(main): release pi-codex-adaptor v0.1.0",
 				changelog: "## 0.1.0\n\n### Features\n\n* stable\n",
 				branchName: "main",
 				eventName: "push",
@@ -266,7 +321,7 @@ describe("verify-release decision helpers", () => {
 				manifestVersion: "0.1.0-rc.1",
 				sourceCommit,
 				parentPackageVersion: "0.1.0-rc.0",
-				commitSubject: "chore(main): release 0.1.0-rc.1",
+				commitSubject: "chore(main): release pi-codex-adaptor v0.1.0-rc.1",
 				changelog: "## 0.1.0-rc.1\n\n### Features\n\n* demo\n",
 				branchName: "main",
 				eventName: "push",
@@ -303,6 +358,100 @@ describe("verify-release decision helpers", () => {
 				manifest: sampleManifest,
 			}),
 		).toThrow(/integrity/i);
+
+		expect(() =>
+			verifyPublishedIntegrity({
+				packageName: sampleManifest.package,
+				sourceCommit: sampleManifest.projectSourceCommit,
+				registry: { version: sampleManifest.version },
+				manifest: sampleManifest,
+			}),
+		).toThrow(/unavailable/i);
+	});
+
+	test("verifies saved tarball bytes and rejects paths outside the bundle", async () => {
+		const directory = await mkdtemp(resolve(tmpdir(), "pi-codex-release-"));
+		try {
+			const bytes = Buffer.from("saved-exact-tarball");
+			const filename = "pi-codex-adaptor-0.1.0.tgz";
+			const manifestPath = resolve(directory, "release-manifest.json");
+			await writeFile(resolve(directory, filename), bytes);
+			const manifest = {
+				package: "pi-codex-adaptor",
+				version: "0.1.0",
+				projectSourceCommit: sourceCommit,
+				tarball: {
+					filename,
+					size: bytes.byteLength,
+					sha256: createHash("sha256").update(bytes).digest("hex"),
+					integrity: `sha512-${createHash("sha512").update(bytes).digest("base64")}`,
+				},
+			};
+			await writeFile(manifestPath, JSON.stringify(manifest));
+			await expect(verifyLocalReleaseTarball(manifestPath, manifest)).resolves.toBe(
+				resolve(directory, filename),
+			);
+			await expect(
+				verifyLocalReleaseTarball(manifestPath, {
+					...manifest,
+					tarball: { ...manifest.tarball, filename: "../outside.tgz" },
+				}),
+			).rejects.toThrow(/contained basename/i);
+			await writeFile(resolve(directory, filename), "mutated");
+			await expect(verifyLocalReleaseTarball(manifestPath, manifest)).rejects.toThrow(/size/i);
+			await writeFile(resolve(directory, filename), Buffer.alloc(bytes.byteLength, 0x61));
+			await expect(verifyLocalReleaseTarball(manifestPath, manifest)).rejects.toThrow(/SHA-256/i);
+			await writeFile(resolve(directory, filename), bytes);
+			await expect(
+				verifyLocalReleaseTarball(manifestPath, {
+					...manifest,
+					tarball: { ...manifest.tarball, integrity: "sha512-invalid" },
+				}),
+			).rejects.toThrow(/integrity/i);
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
+	test("distinguishes missing refs from generic Git failures", () => {
+		expect(commandFailureMeansMissing(["git", "ls-remote", "--exit-code", "origin"], 2, "")).toBe(
+			true,
+		);
+		expect(
+			commandFailureMeansMissing(
+				["git", "ls-remote", "--exit-code", "origin"],
+				128,
+				"repository not found",
+			),
+		).toBe(false);
+		expect(commandFailureMeansMissing(["gh", "release", "view"], 1, "not found")).toBe(true);
+	});
+});
+
+describe("release workflow hardening", () => {
+	test("persists recovery artifacts before publishing with scoped credentials", async () => {
+		const workflow = await readFile(
+			resolve(repositoryRoot, ".github/workflows/release.yml"),
+			"utf8",
+		);
+		expect(workflow.match(/no-cache: true/g)).toHaveLength(3);
+		expect(workflow).toContain("persist-credentials: false");
+		expect(workflow).toMatch(/gh api --method POST "repos\/\$\{GITHUB_REPOSITORY\}\/git\/refs"/);
+		expect(workflow.indexOf("Upload exact tarball and release manifest")).toBeLessThan(
+			workflow.indexOf("Publish the saved exact tarball"),
+		);
+		expect(workflow).toMatch(/for run_id in "\$\{run_ids\[@\]\}"/);
+		expect(workflow).toContain("needs.detect.outputs.publication_action == 'complete'");
+	});
+
+	test("scopes release-as bootstrap versions to the selected channel", async () => {
+		const workflow = await readFile(
+			resolve(repositoryRoot, ".github/workflows/release-pr.yml"),
+			"utf8",
+		);
+		expect(workflow).toContain('expected="0.1.0-rc.0"');
+		expect(workflow).toContain('expected="0.1.0"');
+		expect(workflow).toContain('bootstrap}" != "${expected');
 	});
 });
 
