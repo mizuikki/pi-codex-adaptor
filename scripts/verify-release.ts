@@ -1,5 +1,6 @@
-import { appendFile, readFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { createHash } from "node:crypto";
+import { appendFile, readFile, realpath } from "node:fs/promises";
+import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export interface PackageMetadata {
@@ -11,6 +12,8 @@ export interface PublicationSnapshot {
 	npmPublished: boolean;
 	gitTagExists: boolean;
 	githubReleaseExists: boolean;
+	gitTagTarget?: string;
+	githubReleaseTarget?: string;
 }
 
 export type PublicationDecision =
@@ -81,7 +84,7 @@ export const DEFAULT_ALLOWED_BOOTSTRAP_VERSIONS = ["0.1.0-rc.0", "0.1.0"] as con
 export const RELEASE_ARTIFACT_RETENTION_DAYS = 30;
 
 export function isPrereleaseVersion(version: string): boolean {
-	return version.includes("-");
+	return version.split("+", 1)[0]?.includes("-") ?? false;
 }
 
 export function npmDistTagForVersion(version: string): "rc" | "latest" {
@@ -94,7 +97,10 @@ export function validVersion(version: string): boolean {
 	);
 }
 
-export function classifyPublicationState(snapshot: PublicationSnapshot): PublicationDecision {
+export function classifyPublicationState(
+	snapshot: PublicationSnapshot,
+	sourceCommit?: string,
+): PublicationDecision {
 	const { npmPublished, gitTagExists, githubReleaseExists } = snapshot;
 
 	if (!npmPublished && (gitTagExists || githubReleaseExists)) {
@@ -108,6 +114,18 @@ export function classifyPublicationState(snapshot: PublicationSnapshot): Publica
 
 	if (!npmPublished) {
 		return { action: "publish", needsFinalize: true };
+	}
+
+	if (
+		sourceCommit !== undefined &&
+		((gitTagExists && snapshot.gitTagTarget !== sourceCommit) ||
+			(githubReleaseExists && snapshot.githubReleaseTarget !== sourceCommit))
+	) {
+		return {
+			action: "impossible",
+			needsFinalize: false,
+			reason: "Existing release objects do not target the exact release source commit",
+		};
 	}
 
 	if (gitTagExists && githubReleaseExists) {
@@ -169,9 +187,15 @@ export function versionMatchesChannel(
 	return isPrereleaseVersion(version) === branchName.startsWith("release/");
 }
 
-export function isReleasePleaseCommit(subject: string, allowUnmerged = false): boolean {
+export function isReleasePleaseCommit(
+	subject: string,
+	version: string,
+	allowUnmerged = false,
+): boolean {
 	if (allowUnmerged) return true;
-	return /\brelease\b/i.test(subject);
+	return new RegExp(`^chore\\([^)]+\\): release pi-codex-adaptor v${escapeRegExp(version)}$`).test(
+		subject,
+	);
 }
 
 export function verifyPublishedIntegrity(options: {
@@ -194,9 +218,53 @@ export function verifyPublishedIntegrity(options: {
 			`Release manifest source commit ${manifest.projectSourceCommit} does not match ${sourceCommit}`,
 		);
 	}
-	if (registry.integrity !== undefined && registry.integrity !== manifest.tarball.integrity) {
+	if (registry.integrity === undefined) {
+		throw new Error("Registry package integrity is unavailable");
+	}
+	if (registry.integrity !== manifest.tarball.integrity) {
 		throw new Error("Registry package integrity does not match the saved release manifest");
 	}
+}
+
+export async function verifyLocalReleaseTarball(
+	manifestPath: string,
+	manifest: ReleaseManifestLike,
+): Promise<string> {
+	const filename = manifest.tarball?.filename;
+	if (
+		typeof filename !== "string" ||
+		filename.length === 0 ||
+		filename === "." ||
+		filename === ".." ||
+		isAbsolute(filename) ||
+		basename(filename) !== filename ||
+		filename.includes("/") ||
+		filename.includes("\\") ||
+		filename !== `pi-codex-adaptor-${manifest.version}.tgz`
+	) {
+		throw new Error("Release manifest tarball filename must be a contained basename");
+	}
+
+	const bundleDirectory = await realpath(dirname(resolve(manifestPath)));
+	const tarballPath = await realpath(resolve(bundleDirectory, filename));
+	const containedPath = relative(bundleDirectory, tarballPath);
+	if (containedPath.startsWith("..") || isAbsolute(containedPath)) {
+		throw new Error("Release manifest tarball resolves outside the recovery bundle");
+	}
+
+	const bytes = await readFile(tarballPath);
+	if (manifest.tarball.size !== bytes.byteLength) {
+		throw new Error("Saved release tarball size does not match the release manifest");
+	}
+	const sha256 = createHash("sha256").update(bytes).digest("hex");
+	if (manifest.tarball.sha256 !== sha256) {
+		throw new Error("Saved release tarball SHA-256 does not match the release manifest");
+	}
+	const integrity = `sha512-${createHash("sha512").update(bytes).digest("base64")}`;
+	if (manifest.tarball.integrity !== integrity) {
+		throw new Error("Saved release tarball integrity does not match the release manifest");
+	}
+	return tarballPath;
 }
 
 export function verifyReleaseDecision(input: ReleaseVerificationInput): ReleaseVerificationResult {
@@ -235,7 +303,7 @@ export function verifyReleaseDecision(input: ReleaseVerificationInput): ReleaseV
 	if (input.parentPackageVersion === input.version) {
 		throw new Error("Release commit did not change package version");
 	}
-	if (!isReleasePleaseCommit(input.commitSubject, input.allowUnmerged)) {
+	if (!isReleasePleaseCommit(input.commitSubject, input.version, input.allowUnmerged)) {
 		throw new Error("Release push is not a Release Please commit");
 	}
 	if (!changelogHasVersion(input.changelog, input.version)) {
@@ -261,7 +329,7 @@ export function verifyReleaseDecision(input: ReleaseVerificationInput): ReleaseV
 	});
 	if (!lifecycle.ok) throw new Error(lifecycle.reason);
 
-	const publication = classifyPublicationState(input.publication);
+	const publication = classifyPublicationState(input.publication, input.sourceCommit);
 	if (publication.action === "impossible") {
 		throw new Error(publication.reason);
 	}
@@ -271,7 +339,7 @@ export function verifyReleaseDecision(input: ReleaseVerificationInput): ReleaseV
 	const release = publication.action !== "complete";
 
 	return {
-		release: release || alreadyPublished,
+		release,
 		version: input.version,
 		sourceCommit: input.sourceCommit,
 		alreadyPublished,
@@ -313,6 +381,7 @@ async function main(): Promise<void> {
 		const manifest = JSON.parse(
 			await readFile(resolve(manifestPath), "utf8"),
 		) as ReleaseManifestLike;
+		await verifyLocalReleaseTarball(manifestPath, manifest);
 		const registry = await readRegistryPackage(packageJson.name, packageJson.version);
 		if (registry === undefined) {
 			throw new Error(`npm package ${packageJson.name}@${packageJson.version} is not published`);
@@ -364,9 +433,13 @@ async function main(): Promise<void> {
 	const parentPackageVersion =
 		typeof previousPackage.version === "string" ? previousPackage.version : undefined;
 
-	const npmPublished = await registryContains(packageJson.name, packageJson.version);
-	const gitTagExists = await gitTagExistsRemotely(packageJson.version);
-	const githubReleaseExists = await githubReleaseExistsFor(packageJson.version);
+	const registry = await readRegistryPackage(packageJson.name, packageJson.version);
+	const gitTagTarget = await gitTagTargetRemotely(packageJson.version, sourceCommit);
+	const githubReleaseTarget = await githubReleaseTargetFor(
+		packageJson.version,
+		sourceCommit,
+		gitTagTarget,
+	);
 	const result = verifyReleaseDecision({
 		packageName: packageJson.name,
 		version: packageJson.version,
@@ -384,9 +457,11 @@ async function main(): Promise<void> {
 			? { dispatchCommit: process.env.INPUT_SOURCE_COMMIT }
 			: {}),
 		publication: {
-			npmPublished,
-			gitTagExists,
-			githubReleaseExists,
+			npmPublished: registry !== undefined,
+			gitTagExists: gitTagTarget !== undefined,
+			githubReleaseExists: githubReleaseTarget !== undefined,
+			...(gitTagTarget === undefined ? {} : { gitTagTarget }),
+			...(githubReleaseTarget === undefined ? {} : { githubReleaseTarget }),
 		},
 		allowUnmerged: process.env.RELEASE_VERIFY_ALLOW_UNMERGED === "true",
 		...(process.env.RELEASE_BOOTSTRAP_VERSION
@@ -395,6 +470,20 @@ async function main(): Promise<void> {
 	});
 
 	if (result.publicationAction === "complete") {
+		const manifestPath = argument("--manifest");
+		if (manifestPath === undefined || registry === undefined) {
+			throw new Error("A saved release manifest is required to verify a complete publication");
+		}
+		const manifest = JSON.parse(
+			await readFile(resolve(manifestPath), "utf8"),
+		) as ReleaseManifestLike;
+		await verifyLocalReleaseTarball(manifestPath, manifest);
+		verifyPublishedIntegrity({
+			packageName: packageJson.name,
+			sourceCommit,
+			registry,
+			manifest,
+		});
 		await writeOutput({
 			release: false,
 			reason: "already-complete",
@@ -423,11 +512,6 @@ async function main(): Promise<void> {
 		gitTagExists: result.gitTagExists,
 		githubReleaseExists: result.githubReleaseExists,
 	});
-}
-
-async function registryContains(name: string, version: string): Promise<boolean> {
-	const registry = await readRegistryPackage(name, version);
-	return registry !== undefined;
 }
 
 async function readRegistryPackage(
@@ -474,9 +558,12 @@ async function readRegistryPackage(
 	}
 }
 
-async function gitTagExistsRemotely(version: string): Promise<boolean> {
+async function gitTagTargetRemotely(
+	version: string,
+	sourceCommit: string,
+): Promise<string | undefined> {
 	if (process.env.RELEASE_GIT_TAG_EXISTS !== undefined) {
-		return process.env.RELEASE_GIT_TAG_EXISTS === "true";
+		return process.env.RELEASE_GIT_TAG_EXISTS === "true" ? sourceCommit : undefined;
 	}
 	const remote = process.env.RELEASE_GIT_REMOTE ?? "origin";
 	try {
@@ -487,8 +574,23 @@ async function gitTagExistsRemotely(version: string): Promise<boolean> {
 			"--tags",
 			remote,
 			`refs/tags/v${version}`,
+			`refs/tags/v${version}^{}`,
 		]);
-		return output !== undefined;
+		if (output === undefined) return undefined;
+		const targets = output
+			.trim()
+			.split("\n")
+			.map((line) => {
+				const [target, reference] = line.split(/\s+/, 2);
+				return { target, reference };
+			})
+			.filter(
+				(value): value is { target: string; reference: string } =>
+					value.target !== undefined &&
+					value.reference !== undefined &&
+					/^[0-9a-f]{40}$/.test(value.target),
+			);
+		return targets.find((value) => value.reference.endsWith("^{}"))?.target ?? targets[0]?.target;
 	} catch (error) {
 		if (process.env.CI === "true" || process.env.GITHUB_ACTIONS === "true") throw error;
 		const local = await runAllowFailure([
@@ -498,17 +600,20 @@ async function gitTagExistsRemotely(version: string): Promise<boolean> {
 			"--verify",
 			`refs/tags/v${version}`,
 		]);
-		return local !== undefined;
+		return local === undefined ? undefined : sourceCommit;
 	}
 }
 
-async function githubReleaseExistsFor(version: string): Promise<boolean> {
+async function githubReleaseTargetFor(
+	version: string,
+	sourceCommit: string,
+	gitTagTarget: string | undefined,
+): Promise<string | undefined> {
 	if (process.env.RELEASE_GITHUB_RELEASE_EXISTS !== undefined) {
-		return process.env.RELEASE_GITHUB_RELEASE_EXISTS === "true";
+		return process.env.RELEASE_GITHUB_RELEASE_EXISTS === "true" ? sourceCommit : undefined;
 	}
 	if (process.env.GITHUB_REPOSITORY === undefined || process.env.GH_TOKEN === undefined) {
-		// Outside GitHub Actions we can only trust git tags for completeness checks.
-		return await gitTagExistsRemotely(version);
+		return gitTagTarget;
 	}
 	const output = await runAllowFailure([
 		"gh",
@@ -516,9 +621,17 @@ async function githubReleaseExistsFor(version: string): Promise<boolean> {
 		"view",
 		`v${version}`,
 		"--json",
-		"tagName",
+		"tagName,targetCommitish",
 	]);
-	return output !== undefined;
+	if (output === undefined) return undefined;
+	const parsed = JSON.parse(output) as { tagName?: unknown; targetCommitish?: unknown };
+	if (parsed.tagName !== `v${version}` || typeof parsed.targetCommitish !== "string") {
+		throw new Error("GitHub Release returned an invalid release target");
+	}
+	if (gitTagTarget !== undefined) return gitTagTarget;
+	return parsed.targetCommitish === `v${version}`
+		? (gitTagTarget ?? parsed.targetCommitish)
+		: parsed.targetCommitish;
 }
 
 async function writeOutput(value: Record<string, string | boolean>): Promise<void> {
@@ -554,19 +667,26 @@ async function runAllowFailure(command: string[]): Promise<string | undefined> {
 		child.exited,
 	]);
 	if (exitCode !== 0) {
-		if (
-			(command[0] === "npm" || command[0] === "gh" || command[0] === "git") &&
-			/E404|not found|404|exit code 2|does not exist/i.test(`${stderr}\n${stdout}`)
-		) {
-			return undefined;
-		}
-		// git ls-remote --exit-code returns 2 when the ref is missing
-		if (command[0] === "git" && command.includes("ls-remote") && exitCode === 2) {
+		if (commandFailureMeansMissing(command, exitCode, `${stderr}\n${stdout}`)) {
 			return undefined;
 		}
 		throw new Error(`${command.join(" ")} failed: ${stderr.trim() || stdout.trim()}`);
 	}
 	return stdout;
+}
+
+export function commandFailureMeansMissing(
+	command: readonly string[],
+	exitCode: number,
+	output: string,
+): boolean {
+	if (command[0] === "git" && command[1] === "ls-remote" && command.includes("--exit-code")) {
+		return exitCode === 2;
+	}
+	return (
+		(command[0] === "npm" || command[0] === "gh") &&
+		/E404|not found|404|exit code 2|does not exist/i.test(output)
+	);
 }
 
 function argument(name: string): string | undefined {

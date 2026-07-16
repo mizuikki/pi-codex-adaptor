@@ -43,13 +43,15 @@ jobs:
           if [[ -z "${bootstrap}" ]]; then
             exit 0
           fi
-          case "${bootstrap}" in
-            0.1.0-rc.0|0.1.0) ;;
-            *)
-              echo "Unsupported release-as bootstrap version: ${bootstrap}" >&2
-              exit 1
-              ;;
-          esac
+          if [[ "${GITHUB_REF_NAME}" == release/* ]]; then
+            expected="0.1.0-rc.0"
+          else
+            expected="0.1.0"
+          fi
+          if [[ "${bootstrap}" != "${expected}" ]]; then
+            echo "Unsupported release-as bootstrap version for ${GITHUB_REF_NAME}: ${bootstrap} (expected ${expected})" >&2
+            exit 1
+          fi
           if git ls-remote --exit-code --tags origin "refs/tags/v${bootstrap}" >/dev/null 2>&1; then
             echo "release-as override ${bootstrap} must be cleared after that version is tagged" >&2
             exit 1

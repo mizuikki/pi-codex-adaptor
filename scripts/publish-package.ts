@@ -15,6 +15,7 @@ import {
 	npmDistTagForVersion,
 	RELEASE_ARTIFACT_RETENTION_DAYS,
 	type ReleaseManifestTarball,
+	verifyLocalReleaseTarball,
 } from "./verify-release.ts";
 
 interface PackResult {
@@ -141,13 +142,45 @@ async function main(): Promise<void> {
 	if (packageJson.name !== "pi-codex-adaptor" || packageJson.version === "0.0.0") {
 		throw new Error("A published package must have a non-skeleton package version");
 	}
+	const releaseDirectory = resolve(repositoryRoot, "dist/release");
+	const publishPrepared = process.argv.includes("--publish-prepared");
+	const prepareOnly = process.argv.includes("--prepare-only");
+	if (!publishPrepared && !prepareOnly) {
+		throw new Error(
+			"Direct publishing is disabled; prepare and persist the release bundle before --publish-prepared",
+		);
+	}
+
+	if (publishPrepared) {
+		const manifestPath = resolve(releaseDirectory, "release-manifest.json");
+		const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as ReleaseManifest;
+		const sourceCommit = (await run(["git", "rev-parse", "HEAD"])).trim();
+		if (
+			manifest.package !== packageJson.name ||
+			manifest.version !== packageJson.version ||
+			manifest.projectSourceCommit !== sourceCommit ||
+			manifest.npmDistTag !== npmDistTagForVersion(packageJson.version)
+		) {
+			throw new Error("Prepared release manifest does not match the checked out package");
+		}
+		const tarballPath = await verifyLocalReleaseTarball(manifestPath, manifest);
+		await run(buildNpmPublishArgs({ tarballPath, version: packageJson.version }));
+		console.log(
+			JSON.stringify({
+				published: true,
+				version: packageJson.version,
+				npmDistTag: manifest.npmDistTag,
+				tarball: tarballPath,
+			}),
+		);
+		return;
+	}
 
 	const nativeArtifactsDir = argument("--native-artifacts-dir");
 	if (nativeArtifactsDir === undefined) {
 		throw new Error("--native-artifacts-dir is required for release assembly");
 	}
 
-	const releaseDirectory = resolve(repositoryRoot, "dist/release");
 	await rm(releaseDirectory, { recursive: true, force: true });
 	await mkdir(releaseDirectory, { recursive: true });
 	await run(["bun", "scripts/assemble-package.ts", "--native-artifacts-dir", nativeArtifactsDir]);
@@ -196,22 +229,6 @@ async function main(): Promise<void> {
 	const manifestPath = resolve(releaseDirectory, "release-manifest.json");
 	await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
 	console.log(JSON.stringify({ ...manifest, tarballPath: tarball, manifestPath }, null, 2));
-
-	if (process.argv.includes("--prepare-only")) process.exit(0);
-
-	const publishArgs = buildNpmPublishArgs({
-		tarballPath: tarball,
-		version: packageJson.version,
-	});
-	await run(publishArgs);
-	console.log(
-		JSON.stringify({
-			published: true,
-			version: packageJson.version,
-			npmDistTag: manifest.npmDistTag,
-			tarball,
-		}),
-	);
 }
 
 async function collectNativeManifests(
