@@ -670,7 +670,7 @@ async function runAllowFailure(command: string[]): Promise<string | undefined> {
 		if (commandFailureMeansMissing(command, exitCode, `${stderr}\n${stdout}`)) {
 			return undefined;
 		}
-		throw new Error(`${command.join(" ")} failed: ${stderr.trim() || stdout.trim()}`);
+		throw new Error(`${command[0] ?? "command"} failed with exit status ${exitCode}`);
 	}
 	return stdout;
 }

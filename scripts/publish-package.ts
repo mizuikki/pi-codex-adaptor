@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { dirname, posix, resolve, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { SUPPORTED_NATIVE_TARGETS } from "../src/infrastructure/codex-bridge/binary.ts";
@@ -131,6 +131,20 @@ export function buildNpmPublishArgs(options: {
 	return args;
 }
 
+export function validateNativeExecutableFilename(value: unknown, target: string): string {
+	if (
+		typeof value !== "string" ||
+		value.length === 0 ||
+		value === "." ||
+		value === ".." ||
+		posix.basename(value) !== value ||
+		win32.basename(value) !== value
+	) {
+		throw new Error(`Native manifest executable path is invalid for ${target}`);
+	}
+	return value;
+}
+
 async function main(): Promise<void> {
 	const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 	const packageJson = JSON.parse(
@@ -251,7 +265,8 @@ async function collectNativeManifests(
 	for (const target of targets) {
 		const path = resolve(root, target, "native-artifact.json");
 		const value = JSON.parse(await readFile(path, "utf8")) as NativeManifest;
-		const executablePath = resolve(root, target, value.executable);
+		const executable = validateNativeExecutableFilename(value.executable, target);
+		const executablePath = resolve(root, target, executable);
 		const bytes = await readFile(executablePath);
 		if (
 			value.schemaVersion !== 1 ||
