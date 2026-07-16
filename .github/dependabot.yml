@@ -11,6 +11,10 @@ updates:
           - "@types/*"
           - typescript
     ignore:
+      # Keep development types on the pinned Node.js 24 line from fixtures/toolchain.json.
+      - dependency-name: "@types/node"
+        update-types:
+          - "version-update:semver-major"
       - dependency-name: "@openai/codex"
       - dependency-name: "@openai/codex-sdk"
   - package-ecosystem: cargo
