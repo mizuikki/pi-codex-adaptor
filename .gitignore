@@ -6,6 +6,7 @@ coverage/
 native/target/
 native/official/target/
 native/artifacts/
+native/bin/
 target/
 
 .DS_Store
