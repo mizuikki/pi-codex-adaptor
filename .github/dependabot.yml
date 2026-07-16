@@ -10,6 +10,9 @@ updates:
           - "@biomejs/*"
           - "@types/*"
           - typescript
+      pi-packages:
+        patterns:
+          - "@earendil-works/*"
     ignore:
       # Keep development types on the pinned Node.js 24 line from fixtures/toolchain.json.
       - dependency-name: "@types/node"
@@ -25,3 +28,5 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    # Action SHA pins are validated against fixtures/toolchain.json. Dependabot PRs that
+    # only touch workflows still need a coordinated fixture update before merge.
