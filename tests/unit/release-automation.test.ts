@@ -9,6 +9,7 @@ import {
 	buildNpmPublishArgs,
 	buildReleaseManifest,
 	tarballIntegrity,
+	validateNativeExecutableFilename,
 } from "../../scripts/publish-package.ts";
 import { PACKAGE_PATH_ALLOWLIST, unexpectedPackagePaths } from "../../scripts/verify-package.ts";
 import {
@@ -437,11 +438,13 @@ describe("release workflow hardening", () => {
 		expect(workflow.match(/no-cache: true/g)).toHaveLength(3);
 		expect(workflow).toContain("persist-credentials: false");
 		expect(workflow).toMatch(/gh api --method POST "repos\/\$\{GITHUB_REPOSITORY\}\/git\/refs"/);
-		expect(workflow.indexOf("Upload exact tarball and release manifest")).toBeLessThan(
-			workflow.indexOf("Publish the saved exact tarball"),
+		expect(workflow).toMatch(
+			/Upload exact tarball and release manifest[\s\S]*Publish the saved exact tarball/,
 		);
 		expect(workflow).toMatch(/for run_id in "\$\{run_ids\[@\]\}"/);
 		expect(workflow).toContain("needs.detect.outputs.publication_action == 'complete'");
+		expect(workflow).toContain("--json tagName,isPrerelease");
+		expect(workflow).toContain('release_prerelease}" != "${PRERELEASE');
 	});
 
 	test("scopes release-as bootstrap versions to the selected channel", async () => {
@@ -449,13 +452,26 @@ describe("release workflow hardening", () => {
 			resolve(repositoryRoot, ".github/workflows/release-pr.yml"),
 			"utf8",
 		);
-		expect(workflow).toContain('expected="0.1.0-rc.0"');
-		expect(workflow).toContain('expected="0.1.0"');
+		expect(workflow).toMatch(
+			/if \[\[ "\$\{GITHUB_REF_NAME\}" == release\/\* \]\]; then\s+expected="0\.1\.0-rc\.0"\s+else\s+expected="0\.1\.0"\s+fi/,
+		);
 		expect(workflow).toContain('bootstrap}" != "${expected');
 	});
 });
 
 describe("release manifest and package path helpers", () => {
+	test("rejects native executable paths with directory components", () => {
+		expect(validateNativeExecutableFilename("codex-bridge", "linux-target")).toBe("codex-bridge");
+		expect(validateNativeExecutableFilename("codex-bridge.exe", "windows-target")).toBe(
+			"codex-bridge.exe",
+		);
+		for (const filename of ["../codex-bridge", "bin/codex-bridge", "..\\codex-bridge.exe"]) {
+			expect(() => validateNativeExecutableFilename(filename, "target")).toThrow(
+				/path is invalid/i,
+			);
+		}
+	});
+
 	test("builds a richer release manifest with locked toolchain and conformance fields", () => {
 		const bytes = Buffer.from("exact-tarball-bytes");
 		const manifest = buildReleaseManifest({

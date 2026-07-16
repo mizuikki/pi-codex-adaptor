@@ -332,9 +332,15 @@ jobs:
           fi
 
           if gh release view "v${VERSION}" >/dev/null 2>&1; then
-            release_tag="$(gh release view "v${VERSION}" --json tagName --jq .tagName)"
+            release_json="$(gh release view "v${VERSION}" --json tagName,isPrerelease)"
+            release_tag="$(jq -r '.tagName' <<< "${release_json}")"
+            release_prerelease="$(jq -r '.isPrerelease' <<< "${release_json}")"
             if [[ "${release_tag}" != "v${VERSION}" ]]; then
               echo "Existing GitHub Release tag ${release_tag} does not match v${VERSION}" >&2
+              exit 1
+            fi
+            if [[ "${release_prerelease}" != "${PRERELEASE}" ]]; then
+              echo "Existing GitHub Release channel does not match the expected prerelease state" >&2
               exit 1
             fi
           else

@@ -27,6 +27,11 @@ interface PackageJson {
 	packageManager: string;
 }
 
+interface WorkflowStep {
+	name?: string;
+	run?: string | string[];
+}
+
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const fixture = JSON.parse(
 	await readFile(resolve(repositoryRoot, "fixtures/toolchain.json"), "utf8"),
@@ -140,7 +145,7 @@ const ciWorkflow = parseYaml(await readFile(resolve(workflowDirectory, "ci.yml")
 					include?: Array<{ os?: string; target?: string }>;
 				};
 			};
-			steps?: Array<{ name?: string; run?: string | string[] }>;
+			steps?: WorkflowStep[];
 		};
 	};
 };
@@ -175,23 +180,32 @@ if (rustSetupStep === undefined) {
 }
 
 const rustSetupScript = normalizeStepRun(rustSetupStep.run);
-if (
-	!rustSetupScript.includes(`rustup toolchain install "${fixture.runtime.rust}"`) &&
-	!rustSetupScript.includes(`rustup toolchain install ${fixture.runtime.rust}`)
-) {
-	throw new Error(`ci.yml must install pinned Rust ${fixture.runtime.rust}`);
+verifyRustSetupScript("ci.yml", rustSetupScript, fixture.runtime.rust);
+
+const nativeWorkflow = parseYaml(
+	await readFile(resolve(workflowDirectory, "native.yml"), "utf8"),
+) as {
+	jobs?: {
+		build?: {
+			steps?: WorkflowStep[];
+		};
+	};
+};
+const nativeBuildJob = nativeWorkflow.jobs?.build;
+if (nativeBuildJob === undefined) {
+	throw new Error("native.yml is missing the build job");
 }
-for (const component of ["clippy", "rustfmt", "rust-src"]) {
-	if (!rustSetupScript.includes(component)) {
-		throw new Error(`ci.yml Rust setup must install the ${component} component`);
-	}
+const nativeRustSetupStep = (nativeBuildJob.steps ?? []).find(
+	(step) => step.name === "Install target toolchain prerequisites",
+);
+if (nativeRustSetupStep === undefined) {
+	throw new Error("native.yml build job does not provision target toolchain prerequisites");
 }
-if (!rustSetupScript.includes("rustup target add")) {
-	throw new Error("ci.yml Rust setup must install the matrix native target");
-}
-if (!rustSetupScript.includes("musl-tools")) {
-	throw new Error("ci.yml Rust setup must install Linux musl prerequisites");
-}
+verifyRustSetupScript(
+	"native.yml",
+	normalizeStepRun(nativeRustSetupStep.run),
+	fixture.runtime.rust,
+);
 
 console.log(
 	`Verified pinned toolchains and ${usedActions.size} GitHub Actions across ${workflowFiles.length} workflows.`,
@@ -200,4 +214,24 @@ console.log(
 function normalizeStepRun(run: string | string[] | undefined): string {
 	if (run === undefined) return "";
 	return Array.isArray(run) ? run.join("\n") : run;
+}
+
+function verifyRustSetupScript(workflow: string, script: string, rustVersion: string): void {
+	if (
+		!script.includes(`rustup toolchain install "${rustVersion}"`) &&
+		!script.includes(`rustup toolchain install ${rustVersion}`)
+	) {
+		throw new Error(`${workflow} must install pinned Rust ${rustVersion}`);
+	}
+	for (const component of ["clippy", "rustfmt", "rust-src"]) {
+		if (!script.includes(component)) {
+			throw new Error(`${workflow} Rust setup must install the ${component} component`);
+		}
+	}
+	if (!script.includes("rustup target add")) {
+		throw new Error(`${workflow} Rust setup must install the matrix native target`);
+	}
+	if (!script.includes("musl-tools")) {
+		throw new Error(`${workflow} Rust setup must install Linux musl prerequisites`);
+	}
 }
