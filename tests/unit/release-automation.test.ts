@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -389,7 +389,7 @@ describe("verify-release decision helpers", () => {
 			};
 			await writeFile(manifestPath, JSON.stringify(manifest));
 			await expect(verifyLocalReleaseTarball(manifestPath, manifest)).resolves.toBe(
-				resolve(directory, filename),
+				await realpath(resolve(directory, filename)),
 			);
 			await expect(
 				verifyLocalReleaseTarball(manifestPath, {
