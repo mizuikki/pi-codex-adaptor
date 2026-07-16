@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { access, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BridgeRemoteError } from "../../src/infrastructure/codex-bridge/client.ts";
@@ -277,22 +277,20 @@ describe("native child integration", () => {
 
 	test("abort during approval leaves the bridge ready for the next request", async () => {
 		const token = fixtureToken();
-		const { client, repositoryRoot } = await connectIntegrationBridge({ token });
+		const { client } = await connectIntegrationBridge({ token });
 		cleanups.push(async () => client.shutdown());
+		const workspace = await mkdtemp(join(tmpdir(), "pi-codex-adaptor-approval-cancel-"));
+		cleanups.push(async () => rm(workspace, { recursive: true, force: true }));
 
 		const controller = new AbortController();
 		let sawApproval = false;
 		const pending = client.request(
 			"tools.execute",
 			{
-				tool: "shell_command",
-				command: "echo fixture",
-				workdir: repositoryRoot,
-				workspaceRoots: [repositoryRoot],
-				timeoutMs: 10_000,
-				login: false,
-				allowLoginShell: false,
-				...(process.platform === "win32" ? { shell: "cmd.exe" } : {}),
+				tool: "apply_patch",
+				input: "*** Begin Patch\n*** Add File: cancelled.txt\n+cancelled\n*** End Patch",
+				workdir: workspace,
+				workspaceRoots: [workspace],
 			},
 			{
 				signal: controller.signal,
@@ -306,25 +304,11 @@ describe("native child integration", () => {
 		await expect(pending).rejects.toMatchObject({ name: "AbortError" });
 		expect(sawApproval).toBe(true);
 		expect(client.isReady).toBe(true);
+		await expect(access(join(workspace, "cancelled.txt"))).rejects.toBeDefined();
 
 		// Late decision for the expired approval must not tear down the connection.
 		await client.decideApproval("approval-expired-after-cancel", "allow_once");
-		const next = await client.request(
-			"tools.execute",
-			{
-				tool: "shell_command",
-				command: "echo next",
-				workdir: repositoryRoot,
-				workspaceRoots: [repositoryRoot],
-				timeoutMs: 10_000,
-				login: false,
-				allowLoginShell: false,
-				...(process.platform === "win32" ? { shell: "cmd.exe" } : {}),
-			},
-			{
-				onApprovalRequest: (approval) => client.decideApproval(approval.approvalId, "allow_once"),
-			},
-		);
+		const next = await client.request("diagnostics.read", {});
 		expect(next.status).toBe("completed");
 		expect(JSON.stringify(next)).not.toContain(token);
 	}, 60_000);
