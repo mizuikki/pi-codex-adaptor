@@ -30,7 +30,71 @@ bun run check
 The check pipeline rebuilds the native sidecar and verifies its protocol identity, typed transport,
 official tool fixtures, app-server schema snapshot, source replay, SBOM, and npm file whitelist.
 
-## Planned installation
+## Installation
+
+The package has not been published to npm yet. Install from a local source checkout, or use the
+planned npm source after the first release.
+
+### From source (local path)
+
+Pi installs local paths by reference (no copy). Prefer an absolute path. Use `-l` to write project
+settings (`.pi/settings.json`) instead of user settings (`~/.pi/agent/settings.json`).
+
+1. Install dependencies and build the native bridge for your host target:
+
+```sh
+bun ci
+
+# Linux x64
+TARGET=x86_64-unknown-linux-musl
+# Linux arm64: aarch64-unknown-linux-musl
+# macOS arm64: aarch64-apple-darwin
+# macOS x64: x86_64-apple-darwin
+# Windows x64: x86_64-pc-windows-msvc
+
+bun run build:native -- --target "$TARGET"
+```
+
+2. Assemble the packaged layout under `native/bin/<target>/` (executable plus
+   `native-artifact.json`). The extension loads that tree from the package root:
+
+```sh
+bun scripts/assemble-native-artifact.ts \
+  --target "$TARGET" \
+  --executable "native/target/$TARGET/debug/codex-bridge" \
+  --source-commit "$(git rev-parse HEAD)"
+
+mkdir -p native/bin
+cp -a "native/artifacts/$TARGET" native/bin/
+```
+
+On Windows, use `codex-bridge.exe` as the executable name.
+
+3. Install into Pi:
+
+```sh
+pi install /absolute/path/to/pi-codex-adaptor
+# project-local:
+# pi install /absolute/path/to/pi-codex-adaptor -l
+# one-shot without writing settings:
+# pi -e /absolute/path/to/pi-codex-adaptor
+```
+
+4. Confirm with `pi list`. After install, `/codex` opens the settings overlay. TypeScript changes in
+   this checkout apply on Pi restart or `/reload`; native changes require rebuilding and re-copying
+   into `native/bin`.
+
+`package.json` version `0.0.0` enables development bridge handshakes. Packaged launches still require
+a verified `native/bin/<target>/` artifact for the host triple above. `native/artifacts/` alone is not
+enough unless it is copied into `native/bin/`.
+
+Remove with:
+
+```sh
+pi remove /absolute/path/to/pi-codex-adaptor
+```
+
+### Planned npm install
 
 ```sh
 pi install npm:pi-codex-adaptor
