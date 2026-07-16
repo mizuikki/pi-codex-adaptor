@@ -22,4 +22,6 @@ and patch updates require lockfile verification; major toolchain updates require
 - `fixtures/toolchain.json` is checked against package, workflow, Node.js, and Rust configuration.
 - Direct and transitive Node.js development types remain on the Node.js 24 line.
 - Dependabot ignores major `@types/node` updates so bot proposals cannot leave the Node.js 24 types line.
+- Pi packages under `@earendil-works/*` are grouped so Dependabot proposes one coordinated pin update.
+- GitHub Action pins require matching `fixtures/toolchain.json` SHA entries; workflow-only bot PRs are incomplete.
 - CI installs exact Bun, Node.js, and npm versions instead of floating release channels.
