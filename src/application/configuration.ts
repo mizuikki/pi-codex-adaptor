@@ -33,9 +33,15 @@ export interface ConfigurationRepository {
 
 export class ConfigurationService {
 	readonly #repository: ConfigurationRepository;
+	readonly #listeners = new Set<(config: CodexConfig) => void>();
 
 	constructor(repository: ConfigurationRepository) {
 		this.#repository = repository;
+	}
+
+	onChange(listener: (config: CodexConfig) => void): () => void {
+		this.#listeners.add(listener);
+		return () => this.#listeners.delete(listener);
 	}
 
 	load(): Promise<CodexConfig> {
@@ -64,6 +70,7 @@ export class ConfigurationService {
 	async applyDraft(draft: unknown, context: ConfigCapabilityContext = {}): Promise<CodexConfig> {
 		const config = validateConfigForSave(draft, context);
 		await this.#repository.save(config);
+		this.#notify(config);
 		return config;
 	}
 
@@ -77,11 +84,24 @@ export class ConfigurationService {
 	async resetToDefaults(): Promise<CodexConfig> {
 		const config = createDefaultConfig();
 		await this.#repository.save(config);
+		this.#notify(config);
 		return config;
 	}
 
-	restoreBackup(): Promise<CodexConfig> {
-		return this.#repository.restoreBackup();
+	async restoreBackup(): Promise<CodexConfig> {
+		const config = await this.#repository.restoreBackup();
+		this.#notify(config);
+		return config;
+	}
+
+	#notify(config: CodexConfig): void {
+		for (const listener of this.#listeners) {
+			try {
+				listener(config);
+			} catch {
+				// A policy listener must not turn a successful configuration save into a failure.
+			}
+		}
 	}
 }
 

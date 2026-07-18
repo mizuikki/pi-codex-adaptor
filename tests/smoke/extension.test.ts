@@ -10,7 +10,7 @@ describe("extension entry point", () => {
 		expect(() => piCodexAdaptor(pi as never)).not.toThrow();
 	});
 
-	test("registers the Codex provider and single settings entry point", () => {
+	test("registers both Responses dispatchers and the settings entry point", () => {
 		const commands: string[] = [];
 		const providers: Array<{ name: string; config: ProviderConfig }> = [];
 		const events: string[] = [];
@@ -27,10 +27,13 @@ describe("extension entry point", () => {
 		} as never);
 
 		expect(commands).toEqual(["codex"]);
-		expect(providers).toHaveLength(1);
+		expect(providers).toHaveLength(2);
 		expect(providers[0]?.name).toBe("openai-codex");
 		expect(providers[0]?.config.api).toBe("openai-codex-responses");
 		expect(providers[0]?.config.streamSimple).toBeFunction();
-		expect(events).toEqual(["session_shutdown"]);
+		expect(providers[1]?.name).toBe("pi-codex-adaptor-openai-responses");
+		expect(providers[1]?.config.api).toBe("openai-responses");
+		expect(providers[1]?.config.streamSimple).toBeFunction();
+		expect(events).toEqual(["session_start", "session_shutdown"]);
 	});
 });

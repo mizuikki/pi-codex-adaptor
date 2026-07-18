@@ -1,0 +1,63 @@
+import type {
+	AssistantMessageEventStream,
+	Context,
+	Model,
+	SimpleStreamOptions,
+} from "@earendil-works/pi-ai";
+import { streamSimple as streamOpenAiCodexResponses } from "@earendil-works/pi-ai/api/openai-codex-responses";
+import { streamSimple as streamOpenAiResponses } from "@earendil-works/pi-ai/api/openai-responses";
+
+import type { CodexRuntime } from "../../application/codex-runtime.ts";
+import { CodexCompactionStore } from "../../application/compaction.ts";
+import type { ConfigurationService } from "../../application/configuration.ts";
+import type { ProviderActivationPolicy } from "../../application/provider-activation.ts";
+import { createCodexStreamSimple } from "./codex-provider.ts";
+
+export function createCodexProviderDispatchers(
+	runtime: CodexRuntime,
+	configuration: ConfigurationService,
+	activation: ProviderActivationPolicy,
+	compactions = new CodexCompactionStore(),
+): {
+	codexResponses: StreamSimpleDispatcher;
+	openAiResponses: StreamSimpleDispatcher;
+} {
+	const codex = createCodexStreamSimple(runtime, configuration, compactions, activation);
+	return {
+		codexResponses: createDispatcher(
+			activation,
+			codex,
+			streamOpenAiCodexResponses as unknown as StreamSimpleDispatcher,
+		),
+		openAiResponses: createDispatcher(
+			activation,
+			codex,
+			streamOpenAiResponses as unknown as StreamSimpleDispatcher,
+		),
+	};
+}
+
+type StreamSimpleDispatcher = (
+	model: Model<string>,
+	context: Context,
+	options?: SimpleStreamOptions,
+) => AssistantMessageEventStream;
+
+function createDispatcher(
+	activation: ProviderActivationPolicy,
+	adaptor: StreamSimpleDispatcher,
+	fallback: StreamSimpleDispatcher,
+): StreamSimpleDispatcher {
+	return (model, context, options) =>
+		activation.isActive(model)
+			? adaptor(model, context, options)
+			: fallback(model, context, options);
+}
+
+export function createProviderDispatcher(
+	activation: ProviderActivationPolicy,
+	adaptor: StreamSimpleDispatcher,
+	fallback: StreamSimpleDispatcher,
+): StreamSimpleDispatcher {
+	return createDispatcher(activation, adaptor, fallback);
+}

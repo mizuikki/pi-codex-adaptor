@@ -2,9 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import {
 	buildToolsResolveParams,
-	CapabilityError,
 	parseModelResolution,
-	requireOpenAiCodexProvider,
 	selectCompactionImplementation,
 } from "../../src/domain/capability.ts";
 
@@ -18,17 +16,6 @@ const officialProvider = {
 };
 
 describe("capability resolution", () => {
-	test("rejects third-party providers with an explicit unsupported reason", () => {
-		expect(() => requireOpenAiCodexProvider("other-provider")).toThrow(CapabilityError);
-		try {
-			requireOpenAiCodexProvider("other-provider");
-		} catch (error) {
-			expect(error).toBeInstanceOf(CapabilityError);
-			expect((error as CapabilityError).code).toBe("unsupported_provider");
-			expect((error as CapabilityError).reason).toContain("third-party");
-		}
-	});
-
 	test("requires exact model and provider metadata from models.resolve", () => {
 		expect(() => parseModelResolution({ model: { slug: "other" } }, "fixture-model")).toThrow(
 			/did not match the selected model/,

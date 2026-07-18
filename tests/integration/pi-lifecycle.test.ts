@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CodexCompactionStore } from "../../src/application/compaction.ts";
 import { ConfigurationService } from "../../src/application/configuration.ts";
+import { ProviderActivationPolicy } from "../../src/application/provider-activation.ts";
 import { FileConfigurationRepository } from "../../src/infrastructure/configuration/file-config-repository.ts";
 import { createCodexStreamSimple } from "../../src/integration/pi/codex-provider.ts";
 import { registerCodexTools } from "../../src/integration/pi/codex-tools.ts";
@@ -43,12 +44,12 @@ describe("fake Pi + real native lifecycle", () => {
 	test("switches models, recomputes resolvers, updates plan, and shuts down cleanly", async () => {
 		const server = await startFakeResponsesServer([
 			fixtureModelSpec({
-				slug: "fixture-unified",
-				shellType: "unified_exec",
+				slug: "gpt-5.5",
+				shellType: "shell_command",
 				useResponsesLite: false,
 			}),
 			fixtureModelSpec({
-				slug: "fixture-shell",
+				slug: "gpt-5.6-sol",
 				shellType: "shell_command",
 				useResponsesLite: true,
 			}),
@@ -56,29 +57,28 @@ describe("fake Pi + real native lifecycle", () => {
 		cleanups.push(() => server.stop());
 
 		const token = fixtureToken();
-		const { runtime } = await createIntegrationRuntime({ testBaseUrl: server.baseUrl });
+		const { runtime } = await createIntegrationRuntime();
 		const shutdownRuntime = async () => runtime.shutdown();
 		cleanups.push(shutdownRuntime);
 
 		const service = await configurationService();
 		const pi = createFakePi({ token });
-		registerCodexTools(pi.api, runtime, service);
+		registerCodexTools(pi.api, runtime, service, new ProviderActivationPolicy(service));
 
-		const unified = pi.context(fixtureModel("fixture-unified"));
-		await emit(pi, "session_start", unified);
+		const hosted = pi.context(fixtureModel("gpt-5.5", "openai-codex", server.baseUrl));
+		await emit(pi, "session_start", hosted);
 		expect(pi.activeTools).toEqual([
 			"third_party",
 			"update_plan",
 			"apply_patch",
-			"exec_command",
-			"write_stdin",
+			"shell_command",
 			"view_image",
 			"image_gen.imagegen",
 		]);
-		expect(pi.status.get("codex-adaptor")).toContain("unified-exec");
+		expect(pi.status.get("codex-adaptor")).toContain("shell-command");
 		expect(pi.status.get("codex-adaptor")).toContain("hosted");
 
-		const shell = pi.context(fixtureModel("fixture-shell"));
+		const shell = pi.context(fixtureModel("gpt-5.6-sol", "openai-codex", server.baseUrl));
 		await emit(pi, "model_select", shell);
 		expect(pi.activeTools).toEqual([
 			"third_party",
@@ -114,7 +114,7 @@ describe("fake Pi + real native lifecycle", () => {
 		expect(pi.activeTools).toContain("web.run");
 		expect(pi.activeTools).toContain("shell_command");
 
-		const other = pi.context(fixtureModel("fixture-shell", "other-provider"));
+		const other = pi.context(fixtureModel("gpt-5.6-sol", "other-provider", server.baseUrl));
 		await emit(pi, "model_select", other);
 		expect(pi.activeTools).toEqual(["third_party"]);
 
@@ -124,17 +124,22 @@ describe("fake Pi + real native lifecycle", () => {
 
 	test("streams assistant text through fake Pi provider + real native + fake Responses", async () => {
 		const server = await startFakeResponsesServer([
-			fixtureModelSpec({ slug: "fixture-model", shellType: "disabled" }),
+			fixtureModelSpec({ slug: "gpt-5.5", shellType: "shell_command" }),
 		]);
 		cleanups.push(() => server.stop());
 
 		const token = fixtureToken();
-		const { runtime } = await createIntegrationRuntime({ testBaseUrl: server.baseUrl });
+		const { runtime } = await createIntegrationRuntime();
 		cleanups.push(async () => runtime.shutdown());
 		const service = await configurationService();
-		const streamSimple = createCodexStreamSimple(runtime, service, new CodexCompactionStore());
+		const streamSimple = createCodexStreamSimple(
+			runtime,
+			service,
+			new CodexCompactionStore(),
+			new ProviderActivationPolicy(service),
+		);
 		const stream = streamSimple(
-			fixtureModel(),
+			fixtureModel("gpt-5.5", "openai-codex", server.baseUrl),
 			{
 				systemPrompt: "",
 				messages: [{ role: "user", content: "fixture input", timestamp: 1 }],
@@ -161,16 +166,58 @@ describe("fake Pi + real native lifecycle", () => {
 		expect(server.requests.some((entry) => entry.path.endsWith("/responses"))).toBe(true);
 	}, 60_000);
 
+	test("runs a selected openai-responses provider with an opaque API key", async () => {
+		const server = await startFakeResponsesServer([
+			fixtureModelSpec({ slug: "gpt-5.5", shellType: "shell_command" }),
+		]);
+		cleanups.push(() => server.stop());
+
+		const { runtime } = await createIntegrationRuntime();
+		cleanups.push(async () => runtime.shutdown());
+		const service = await configurationService();
+		const config = await service.load();
+		await service.applyDraft({
+			...config,
+			activation: { providers: ["custom-codex"] },
+		});
+		const activation = new ProviderActivationPolicy(service);
+		await activation.refresh();
+		const streamSimple = createCodexStreamSimple(
+			runtime,
+			service,
+			new CodexCompactionStore(),
+			activation,
+		);
+		const stream = streamSimple(
+			{
+				...fixtureModel("gpt-5.5", "custom-codex", server.baseUrl),
+				api: "openai-responses",
+			},
+			{
+				systemPrompt: "",
+				messages: [{ role: "user", content: "fixture input", timestamp: 1 }],
+			},
+			{ apiKey: "opaque-fixture-api-key" },
+		);
+
+		const events: string[] = [];
+		for await (const event of stream) events.push(event.type);
+		expect(events).toContain("done");
+		const responseRequest = server.requests.find((entry) => entry.path.endsWith("/responses"));
+		expect(responseRequest?.authorization).toBe("Bearer opaque-fixture-api-key");
+		expect(responseRequest?.chatgptAccountId).toBeNull();
+	}, 60_000);
+
 	test("config reload recomputes optional tool activation without native credentials", async () => {
 		const server = await startFakeResponsesServer([
 			fixtureModelSpec({
-				slug: "fixture-model",
+				slug: "gpt-5.5",
 				shellType: "shell_command",
 			}),
 		]);
 		cleanups.push(() => server.stop());
 		const token = fixtureToken();
-		const { runtime } = await createIntegrationRuntime({ testBaseUrl: server.baseUrl });
+		const { runtime } = await createIntegrationRuntime();
 		cleanups.push(async () => runtime.shutdown());
 
 		const directory = await mkdtemp(join(tmpdir(), "pi-codex-adaptor-reload-"));
@@ -181,8 +228,8 @@ describe("fake Pi + real native lifecycle", () => {
 		const defaults = await service.load();
 
 		const pi = createFakePi({ token });
-		registerCodexTools(pi.api, runtime, service);
-		const ctx = pi.context(fixtureModel());
+		registerCodexTools(pi.api, runtime, service, new ProviderActivationPolicy(service));
+		const ctx = pi.context(fixtureModel("gpt-5.5", "openai-codex", server.baseUrl));
 		await emit(pi, "session_start", ctx);
 		expect(pi.activeTools).toContain("view_image");
 		expect(pi.activeTools).toContain("image_gen.imagegen");
@@ -196,8 +243,8 @@ describe("fake Pi + real native lifecycle", () => {
 					...defaults.tools,
 					optional: { viewImage: "off", imageGeneration: "off" },
 				},
-				openai: {
-					...defaults.openai,
+				codex: {
+					...defaults.codex,
 					webSearch: { mode: "disabled" },
 				},
 			}),
