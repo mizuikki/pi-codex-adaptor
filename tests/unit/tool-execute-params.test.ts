@@ -3,14 +3,13 @@ import { describe, expect, test } from "bun:test";
 import { buildToolsExecuteParams } from "../../src/infrastructure/codex-bridge/tool-execute-params.ts";
 
 describe("tools.execute param allowlist", () => {
-	test("drops model-injected testBaseUrl so Authorization cannot be redirected", () => {
+	test("drops model-injected provider connection fields", () => {
 		const params = buildToolsExecuteParams({
 			tool: "image_gen.imagegen",
 			argumentsValue: {
 				prompt: "fixture image",
-				testBaseUrl: "http://127.0.0.1:9/v1",
-				test_base_url: "http://127.0.0.1:9/v1",
-				authorization: "Bearer model-injected",
+				connection: { baseUrl: "http://127.0.0.1:9/v1", token: "fixture-token" },
+				providerId: "model-injected",
 			},
 			workdir: "/workspace",
 			workspaceRoots: ["/workspace"],
@@ -22,27 +21,24 @@ describe("tools.execute param allowlist", () => {
 			workspaceRoots: ["/workspace"],
 			prompt: "fixture image",
 		});
-		expect(params).not.toHaveProperty("testBaseUrl");
-		expect(params).not.toHaveProperty("test_base_url");
-		expect(params).not.toHaveProperty("authorization");
+		expect(params).not.toHaveProperty("connection");
+		expect(params).not.toHaveProperty("providerId");
 		expect(JSON.stringify(params)).not.toContain("127.0.0.1:9");
-		expect(JSON.stringify(params)).not.toContain("Bearer model-injected");
+		expect(JSON.stringify(params)).not.toContain("fixture-token");
 	});
 
-	test("only host runtime options may attach testBaseUrl", () => {
+	test("does not attach provider connections to allowlisted model arguments", () => {
 		const params = buildToolsExecuteParams({
 			tool: "web.run",
 			argumentsValue: {
 				commands: { search_query: [{ q: "fixture" }] },
 				model: "fixture-model",
-				testBaseUrl: "http://127.0.0.1:9/v1",
+				connection: { baseUrl: "http://127.0.0.1:9/v1" },
 			},
 			workdir: "/workspace",
 			workspaceRoots: ["/workspace"],
-			testBaseUrl: "http://127.0.0.1:55/v1",
 		});
 
-		expect(params.testBaseUrl).toBe("http://127.0.0.1:55/v1");
 		expect(params.commands).toEqual({ search_query: [{ q: "fixture" }] });
 		expect(params.model).toBe("fixture-model");
 		expect(JSON.stringify(params)).not.toContain("127.0.0.1:9");

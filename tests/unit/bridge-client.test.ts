@@ -156,7 +156,6 @@ class FakeBridgeTransport implements BridgeTransport {
 					result: {},
 				});
 				break;
-			case "authentication_update":
 			case "session_write":
 			case "session_resize":
 			case "session_terminate":

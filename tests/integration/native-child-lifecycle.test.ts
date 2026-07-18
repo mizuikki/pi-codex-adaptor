@@ -14,6 +14,20 @@ function removeCleanup(cleanup: () => Promise<void> | void): void {
 	if (index >= 0) cleanups.splice(index, 1);
 }
 
+function providerConnection(
+	baseUrl: string,
+	token = fixtureToken(),
+	accountId?: string,
+): Record<string, unknown> {
+	return {
+		providerId: "fixture-provider",
+		baseUrl,
+		headers: {},
+		authentication: { kind: "bearer", token },
+		...(accountId === undefined ? {} : { accountId }),
+	};
+}
+
 afterEach(async () => {
 	let failure: unknown;
 	while (cleanups.length > 0) {
@@ -34,12 +48,11 @@ describe("native child integration", () => {
 		cleanups.push(() => server.stop());
 
 		const token = fixtureToken();
-		const { client, repositoryRoot } = await connectIntegrationBridge({ token });
+		const { client, repositoryRoot } = await connectIntegrationBridge();
 		cleanups.push(async () => client.shutdown());
 
 		const model = await client.request("models.resolve", {
 			modelId: "fixture-model",
-			testBaseUrl: server.baseUrl,
 		});
 		expect(model.status).toBe("completed");
 		expect(model.result).toMatchObject({
@@ -69,7 +82,7 @@ describe("native child integration", () => {
 				},
 				transportMode: "sse",
 				providerSupportsWebsockets: false,
-				testBaseUrl: server.baseUrl,
+				connection: providerConnection(server.baseUrl, token),
 			},
 			{
 				onEvent: (event) => {
@@ -88,7 +101,7 @@ describe("native child integration", () => {
 		expect(response.result).toMatchObject({ responseId: "fixture-response" });
 		expect(events).toContain("response.output_text.delta");
 		expect(events).toContain("response.completed");
-		expect(server.requests.some((entry) => entry.path.endsWith("/models"))).toBe(true);
+		expect(server.requests.some((entry) => entry.path.endsWith("/models"))).toBe(false);
 		expect(server.requests.some((entry) => entry.path.endsWith("/responses"))).toBe(true);
 		expect(JSON.stringify(server.requests)).not.toContain(tmpdir());
 		expect(JSON.stringify(server.requests)).not.toContain("CODEX_HOME");
@@ -117,8 +130,7 @@ describe("native child integration", () => {
 	}, 60_000);
 
 	test("retains a background unified-exec session until shutdown cleanup", async () => {
-		const token = fixtureToken();
-		const { client, repositoryRoot } = await connectIntegrationBridge({ token });
+		const { client, repositoryRoot } = await connectIntegrationBridge();
 		const shutdownClient = async () => client.shutdown();
 		cleanups.push(shutdownClient);
 
@@ -156,18 +168,11 @@ describe("native child integration", () => {
 		cleanups.push(() => server.stop());
 
 		const token = fixtureToken("oauth-account");
-		const { client } = await connectIntegrationBridge({
-			authentication: {
-				kind: "oauth_bearer",
-				token,
-				accountId: "oauth-account",
-			},
-		});
+		const { client } = await connectIntegrationBridge();
 		cleanups.push(async () => client.shutdown());
 
 		const model = await client.request("models.resolve", {
 			modelId: "fixture-model",
-			testBaseUrl: server.baseUrl,
 		});
 		expect(model.status).toBe("completed");
 
@@ -186,14 +191,11 @@ describe("native child integration", () => {
 			},
 			transportMode: "sse",
 			providerSupportsWebsockets: false,
-			testBaseUrl: server.baseUrl,
+			connection: providerConnection(server.baseUrl, token, "oauth-account"),
 		});
 		expect(response.status).toBe("completed");
 
-		const modelsRequest = server.requests.find((entry) => entry.path.endsWith("/models"));
 		const responsesRequest = server.requests.find((entry) => entry.path.endsWith("/responses"));
-		expect(modelsRequest?.authorization).toBe(`Bearer ${token}`);
-		expect(modelsRequest?.chatgptAccountId).toBe("oauth-account");
 		expect(responsesRequest?.authorization).toBe(`Bearer ${token}`);
 		expect(responsesRequest?.chatgptAccountId).toBe("oauth-account");
 		expect(JSON.stringify(server.requests)).not.toContain("CODEX_HOME");
@@ -205,18 +207,12 @@ describe("native child integration", () => {
 		]);
 		cleanups.push(() => server.stop());
 
-		const apiKey = "sk-fixture-api-key-not-a-secret-for-tests";
-		const { client } = await connectIntegrationBridge({
-			authentication: {
-				kind: "openai_api_key",
-				apiKey,
-			},
-		});
+		const apiKey = "opaque-fixture-api-key";
+		const { client } = await connectIntegrationBridge();
 		cleanups.push(async () => client.shutdown());
 
 		const model = await client.request("models.resolve", {
 			modelId: "fixture-model",
-			testBaseUrl: server.baseUrl,
 		});
 		expect(model.status).toBe("completed");
 
@@ -235,21 +231,65 @@ describe("native child integration", () => {
 			},
 			transportMode: "sse",
 			providerSupportsWebsockets: false,
-			testBaseUrl: server.baseUrl,
+			connection: providerConnection(server.baseUrl, apiKey),
 		});
 		expect(response.status).toBe("completed");
 
-		const modelsRequest = server.requests.find((entry) => entry.path.endsWith("/models"));
 		const responsesRequest = server.requests.find((entry) => entry.path.endsWith("/responses"));
-		expect(modelsRequest?.authorization).toBe(`Bearer ${apiKey}`);
-		expect(modelsRequest?.chatgptAccountId).toBeNull();
 		expect(responsesRequest?.authorization).toBe(`Bearer ${apiKey}`);
 		expect(responsesRequest?.chatgptAccountId).toBeNull();
 	}, 60_000);
 
+	test("isolates concurrent provider URLs, credentials, and headers", async () => {
+		const leftServer = await startFakeResponsesServer([
+			fixtureModelSpec({ slug: "fixture-model", shellType: "shell_command" }),
+		]);
+		const rightServer = await startFakeResponsesServer([
+			fixtureModelSpec({ slug: "fixture-model", shellType: "shell_command" }),
+		]);
+		cleanups.push(() => leftServer.stop());
+		cleanups.push(() => rightServer.stop());
+
+		const { client } = await connectIntegrationBridge();
+		cleanups.push(async () => client.shutdown());
+		const request = (baseUrl: string, token: string, route: string) =>
+			client.request("responses.create", {
+				request: {
+					model: "fixture-model",
+					instructions: "",
+					input: [],
+					tools: null,
+					tool_choice: "auto",
+					parallel_tool_calls: false,
+					reasoning: null,
+					store: false,
+					stream: true,
+					include: [],
+				},
+				transportMode: "sse",
+				providerSupportsWebsockets: false,
+				connection: {
+					...providerConnection(baseUrl, token),
+					headers: { "X-Provider-Route": route },
+				},
+			});
+
+		const [left, right] = await Promise.all([
+			request(leftServer.baseUrl, "opaque-provider-left", "left"),
+			request(rightServer.baseUrl, "opaque-provider-right", "right"),
+		]);
+		expect(left.status).toBe("completed");
+		expect(right.status).toBe("completed");
+		const leftRequest = leftServer.requests.find((entry) => entry.path.endsWith("/responses"));
+		const rightRequest = rightServer.requests.find((entry) => entry.path.endsWith("/responses"));
+		expect(leftRequest?.authorization).toBe("Bearer opaque-provider-left");
+		expect(leftRequest?.headers["x-provider-route"]).toBe("left");
+		expect(rightRequest?.authorization).toBe("Bearer opaque-provider-right");
+		expect(rightRequest?.headers["x-provider-route"]).toBe("right");
+	}, 60_000);
+
 	test("protocol request cancel terminates a running shell process tree", async () => {
-		const token = fixtureToken();
-		const { client, repositoryRoot } = await connectIntegrationBridge({ token });
+		const { client, repositoryRoot } = await connectIntegrationBridge();
 		cleanups.push(async () => client.shutdown());
 
 		const controller = new AbortController();
@@ -277,7 +317,7 @@ describe("native child integration", () => {
 
 	test("abort during approval leaves the bridge ready for the next request", async () => {
 		const token = fixtureToken();
-		const { client } = await connectIntegrationBridge({ token });
+		const { client } = await connectIntegrationBridge();
 		cleanups.push(async () => client.shutdown());
 		const workspace = await mkdtemp(join(tmpdir(), "pi-codex-adaptor-approval-cancel-"));
 		cleanups.push(async () => rm(workspace, { recursive: true, force: true }));
@@ -315,19 +355,13 @@ describe("native child integration", () => {
 
 	test("BundledCodexRuntime abort during approval does not authorize work and continues", async () => {
 		const token = fixtureToken();
-		const { runtime, repositoryRoot } = await createIntegrationRuntime({ token });
+		const { runtime, repositoryRoot } = await createIntegrationRuntime();
 		cleanups.push(async () => runtime.shutdown());
 
-		const authentication = {
-			kind: "oauth_bearer" as const,
-			token,
-			accountId: "account-fixture",
-		};
 		const controller = new AbortController();
 		let sawApproval = false;
 
 		const pending = runtime.executeTool({
-			authentication,
 			tool: "shell_command",
 			argumentsValue: {
 				command: "echo should-not-run",
@@ -349,7 +383,6 @@ describe("native child integration", () => {
 		expect(sawApproval).toBe(true);
 
 		const next = await runtime.executeTool({
-			authentication,
 			tool: "shell_command",
 			argumentsValue: {
 				command: "echo next",
@@ -369,30 +402,32 @@ describe("native child integration", () => {
 		expect(JSON.stringify(next)).not.toContain("should-not-run");
 	}, 60_000);
 
-	test("fails safely when native requests run without credentials", async () => {
-		const server = await startFakeResponsesServer([
-			fixtureModelSpec({ slug: "fixture-model", shellType: "shell_command" }),
-		]);
-		cleanups.push(() => server.stop());
-
+	test("rejects network requests that omit a provider connection", async () => {
 		const { client } = await connectIntegrationBridge();
 		cleanups.push(async () => client.shutdown());
 
 		try {
-			await client.request("models.resolve", {
-				modelId: "fixture-model",
-				testBaseUrl: server.baseUrl,
+			await client.request("responses.create", {
+				request: {
+					model: "fixture-model",
+					instructions: "",
+					input: [],
+					tools: null,
+					tool_choice: "auto",
+					parallel_tool_calls: false,
+					reasoning: null,
+					store: false,
+					stream: true,
+					include: [],
+				},
+				transportMode: "sse",
+				providerSupportsWebsockets: false,
 			});
 			expect.unreachable();
 		} catch (error) {
 			expect(error).toBeInstanceOf(BridgeRemoteError);
-			expect(error).toMatchObject({
-				category: "AuthenticationError",
-				code: "authentication_required",
-			});
+			expect(error).toMatchObject({ category: "ProtocolError", code: "invalid_params" });
 			expect(JSON.stringify(error)).not.toContain("sk-");
-			expect(JSON.stringify(error)).not.toContain(fixtureToken());
 		}
-		expect(server.requests).toEqual([]);
 	}, 60_000);
 });

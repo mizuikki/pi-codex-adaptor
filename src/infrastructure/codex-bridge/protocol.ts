@@ -23,23 +23,33 @@ const RequestId = Type.String({ minLength: 1, maxLength: 256 });
 const Sequence = Type.Integer({ minimum: 0, maximum: 4_294_967_295 });
 const UnknownPayload = Type.Unknown();
 
-const Authentication = Type.Union([
+const ProviderAuthentication = Type.Union([
 	Type.Object(
 		{
-			kind: Type.Literal("oauth_bearer"),
+			kind: Type.Literal("bearer"),
 			token: Type.String({ minLength: 1, maxLength: 1024 * 1024 }),
-			accountId: Type.String({ minLength: 1, maxLength: 256 }),
 		},
 		{ additionalProperties: false },
 	),
-	Type.Object(
-		{
-			kind: Type.Literal("openai_api_key"),
-			apiKey: Type.String({ minLength: 1, maxLength: 1024 * 1024 }),
-		},
-		{ additionalProperties: false },
-	),
+	Type.Object({ kind: Type.Literal("none") }, { additionalProperties: false }),
 ]);
+
+export const ProviderConnectionSchema = Type.Object(
+	{
+		providerId: Type.String({ minLength: 1, maxLength: 256 }),
+		baseUrl: Type.String({ minLength: 1, maxLength: 2048 }),
+		headers: Type.Record(
+			Type.String({ minLength: 1, maxLength: 256 }),
+			Type.String({ maxLength: 1024 * 1024 }),
+		),
+		authentication: ProviderAuthentication,
+		accountId: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
+		maxRetries: Type.Optional(Type.Integer({ minimum: 0, maximum: 10 })),
+		timeoutMs: Type.Optional(Type.Integer({ minimum: 1, maximum: 86_400_000 })),
+		websocketConnectTimeoutMs: Type.Optional(Type.Integer({ minimum: 1, maximum: 86_400_000 })),
+	},
+	{ additionalProperties: false },
+);
 
 const ApprovalDecision = Type.Union([
 	Type.Literal("allow_once"),
@@ -70,15 +80,6 @@ export const ClientMessageSchema = Type.Union([
 				},
 				{ additionalProperties: false },
 			),
-			authentication: Type.Optional(Authentication),
-		},
-		{ additionalProperties: false },
-	),
-	Type.Object(
-		{
-			type: Type.Literal("authentication_update"),
-			requestId: RequestId,
-			authentication: Authentication,
 		},
 		{ additionalProperties: false },
 	),
@@ -282,6 +283,7 @@ export const ServerMessageSchema = Type.Union([
 
 export type ClientMessage = Type.Static<typeof ClientMessageSchema>;
 export type ServerMessage = Type.Static<typeof ServerMessageSchema>;
+export type BridgeProviderConnection = Type.Static<typeof ProviderConnectionSchema>;
 export type BridgeHandshake = Extract<ServerMessage, { type: "handshake" }>["handshake"];
 
 const clientMessageValidator = Compile(ClientMessageSchema);
@@ -446,7 +448,7 @@ export function decodeServerFrame(frame: string | Uint8Array): ServerMessage {
 	}
 
 	if (!serverMessageValidator.Check(value)) {
-		throw new BridgeProtocolError("invalid_frame", "Bridge frame does not match protocol v1");
+		throw new BridgeProtocolError("invalid_frame", "Bridge frame does not match protocol v2");
 	}
 
 	return value;
@@ -454,7 +456,7 @@ export function decodeServerFrame(frame: string | Uint8Array): ServerMessage {
 
 export function encodeClientMessage(message: ClientMessage): Uint8Array {
 	if (!clientMessageValidator.Check(message)) {
-		throw new BridgeProtocolError("invalid_frame", "Client frame does not match protocol v1");
+		throw new BridgeProtocolError("invalid_frame", "Client frame does not match protocol v2");
 	}
 
 	let payload: Uint8Array;

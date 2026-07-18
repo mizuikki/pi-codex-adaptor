@@ -1,9 +1,10 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use bridge_protocol::Authentication;
 use bridge_protocol::BridgeError;
 use bridge_protocol::ErrorCategory;
+use bridge_protocol::ProviderAuthentication;
+use bridge_protocol::ProviderConnection;
 use codex_api::ApiError;
 use codex_api::AuthProvider;
 use codex_api::Provider;
@@ -14,17 +15,16 @@ use codex_api::SharedAuthProvider;
 use codex_api::TransportError;
 use codex_http_client::build_reqwest_client_with_custom_ca;
 use http::HeaderMap;
+use http::HeaderName;
 use http::HeaderValue;
 use serde_json::Value;
 use serde_json::json;
-
-const OPENAI_API_BASE_URL: &str = "https://api.openai.com/v1";
-const CHATGPT_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
 
 pub struct ApiConnection {
     pub transport: ReqwestTransport,
     pub provider: Provider,
     pub authentication: SharedAuthProvider,
+    pub websocket_connect_timeout: Duration,
 }
 
 struct BridgeAuthProvider {
@@ -32,19 +32,37 @@ struct BridgeAuthProvider {
 }
 
 impl BridgeAuthProvider {
-    fn new(authentication: &Authentication) -> Result<Self, BridgeError> {
-        let credential = match authentication {
-            Authentication::OauthBearer { token, .. } => token,
-            Authentication::OpenaiApiKey { api_key } => api_key,
-        };
-        let mut authorization = HeaderValue::from_str(&format!("Bearer {credential}"))
-            .map_err(|_| invalid_authentication())?;
-        authorization.set_sensitive(true);
+    fn new(connection: &ProviderConnection) -> Result<Self, BridgeError> {
         let mut headers = HeaderMap::new();
-        headers.insert(http::header::AUTHORIZATION, authorization);
-        if let Authentication::OauthBearer { account_id, .. } = authentication {
+        if matches!(
+            connection.authentication,
+            ProviderAuthentication::Bearer { .. }
+        ) {
+            if connection
+                .headers
+                .keys()
+                .any(|name| name.eq_ignore_ascii_case("authorization"))
+            {
+                return Err(invalid_connection());
+            }
+            let ProviderAuthentication::Bearer { token } = &connection.authentication else {
+                unreachable!();
+            };
+            let mut authorization = HeaderValue::from_str(&format!("Bearer {token}"))
+                .map_err(|_| invalid_authentication())?;
+            authorization.set_sensitive(true);
+            headers.insert(http::header::AUTHORIZATION, authorization);
+        }
+        if let Some(account_id) = &connection.account_id {
+            if connection
+                .headers
+                .keys()
+                .any(|name| name.eq_ignore_ascii_case("ChatGPT-Account-ID"))
+            {
+                return Err(invalid_connection());
+            }
             let mut account_id =
-                HeaderValue::from_str(account_id).map_err(|_| invalid_authentication())?;
+                HeaderValue::from_str(account_id).map_err(|_| invalid_connection())?;
             account_id.set_sensitive(true);
             headers.insert("ChatGPT-Account-ID", account_id);
         }
@@ -58,20 +76,14 @@ impl AuthProvider for BridgeAuthProvider {
     }
 }
 
-pub fn authentication_headers_are_valid(authentication: &Authentication) -> bool {
-    BridgeAuthProvider::new(authentication).is_ok()
-}
-
-pub fn connect(
-    authentication: &Authentication,
-    base_url_override: Option<String>,
-) -> Result<ApiConnection, BridgeError> {
-    let authentication_provider = BridgeAuthProvider::new(authentication)?;
-    let default_base_url = match authentication {
-        Authentication::OauthBearer { .. } => CHATGPT_CODEX_BASE_URL,
-        Authentication::OpenaiApiKey { .. } => OPENAI_API_BASE_URL,
-    };
-    let base_url = base_url_override.unwrap_or_else(|| default_base_url.to_owned());
+pub fn connect(connection: &ProviderConnection) -> Result<ApiConnection, BridgeError> {
+    validate_provider_connection(connection)?;
+    let authentication_provider = BridgeAuthProvider::new(connection)?;
+    let base_url = validate_base_url(&connection.base_url)?;
+    let max_retries = connection.max_retries.unwrap_or(3);
+    let timeout_ms = connection.timeout_ms.unwrap_or(300_000);
+    let websocket_connect_timeout =
+        Duration::from_millis(connection.websocket_connect_timeout_ms.unwrap_or(10_000));
     let client = build_reqwest_client_with_custom_ca(reqwest::Client::builder()).map_err(|_| {
         BridgeError {
             category: ErrorCategory::ConfigurationError,
@@ -87,17 +99,18 @@ pub fn connect(
             name: "OpenAI".to_owned(),
             base_url,
             query_params: None,
-            headers: HeaderMap::new(),
+            headers: provider_headers(connection)?,
             retry: RetryConfig {
-                max_attempts: 4,
+                max_attempts: u64::from(max_retries).saturating_add(1),
                 base_delay: Duration::from_millis(200),
                 retry_429: false,
                 retry_5xx: true,
                 retry_transport: true,
             },
-            stream_idle_timeout: Duration::from_mins(5),
+            stream_idle_timeout: Duration::from_millis(timeout_ms),
         },
         authentication: Arc::new(authentication_provider),
+        websocket_connect_timeout,
     })
 }
 
@@ -108,6 +121,98 @@ fn invalid_authentication() -> BridgeError {
         message: "bridge authentication is invalid".to_owned(),
         retryable: false,
     }
+}
+
+fn invalid_connection() -> BridgeError {
+    BridgeError {
+        category: ErrorCategory::ConfigurationError,
+        code: "invalid_provider_connection".to_owned(),
+        message: "the provider connection is invalid".to_owned(),
+        retryable: false,
+    }
+}
+
+fn provider_headers(connection: &ProviderConnection) -> Result<HeaderMap, BridgeError> {
+    let mut headers = HeaderMap::new();
+    for (name, value) in &connection.headers {
+        let name = HeaderName::from_bytes(name.as_bytes()).map_err(|_| invalid_connection())?;
+        let value = HeaderValue::from_str(value).map_err(|_| invalid_connection())?;
+        headers.insert(name, value);
+    }
+    Ok(headers)
+}
+
+fn validate_provider_connection(connection: &ProviderConnection) -> Result<(), BridgeError> {
+    if connection.provider_id.is_empty()
+        || connection.provider_id.len() > 256
+        || connection.provider_id.contains(['\r', '\n'])
+    {
+        return Err(invalid_connection());
+    }
+    if connection.headers.len() > 128 {
+        return Err(invalid_connection());
+    }
+    for (name, value) in &connection.headers {
+        if name.is_empty() || name.len() > 256 || value.len() > 1024 * 1024 {
+            return Err(invalid_connection());
+        }
+        HeaderName::from_bytes(name.as_bytes()).map_err(|_| invalid_connection())?;
+        HeaderValue::from_str(value).map_err(|_| invalid_connection())?;
+    }
+    match &connection.authentication {
+        ProviderAuthentication::Bearer { token } => {
+            if token.is_empty() || token.len() > 1024 * 1024 {
+                return Err(invalid_authentication());
+            }
+            HeaderValue::from_str(token).map_err(|_| invalid_authentication())?;
+        }
+        ProviderAuthentication::None => {}
+    }
+    if let Some(account_id) = &connection.account_id {
+        if account_id.is_empty() || account_id.len() > 256 {
+            return Err(invalid_connection());
+        }
+        HeaderValue::from_str(account_id).map_err(|_| invalid_connection())?;
+    }
+    if connection.max_retries.is_some_and(|value| value > 10)
+        || connection
+            .timeout_ms
+            .is_some_and(|value| value == 0 || value > 86_400_000)
+        || connection
+            .websocket_connect_timeout_ms
+            .is_some_and(|value| value == 0 || value > 86_400_000)
+    {
+        return Err(invalid_connection());
+    }
+    validate_base_url(&connection.base_url)?;
+    Ok(())
+}
+
+fn validate_base_url(value: &str) -> Result<String, BridgeError> {
+    if value.len() > 2048 || !value.is_ascii() {
+        return Err(invalid_connection());
+    }
+    let mut url = url::Url::parse(value).map_err(|_| invalid_connection())?;
+    if !matches!(url.scheme(), "http" | "https")
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.fragment().is_some()
+        || url.query().is_some()
+    {
+        return Err(invalid_connection());
+    }
+    let path = url.path().trim_end_matches('/');
+    if path == "/responses" || path.ends_with("/responses") {
+        return Err(invalid_connection());
+    }
+    if url.scheme() == "https"
+        && matches!(url.host_str(), Some("chatgpt.com" | "chat.openai.com"))
+        && path == "/backend-api"
+    {
+        url.set_path("/backend-api/codex");
+    }
+    Ok(url.as_str().trim_end_matches('/').to_owned())
 }
 
 pub struct MappedResponseEvent {
@@ -315,6 +420,8 @@ pub fn map_api_error(error: &ApiError) -> BridgeError {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::*;
     use codex_protocol::protocol::RateLimitSnapshot;
 
@@ -343,14 +450,22 @@ mod tests {
     }
 
     #[test]
-    fn oauth_authentication_adds_the_required_account_header() {
-        let authentication = Arc::new(Authentication::OauthBearer {
-            token: "fixture-token".to_owned(),
-            account_id: "fixture-account".to_owned(),
-        });
-        let provider = BridgeAuthProvider::new(authentication.as_ref())
-            .expect("fixture authentication should be valid");
-        let headers = provider.to_auth_headers();
+    fn bearer_authentication_adds_optional_account_header() {
+        let connection = ProviderConnection {
+            provider_id: "fixture-provider".to_owned(),
+            base_url: "https://example.invalid/v1".to_owned(),
+            headers: BTreeMap::new(),
+            authentication: ProviderAuthentication::Bearer {
+                token: "fixture-token".to_owned(),
+            },
+            account_id: Some("fixture-account".to_owned()),
+            max_retries: None,
+            timeout_ms: None,
+            websocket_connect_timeout_ms: None,
+        };
+        let provider =
+            BridgeAuthProvider::new(&connection).expect("fixture authentication should be valid");
+        let headers = provider.headers;
 
         assert_eq!(
             headers
@@ -363,11 +478,19 @@ mod tests {
 
     #[test]
     fn rejects_authentication_that_cannot_be_encoded_as_headers() {
-        let authentication = Authentication::OauthBearer {
-            token: "fixture\ntoken".to_owned(),
-            account_id: "fixture-account".to_owned(),
+        let connection = ProviderConnection {
+            provider_id: "fixture-provider".to_owned(),
+            base_url: "https://example.invalid/v1".to_owned(),
+            headers: BTreeMap::new(),
+            authentication: ProviderAuthentication::Bearer {
+                token: "fixture\ntoken".to_owned(),
+            },
+            account_id: None,
+            max_retries: None,
+            timeout_ms: None,
+            websocket_connect_timeout_ms: None,
         };
-        let Err(error) = BridgeAuthProvider::new(&authentication) else {
+        let Err(error) = BridgeAuthProvider::new(&connection) else {
             panic!("invalid header values must be rejected");
         };
         assert_eq!(error.code, "invalid_authentication");

@@ -35,14 +35,7 @@ export async function resolveIntegrationBridgeExecutable(): Promise<{
 	);
 }
 
-export async function connectIntegrationBridge(options?: {
-	token?: string;
-	accountId?: string;
-	apiKey?: string;
-	authentication?:
-		| { kind: "oauth_bearer"; token: string; accountId: string }
-		| { kind: "openai_api_key"; apiKey: string };
-}): Promise<{
+export async function connectIntegrationBridge(): Promise<{
 	client: BridgeClient;
 	executable: string;
 	buildTarget: string;
@@ -53,35 +46,16 @@ export async function connectIntegrationBridge(options?: {
 		buildTarget,
 		repositoryRoot: root,
 	} = await resolveIntegrationBridgeExecutable();
-	const authentication =
-		options?.authentication !== undefined
-			? options.authentication
-			: options?.apiKey !== undefined
-				? {
-						kind: "openai_api_key" as const,
-						apiKey: options.apiKey,
-					}
-				: options?.token === undefined
-					? undefined
-					: {
-							kind: "oauth_bearer" as const,
-							token: options.token,
-							accountId: options.accountId ?? "account-fixture",
-						};
 	const client = await BridgeClient.connect({
 		buildTarget,
 		clientVersion: "integration-test",
 		allowDevelopmentBuild: true,
 		transport: spawnBridgeTransport(executable),
-		...(authentication === undefined ? {} : { authentication }),
 	});
 	return { client, executable, buildTarget, repositoryRoot: root };
 }
 
-export async function createIntegrationRuntime(options?: {
-	testBaseUrl?: string;
-	token?: string;
-}): Promise<{
+export async function createIntegrationRuntime(): Promise<{
 	runtime: BundledCodexRuntime;
 	executable: string;
 	buildTarget: string;
@@ -98,7 +72,6 @@ export async function createIntegrationRuntime(options?: {
 		allowDevelopmentBuild: true,
 		executable,
 		buildTarget,
-		...(options?.testBaseUrl === undefined ? {} : { testBaseUrl: options.testBaseUrl }),
 	});
 	return { runtime, executable, buildTarget, repositoryRoot: root };
 }

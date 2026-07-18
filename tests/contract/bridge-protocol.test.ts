@@ -15,10 +15,10 @@ import {
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 
-describe("bridge protocol v1", () => {
+describe("bridge protocol v2", () => {
 	test("decodes every native server contract frame", async () => {
 		const fixture = await readFile(
-			resolve(repositoryRoot, "fixtures/bridge-protocol/server-v1.jsonl"),
+			resolve(repositoryRoot, "fixtures/bridge-protocol/server-v2.jsonl"),
 			"utf8",
 		);
 		const messages = fixture.trimEnd().split("\n").map(decodeServerFrame);
@@ -86,7 +86,7 @@ describe("bridge protocol v1", () => {
 
 	test("decodes arbitrarily chunked process output", async () => {
 		const fixture = await readFile(
-			resolve(repositoryRoot, "fixtures/bridge-protocol/server-v1.jsonl"),
+			resolve(repositoryRoot, "fixtures/bridge-protocol/server-v2.jsonl"),
 		);
 		const decoder = new ServerFrameDecoder();
 		const messages = [];
@@ -108,7 +108,7 @@ describe("bridge protocol v1", () => {
 
 	test("advertises approval decisions in decline, cancel, allow_once order", async () => {
 		const fixture = await readFile(
-			resolve(repositoryRoot, "fixtures/bridge-protocol/server-v1.jsonl"),
+			resolve(repositoryRoot, "fixtures/bridge-protocol/server-v2.jsonl"),
 			"utf8",
 		);
 		const approval = fixture
@@ -125,7 +125,7 @@ describe("bridge protocol v1", () => {
 	});
 
 	test("rejects secret-bearing malformed frames without echoing contents", () => {
-		const secret = "sk-super-secret-credential-value";
+		const secret = "fixture-secret-sentinel";
 
 		try {
 			decodeServerFrame(
@@ -136,14 +136,14 @@ describe("bridge protocol v1", () => {
 			expect(error).toBeInstanceOf(BridgeProtocolError);
 			expect(String(error)).not.toContain(secret);
 			expect((error as BridgeProtocolError).message).toBe(
-				"Bridge frame does not match protocol v1",
+				"Bridge frame does not match protocol v2",
 			);
 		}
 	});
 
 	test("verifies every immutable handshake field", async () => {
 		const fixture = await readFile(
-			resolve(repositoryRoot, "fixtures/bridge-protocol/server-v1.jsonl"),
+			resolve(repositoryRoot, "fixtures/bridge-protocol/server-v2.jsonl"),
 			"utf8",
 		);
 		const message = decodeServerFrame(fixture.split("\n")[0] ?? "");
