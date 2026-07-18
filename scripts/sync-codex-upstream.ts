@@ -104,6 +104,8 @@ const selectedSourcePaths = [
 	"NOTICE",
 	"codex-rs/Cargo.lock",
 	"codex-rs/Cargo.toml",
+	"codex-rs/models-manager/models.json",
+	"codex-rs/models-manager/prompt.md",
 	...selectedCrates.map(([, path]) => path),
 	"codex-rs/tools/Cargo.toml",
 	"codex-rs/tools/src/dynamic_tool.rs",
@@ -137,6 +139,7 @@ const selectedSourcePaths = [
 ] as const;
 
 const supplementalLicensePackages = [
+	["codex-model-metadata", "codex-rs/models-manager"],
 	["codex-tools-p0-modules", "codex-rs/tools"],
 	["codex-core-p0-tool-specs", "codex-rs/core/src/tools"],
 	["codex-apply-patch-parser-modules", "codex-rs/apply-patch/src"],

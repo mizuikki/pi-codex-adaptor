@@ -2,7 +2,7 @@
   "schema_version": 1,
   "official_version": "0.144.3",
   "official_source_commit": "78ad6e6bfd1d3b6a209acd3ef82172a96b25179c",
-  "cargo_lock_sha256": "95b467f98d15a6f80ddfeb002cd309d2461a9871937316f627745a73f8bf7c2e",
+  "cargo_lock_sha256": "656a8c4ae0ab0797e929b0b0dddfb7cc017beb3f61db4330068d34fb895e8191",
   "root": "codex-bridge@0.0.0:244210e48437",
   "packages": [
     {
@@ -748,7 +748,8 @@
         "serde@1.0.228:c19b7c6f923b",
         "serde_json@1.0.149:c19b7c6f923b",
         "tokio-util@0.7.18:c19b7c6f923b",
-        "tokio@1.52.3:c19b7c6f923b"
+        "tokio@1.52.3:c19b7c6f923b",
+        "url@2.5.8:c19b7c6f923b"
       ]
     },
     {
