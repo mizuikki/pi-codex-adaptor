@@ -1,11 +1,12 @@
 # Bridge Protocol
 
-Protocol version 1 is a bounded newline-delimited JSON channel between the TypeScript host and the
+Protocol version 2 is a bounded newline-delimited JSON channel between the TypeScript host and the
 single native `codex-bridge` process. Each line contains exactly one object and is limited to
 16 MiB, excluding the line terminator. The bridge advertises a maximum of 256 unacknowledged stream
 events and reports paused and resumed backpressure states.
 
-The host must initialize the connection before sending other frames. The handshake returns protocol,
+The host must initialize the connection before sending other frames. Initialization carries only
+non-secret client identity. The handshake returns protocol,
 official Codex, native target, project source, vendor tree, frame limit, and compiled capability
 identity. A protocol or official baseline mismatch is fatal and must not be downgraded.
 
@@ -38,11 +39,11 @@ items in versioned compaction-entry details, restores them on session reload, su
 Pi's display-only summary on the next request, and passes them back without parsing or trimming.
 Account rate-limit events are consumed and discarded at the native boundary.
 
-`models.resolve` accepts an exact `{ "modelId": string }`. It calls the official typed models
-client, rejects absent metadata instead of guessing from the model name, and returns the canonical
-model record together with its resolved compaction threshold, shell surface, and official OpenAI
-provider capability upper bounds for WebSocket transport, remote compaction, namespace tools, image
-generation, and hosted web search.
+`models.resolve` accepts an exact `{ "modelId": string }` and is credential-free and network-free. It
+uses the pinned Codex model metadata closure, applying exact slug, longest-prefix, one-namespace
+suffix, and official unknown-model fallback rules. It returns the canonical model record together
+with its resolved compaction threshold, shell surface, and complete Codex provider capability
+contract.
 
 `tools.resolve` accepts validated official model metadata and explicit host capability inputs. It
 returns model-visible and dispatch-only official tool JSON, plus shell/web resolution and reason.
@@ -105,16 +106,15 @@ uses the typed Search client with the canonical conversation tail, waits for net
 returns bounded official search output. Hosted `web_search` remains a Responses tool and is never
 executed a second time through the Search client.
 
-Credentials may appear only in initialization and authentication-update frames on stdin. The
-authentication envelope is a discriminated union: OAuth bearer credentials carry the account
-identifier required by the official Codex endpoint alongside the bearer token, while OpenAI API key
-credentials carry only the key. Neither variant is persisted. Client message and authentication
-types deliberately omit debug formatting. Codec errors never include the rejected frame, parser
-snippets, or credential-bearing fragments; invalid JSON and schema mismatches map to stable
-`invalid_frame` protocol messages. Protocol fixtures contain no credentials, user paths, account
-data, prompts, or compaction payloads.
+Credentials may appear only in request-scoped provider connections on stdin. The connection carries a
+provider id, validated API root, ordinary provider headers, bearer-or-header-only authentication,
+and an optional ChatGPT account id. Neither the connection nor its fields are persisted. Client
+message and connection types deliberately omit debug formatting. Codec errors never include the
+rejected frame, parser snippets, or credential-bearing fragments; invalid JSON and schema mismatches
+map to stable `invalid_frame` protocol messages. Protocol fixtures contain no credentials, user
+paths, account data, prompts, or compaction payloads.
 
-The canonical v1 examples are [client-v1.jsonl](../fixtures/bridge-protocol/client-v1.jsonl) and
-[server-v1.jsonl](../fixtures/bridge-protocol/server-v1.jsonl). Rust contract tests decode every
+The canonical v2 examples are [client-v2.jsonl](../fixtures/bridge-protocol/client-v2.jsonl) and
+[server-v2.jsonl](../fixtures/bridge-protocol/server-v2.jsonl). Rust contract tests decode every
 recorded frame and enforce size, one-frame, unknown-field, opaque-event, advertised approval order,
 `allow_session` rejection, and safe malformed-frame behavior.

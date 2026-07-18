@@ -4,7 +4,7 @@
 
 The production baseline is OpenAI Codex `0.144.3`, tag `rust-v0.144.3`, peeled source commit
 `78ad6e6bfd1d3b6a209acd3ef82172a96b25179c`, and Rust `1.95.0`. A native bridge handshake must
-report these values together with bridge protocol version `1`, its build target, build source commit,
+report these values together with bridge protocol version `2`, its build target, build source commit,
 and capabilities. A mismatch is fatal.
 
 ## Product boundary
@@ -36,7 +36,7 @@ This contract does not promise complete Codex CLI parity. P1 and P2 capabilities
 
 ## Protocol and errors
 
-Bridge protocol v1 is newline-delimited JSON with bounded frames and request IDs. It defines
+Bridge protocol v2 is newline-delimited JSON with bounded frames and request IDs. It defines
 handshake, request, stream event, cancellation, session write/resize/terminate, result, error, and
 backpressure envelopes. Unknown events are retained for safe diagnostics and never imply successful
 termination. The normative envelope contract and limits are documented in
@@ -48,22 +48,25 @@ categories are `ConfigurationError`, `AuthenticationError`, `ProtocolError`, `Ca
 
 ## Privacy and authorization
 
-Credentials enter the bridge only through bounded stdin initialization or authentication update
-frames. They must not appear in argv, configuration files, logs, snapshots, errors, or diagnostics.
+Credentials enter the bridge only through bounded, request-scoped provider connections. They must not
+appear in argv, configuration files, logs, snapshots, errors, or diagnostics.
 Prompts, messages, headers, opaque compaction items, and absolute user paths are excluded from default
 diagnostics. Native operations wait for an explicit Pi approval decision and workspace policy result.
 
 ## Configuration
 
 The only supported configuration location is `~/.pi/agent/pi-codex-adaptor.json`. It accepts this
-project's `schemaVersion: 1` model only and does not read Codex `config.toml`. Invalid existing files
+project's `schemaVersion: 2` model only and does not read Codex `config.toml`. Invalid existing files
 are preserved rather than guessed or overwritten.
 
 The new-install default is:
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
+  "activation": {
+    "providers": ["openai-codex"]
+  },
   "tools": {
     "backgroundSessions": true,
     "optional": {
@@ -71,7 +74,7 @@ The new-install default is:
       "imageGeneration": "auto"
     }
   },
-  "openai": {
+  "codex": {
     "serviceTier": "default",
     "verbosity": "low",
     "transport": { "mode": "auto" },
@@ -95,7 +98,7 @@ instead of being retained for `write_stdin` polling.
 
 ## Current implementation status
 
-The package version is `0.0.0` and has not been published. The worktree defines and tests protocol v1
+The package version is `0.0.0` and has not been published. The worktree defines and tests protocol v2
 envelopes, the baseline handshake, concurrent request correlation, cancellation, bounded event
 backpressure, and safe process shutdown. The bridge compiles and links the pinned official wire
 modules and advertises Responses SSE/WebSocket, the Compact endpoint, RemoteCompactionV2, model
