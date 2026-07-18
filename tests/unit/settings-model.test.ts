@@ -34,7 +34,7 @@ describe("settings view model", () => {
 		expect(view.setWidth(120)).toBe("wide");
 		expect(view.setWidth(80)).toBe("medium");
 		expect(view.setWidth(40)).toBe("narrow");
-		expect(SETTINGS_CATEGORIES).toEqual(["General", "Tools", "OpenAI", "Diagnostics"]);
+		expect(SETTINGS_CATEGORIES).toEqual(["General", "Tools", "Codex", "Diagnostics"]);
 	});
 
 	test("cycles enum fields without writing the configuration", () => {
@@ -43,7 +43,7 @@ describe("settings view model", () => {
 		view.moveCategory(1);
 		view.moveFocus(1);
 		view.cycleFocused();
-		expect(view.draft.openai.verbosity).toBe("medium");
+		expect(view.draft.codex.verbosity).toBe("medium");
 		expect(view.state).toBe("dirty");
 	});
 
@@ -53,7 +53,7 @@ describe("settings view model", () => {
 		view.moveCategory(1);
 		expect(view.rows().map((row) => row.id)).toContain("autoCompactTokenLimit");
 		view.setAutoCompactTokenLimit(48_000);
-		expect(view.draft.openai.compaction).toEqual({
+		expect(view.draft.codex.compaction).toEqual({
 			mode: "auto",
 			autoCompactTokenLimit: 48_000,
 		});

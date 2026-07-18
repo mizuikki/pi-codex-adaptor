@@ -84,7 +84,7 @@ describe("settings keyboard state machine", () => {
 		view.handleKey("]");
 		expect(view.category).toBe("Tools");
 		view.handleKey("]");
-		expect(view.category).toBe("OpenAI");
+		expect(view.category).toBe("Codex");
 		expect(view.handleKey("c")).toEqual({ type: "compact" });
 		view.handleKey("]");
 		expect(view.category).toBe("Diagnostics");

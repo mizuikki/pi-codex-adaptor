@@ -60,7 +60,11 @@ export function createFakePi(options: {
 			cwd,
 			hasUI: true,
 			modelRegistry: {
-				getApiKeyForProvider: async () => options.token,
+				getApiKeyAndHeaders: async () => ({
+					ok: true,
+					apiKey: options.token,
+					headers: {},
+				}),
 			},
 			ui: {
 				setStatus: (key: string, value: string | undefined) => status.set(key, value),
@@ -105,13 +109,17 @@ export function fixtureToken(accountId = "account-fixture"): string {
 	return `header.${payload}.signature`;
 }
 
-export function fixtureModel(id = "fixture-model", provider = "openai-codex"): Model<string> {
+export function fixtureModel(
+	id = "fixture-model",
+	provider = "openai-codex",
+	baseUrl = "https://invalid.example",
+): Model<string> {
 	return {
 		id,
 		name: id,
 		api: "openai-codex-responses",
 		provider,
-		baseUrl: "https://invalid.example",
+		baseUrl,
 		reasoning: true,
 		input: ["text", "image"],
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },

@@ -74,7 +74,13 @@ describe("file configuration repository", () => {
 		await fixture.repository.save(second);
 		await writeFile(
 			fixture.configFile,
-			JSON.stringify({ schemaVersion: 2, tools: {}, openai: {}, ui: {} }),
+			JSON.stringify({
+				schemaVersion: 2,
+				activation: { providers: [] },
+				tools: {},
+				codex: {},
+				ui: {},
+			}),
 			"utf8",
 		);
 
@@ -117,8 +123,8 @@ describe("file configuration repository", () => {
 			service.applyDraft(
 				{
 					...original,
-					openai: {
-						...original.openai,
+					codex: {
+						...original.codex,
 						compaction: { mode: "auto", autoCompactTokenLimit: 200_000 },
 					},
 				},

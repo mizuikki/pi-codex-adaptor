@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type {
-	CodexAuthentication,
 	CodexRuntime,
 	CompactResponseOptions,
 	CreateResponseOptions,
@@ -18,6 +17,7 @@ import {
 	shouldTriggerAutoCompaction,
 } from "../../src/application/compaction.ts";
 import type { ConfigurationService } from "../../src/application/configuration.ts";
+import { ProviderActivationPolicy } from "../../src/application/provider-activation.ts";
 import { createDefaultConfig } from "../../src/domain/config.ts";
 import { registerCodexCompaction } from "../../src/integration/pi/codex-compaction.ts";
 
@@ -32,7 +32,7 @@ class FixtureRuntime implements CodexRuntime {
 		shellSurface: "unified-exec",
 		autoCompactTokenLimit: 90_000,
 		provider: {
-			name: "OpenAI",
+			name: "Codex",
 			supportsWebsockets: true,
 			supportsRemoteCompaction: true,
 			namespaceTools: true,
@@ -59,7 +59,7 @@ class FixtureRuntime implements CodexRuntime {
 		};
 	}
 
-	async resolveModel(_authentication: CodexAuthentication, modelId: string): Promise<unknown> {
+	async resolveModel(modelId: string): Promise<unknown> {
 		const value = this.modelResolution as Record<string, unknown>;
 		const model = value.model as Record<string, unknown>;
 		return { ...value, model: { ...model, slug: modelId } };
@@ -96,16 +96,16 @@ function fixtureToken(): string {
 }
 
 function configuration(
-	overrides?: Partial<ReturnType<typeof createDefaultConfig>["openai"]["compaction"]>,
+	overrides?: Partial<ReturnType<typeof createDefaultConfig>["codex"]["compaction"]>,
 ): ConfigurationService {
 	const defaults = createDefaultConfig();
 	return {
 		load: async () => ({
 			...defaults,
-			openai: {
-				...defaults.openai,
+			codex: {
+				...defaults.codex,
 				compaction: {
-					...defaults.openai.compaction,
+					...defaults.codex.compaction,
 					...overrides,
 				},
 			},
@@ -132,7 +132,9 @@ function context(options?: {
 			contextWindow: 100_000,
 			maxTokens: 10_000,
 		},
-		modelRegistry: { getApiKeyForProvider: async () => fixtureToken() },
+		modelRegistry: {
+			getApiKeyAndHeaders: async () => ({ ok: true, apiKey: fixtureToken(), headers: {} }),
+		},
 		sessionManager: {
 			getSessionId: () => options?.sessionId ?? "session-fixture",
 			getBranch: () => [],
@@ -195,6 +197,7 @@ function register(
 		runtime,
 		config,
 		store,
+		new ProviderActivationPolicy(config),
 		coordinator,
 	);
 	return { handlers, store, coordinator };

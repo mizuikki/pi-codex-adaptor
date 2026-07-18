@@ -4,11 +4,7 @@ import type {
 	SessionBeforeCompactEvent,
 	SessionCompactEvent,
 } from "@earendil-works/pi-coding-agent";
-import {
-	type CodexAuthentication,
-	type CodexRuntime,
-	resolveCodexAuthentication,
-} from "../../application/codex-runtime.ts";
+import type { CodexProviderConnection, CodexRuntime } from "../../application/codex-runtime.ts";
 import {
 	CodexCompactionCoordinator,
 	type CodexCompactionStore,
@@ -20,15 +16,15 @@ import {
 	shouldTriggerAutoCompaction,
 } from "../../application/compaction.ts";
 import type { ConfigurationService } from "../../application/configuration.ts";
+import type { ProviderActivationPolicy } from "../../application/provider-activation.ts";
 import {
 	buildToolsResolveParams,
-	OPENAI_CODEX_PI_PROVIDER,
 	parseModelResolution,
-	requireOpenAiCodexProvider,
 	selectCompactionImplementation,
 } from "../../domain/capability.ts";
 import type { CompactionConfig } from "../../domain/config.ts";
 import { officialToolNames, responseItemsFromMessages } from "./codex-provider.ts";
+import { createProviderConnection } from "./provider-connection.ts";
 
 const COMPACTION_SUMMARY = "Context compacted by the OpenAI Codex Responses API.";
 
@@ -37,6 +33,7 @@ export function registerCodexCompaction(
 	runtime: CodexRuntime,
 	configuration: ConfigurationService,
 	store: CodexCompactionStore,
+	activation: ProviderActivationPolicy,
 	coordinator: CodexCompactionCoordinator = new CodexCompactionCoordinator(),
 ): void {
 	pi.on("session_start", (_event, ctx) => {
@@ -63,6 +60,7 @@ export function registerCodexCompaction(
 		await maybeTriggerThresholdCompaction(ctx, {
 			runtime,
 			configuration,
+			activation,
 			coordinator,
 		});
 	});
@@ -73,25 +71,23 @@ export function registerCodexCompaction(
 			coordinator.end(sessionId, "error");
 			throw new Error("OpenAI Codex compaction requires an active model");
 		}
-		requireOpenAiCodexProvider(model.provider);
+		if (!activation.isActive(model)) return { cancel: true };
+		if (event.signal.aborted) return { cancel: true };
+		const connection = await resolveProviderConnection(ctx, activation);
 		const config = await configuration.load();
-		const authentication = await resolveAuthentication(ctx);
-		const resolution = parseModelResolution(
-			await runtime.resolveModel(authentication, model.id),
-			model.id,
-		);
+		const resolution = parseModelResolution(await runtime.resolveModel(model.id), model.id);
 		coordinator.setThresholdCache(sessionId, {
 			modelId: model.id,
 			autoCompactTokenLimit: resolution.autoCompactTokenLimit,
 		});
 		const threshold = resolveCompactionThreshold(
-			config.openai.compaction,
+			config.codex.compaction,
 			resolution.autoCompactTokenLimit,
 			model.contextWindow,
 		);
 		if (
 			!shouldAcceptCompactionEvent({
-				mode: config.openai.compaction.mode,
+				mode: config.codex.compaction.mode,
 				reason: event.reason,
 				tokensBefore: event.preparation.tokensBefore,
 				threshold,
@@ -101,7 +97,7 @@ export function registerCodexCompaction(
 			// released by Pi onError when this cancel surfaces as compaction failure.
 			return { cancel: true };
 		}
-		const compactionConfig = config.openai.compaction;
+		const compactionConfig = config.codex.compaction;
 		if (
 			compactionConfig.mode === "auto" &&
 			typeof compactionConfig.autoCompactTokenLimit === "number" &&
@@ -122,9 +118,8 @@ export function registerCodexCompaction(
 			}
 			const toolResolution = record(
 				await runtime.resolveTools(
-					authentication,
 					buildToolsResolveParams(resolution, {
-						webSearchMode: config.openai.webSearch.mode,
+						webSearchMode: config.codex.webSearch.mode,
 						viewImage: config.tools.optional.viewImage === "auto",
 						imageGeneration: config.tools.optional.imageGeneration === "auto",
 						standaloneWebSearchExecutorAvailable: true,
@@ -150,7 +145,7 @@ export function registerCodexCompaction(
 				...responseItemsFromMessages(messages),
 			];
 			const result = await runtime.compact({
-				authentication,
+				connection,
 				request: {
 					model: model.id,
 					input,
@@ -158,12 +153,12 @@ export function registerCodexCompaction(
 					tools: tools.length === 0 ? null : tools,
 					parallel_tool_calls: true,
 					reasoning: reasoningFor(model, pi.getThinkingLevel()),
-					service_tier: config.openai.serviceTier,
+					service_tier: config.codex.serviceTier,
 					prompt_cache_key: sessionId,
-					text: { verbosity: config.openai.verbosity },
+					text: { verbosity: config.codex.verbosity },
 				},
 				implementation: selectCompactionImplementation(resolution.provider),
-				transportMode: config.openai.transport.mode,
+				transportMode: config.codex.transport.mode,
 				providerSupportsWebsockets: resolution.provider.supportsWebsockets,
 				signal: event.signal,
 			});
@@ -200,12 +195,13 @@ async function maybeTriggerThresholdCompaction(
 	state: {
 		runtime: CodexRuntime;
 		configuration: ConfigurationService;
+		activation: ProviderActivationPolicy;
 		coordinator: CodexCompactionCoordinator;
 	},
 ): Promise<void> {
 	const sessionId = ctx.sessionManager.getSessionId();
 	const model = ctx.model;
-	if (model?.provider !== OPENAI_CODEX_PI_PROVIDER) {
+	if (model === undefined || !state.activation.isActive(model)) {
 		state.coordinator.setPreviousTokens(sessionId, null);
 		return;
 	}
@@ -216,7 +212,7 @@ async function maybeTriggerThresholdCompaction(
 	}
 
 	const config = await state.configuration.load();
-	const compaction = config.openai.compaction;
+	const compaction = config.codex.compaction;
 	if (compaction.mode === "off") {
 		state.coordinator.setPreviousTokens(sessionId, currentTokens);
 		return;
@@ -255,13 +251,14 @@ async function maybeTriggerThresholdCompaction(
 }
 
 async function resolveThresholdForModel(
-	ctx: ExtensionContext,
+	_ctx: ExtensionContext,
 	sessionId: string,
 	modelId: string,
 	contextWindow: number,
 	compaction: CompactionConfig,
 	state: {
 		runtime: CodexRuntime;
+		activation: ProviderActivationPolicy;
 		coordinator: CodexCompactionCoordinator;
 	},
 ): Promise<number | undefined> {
@@ -272,11 +269,7 @@ async function resolveThresholdForModel(
 	if (cached?.modelId === modelId) {
 		return resolveCompactionThreshold(compaction, cached.autoCompactTokenLimit, contextWindow);
 	}
-	const authentication = await resolveAuthentication(ctx);
-	const resolution = parseModelResolution(
-		await state.runtime.resolveModel(authentication, modelId),
-		modelId,
-	);
+	const resolution = parseModelResolution(await state.runtime.resolveModel(modelId), modelId);
 	const nextCache: CompactionThresholdCache = {
 		modelId,
 		autoCompactTokenLimit: resolution.autoCompactTokenLimit,
@@ -337,12 +330,21 @@ function reasoningFor(
 	return effort === null ? null : { effort, summary: "auto", context: "all_turns" };
 }
 
-async function resolveAuthentication(ctx: ExtensionContext): Promise<CodexAuthentication> {
-	const token = await ctx.modelRegistry.getApiKeyForProvider("openai-codex");
-	if (token === undefined || token.length === 0) {
-		throw new Error("OpenAI Codex authentication is required");
+async function resolveProviderConnection(
+	ctx: ExtensionContext,
+	activation: ProviderActivationPolicy,
+): Promise<CodexProviderConnection> {
+	const model = ctx.model;
+	if (!activation.isActive(model)) {
+		throw new Error("Codex compaction is inactive for the selected provider and API");
 	}
-	return resolveCodexAuthentication(token);
+	if (model === undefined) throw new Error("Codex compaction requires an active model");
+	const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+	if (!auth.ok) throw new Error("Provider authentication is unavailable");
+	return createProviderConnection(model, {
+		...(auth.apiKey === undefined ? {} : { apiKey: auth.apiKey }),
+		...(auth.headers === undefined ? {} : { headers: auth.headers }),
+	});
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {

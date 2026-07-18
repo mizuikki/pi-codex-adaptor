@@ -8,9 +8,13 @@ import { SettingsOverlay } from "../../src/ui/terminal/settings-overlay.ts";
 
 function diagnostics(): DiagnosticsSnapshot {
 	return {
-		schemaVersion: 1,
-		configSchemaVersion: 1,
-		bridge: { bridgeProtocolVersion: 1, capabilities: ["responses"] },
+		schemaVersion: 2,
+		configSchemaVersion: 2,
+		activation: {
+			providerCount: 1,
+			supportedApis: ["openai-responses", "openai-codex-responses"],
+		},
+		bridge: { bridgeProtocolVersion: 2, capabilities: ["responses"] },
 	};
 }
 
@@ -96,7 +100,7 @@ describe("settings overlay disposal", () => {
 			baseline: "0.144.3",
 			provider: "openai-codex",
 			model: "test-model",
-			bridge: "protocol v1",
+			bridge: "protocol v2",
 		});
 		let done = false;
 		const overlay = new SettingsOverlay(model, service, ctx, diagnostics(), undefined, () => {
@@ -126,7 +130,7 @@ describe("settings overlay disposal", () => {
 			baseline: "0.144.3",
 			provider: "openai-codex",
 			model: "test-model",
-			bridge: "protocol v1",
+			bridge: "protocol v2",
 		});
 		const overlay = new SettingsOverlay(model, service, ctx, diagnostics(), undefined, () => {
 			done = true;
@@ -161,7 +165,7 @@ describe("settings overlay disposal", () => {
 			baseline: "0.144.3",
 			provider: "openai-codex",
 			model: "test-model",
-			bridge: "protocol v1",
+			bridge: "protocol v2",
 		});
 		const overlay = new SettingsOverlay(model, service, ctx, diagnostics(), undefined, () => {});
 
@@ -183,7 +187,7 @@ describe("settings overlay disposal", () => {
 			baseline: "0.144.3",
 			provider: "openai-codex",
 			model: "test-model",
-			bridge: "protocol v1",
+			bridge: "protocol v2",
 		});
 		const overlay = new SettingsOverlay(model, service, ctx, diagnostics(), undefined, () => {});
 		model.moveCategory(1);
@@ -204,7 +208,7 @@ describe("settings overlay disposal", () => {
 			baseline: "0.144.3",
 			provider: "openai-codex",
 			model: "test-model",
-			bridge: "protocol v1",
+			bridge: "protocol v2",
 		});
 		const overlay = new SettingsOverlay(
 			model,
@@ -216,7 +220,7 @@ describe("settings overlay disposal", () => {
 			coordinator,
 		);
 
-		// OpenAI section, compact action
+		// Codex section, compact action
 		model.moveCategory(1);
 		model.moveCategory(1);
 		overlay.handleInput("c");
@@ -236,7 +240,7 @@ describe("settings overlay disposal", () => {
 			baseline: "0.144.3",
 			provider: "openai-codex",
 			model: "test-model",
-			bridge: "protocol v1",
+			bridge: "protocol v2",
 		});
 		const overlay = new SettingsOverlay(
 			model,
