@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -21,6 +21,7 @@ describe("exact npm tarball smoke", () => {
 			new Response(assemble.stdout).text(),
 		]);
 		expect(assembleCode).toBe(0);
+		expect(await readdir(resolve(repositoryRoot, "dist/package"))).not.toContain("native");
 
 		const pack = Bun.spawn(["npm", "pack", "./dist/package", "--json"], {
 			cwd: repositoryRoot,

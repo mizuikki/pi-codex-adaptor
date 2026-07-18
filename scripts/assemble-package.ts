@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { cp, mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { cp, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -10,19 +10,6 @@ const nativeArtifactsDirectory = nativeArtifactsArgument
 	? resolve(nativeArtifactsArgument)
 	: undefined;
 
-async function copyIfPresent(source: string, destination: string): Promise<void> {
-	try {
-		await stat(source);
-	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-			return;
-		}
-		throw error;
-	}
-
-	await cp(source, destination, { recursive: true });
-}
-
 async function main(): Promise<void> {
 	await rm(stagingDirectory, { force: true, recursive: true });
 	await mkdir(stagingDirectory, { recursive: true });
@@ -31,7 +18,6 @@ async function main(): Promise<void> {
 		cp(resolve(repositoryRoot, "LICENSE"), resolve(stagingDirectory, "LICENSE")),
 		cp(resolve(repositoryRoot, "README.md"), resolve(stagingDirectory, "README.md")),
 		cp(resolve(repositoryRoot, "src"), resolve(stagingDirectory, "src"), { recursive: true }),
-		copyIfPresent(resolve(repositoryRoot, "native/bin"), resolve(stagingDirectory, "native/bin")),
 	]);
 
 	if (nativeArtifactsDirectory !== undefined) {
