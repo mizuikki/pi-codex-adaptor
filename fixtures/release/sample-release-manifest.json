@@ -3,11 +3,11 @@
   "package": "pi-codex-adaptor",
   "version": "0.1.0-rc.1",
   "projectSourceCommit": "0123456789abcdef0123456789abcdef01234567",
-  "bridgeProtocolVersion": 1,
+  "bridgeProtocolVersion": 2,
   "officialCodexVersion": "0.144.3",
   "officialCodexTag": "rust-v0.144.3",
   "officialSourceCommit": "78ad6e6bfd1d3b6a209acd3ef82172a96b25179c",
-  "vendorTreeSha256": "834ba149cf49f8df840d3dac6c612c312535f27c47c813013022776190d43178",
+  "vendorTreeSha256": "4e73a4c8efdc818b085b4abea1660b3a6d84b0fdbb6d687bda5c55dc0f07caad",
   "npmDistTag": "rc",
   "toolchain": {
     "bun": "1.3.14",

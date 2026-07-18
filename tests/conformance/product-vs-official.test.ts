@@ -224,10 +224,6 @@ describe("product vs pinned official conformance", () => {
 				clientVersion: "conformance",
 				allowDevelopmentBuild: true,
 				transport: spawnBridgeTransport(executable),
-				authentication: {
-					kind: "openai_api_key",
-					apiKey: fixtureApiKey,
-				},
 			});
 			try {
 				const productEvents: unknown[] = [];
@@ -248,7 +244,12 @@ describe("product vs pinned official conformance", () => {
 						},
 						transportMode: "sse",
 						providerSupportsWebsockets: false,
-						testBaseUrl: productServer.baseUrl,
+						connection: {
+							providerId: "fixture-provider",
+							baseUrl: productServer.baseUrl,
+							headers: {},
+							authentication: { kind: "bearer", token: fixtureApiKey },
+						},
 					},
 					{
 						onEvent: (event) => {
