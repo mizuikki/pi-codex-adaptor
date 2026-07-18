@@ -1,3 +1,5 @@
+import { parseKey as parseTuiKey } from "@earendil-works/pi-tui";
+
 import {
 	type CodexConfig,
 	createDefaultConfig,
@@ -905,18 +907,7 @@ function cycle<T extends string>(value: T, values: readonly T[]): T {
 }
 
 export function parseKey(data: string): string {
-	if (data === "\u001b") return "esc";
-	if (data === "\u001b[A") return "up";
-	if (data === "\u001b[B") return "down";
-	if (data === "\u001b[C") return "right";
-	if (data === "\u001b[D") return "left";
-	if (data === "\t") return "tab";
-	if (data === "\u001b[Z") return "shift-tab";
-	if (data === "\r" || data === "\n") return "enter";
-	if (data === " ") return "space";
-	if (data === "\u0013") return "ctrl-s";
-	if (data === "?" || data === "[") return data;
-	if (data === "]") return data;
-	if (data.length === 1) return data.toLowerCase();
-	return data;
+	const key = parseTuiKey(data);
+	if (key === "escape") return "esc";
+	return (key ?? data).toLowerCase().replaceAll("+", "-");
 }

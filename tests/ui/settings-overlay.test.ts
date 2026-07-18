@@ -89,6 +89,26 @@ function createCtx(options?: {
 }
 
 describe("settings overlay disposal", () => {
+	test("Kitty escape closes a pristine overlay", () => {
+		const service = createService();
+		const ctx = createCtx();
+		const model = new SettingsModel(createDefaultConfig(), {
+			baseline: "0.144.3",
+			provider: "openai-codex",
+			model: "test-model",
+			bridge: "protocol v1",
+		});
+		let done = false;
+		const overlay = new SettingsOverlay(model, service, ctx, diagnostics(), undefined, () => {
+			done = true;
+		});
+
+		overlay.handleInput("\u001b[27u");
+
+		expect(done).toBe(true);
+		expect(model.disposed).toBe(true);
+	});
+
 	test("dispose cancels late save updates", async () => {
 		let release: (() => void) | undefined;
 		const gate = new Promise<void>((resolve) => {

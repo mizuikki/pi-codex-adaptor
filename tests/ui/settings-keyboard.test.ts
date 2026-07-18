@@ -110,4 +110,16 @@ describe("settings keyboard state machine", () => {
 		const view = model();
 		expect(view.handleKey("\u001b")).toEqual({ type: "close" });
 	});
+
+	test("extended terminal key sequences drive the settings state machine", () => {
+		const kitty = model();
+		kitty.setWidth(100);
+		expect(kitty.handleKey("\u001b[57420u")).toEqual({ type: "none" });
+		expect(kitty.focus).toBe(1);
+		expect(kitty.handleKey("\u001b[115;5u")).toEqual({ type: "save" });
+		expect(kitty.handleKey("\u001b[27u")).toEqual({ type: "close" });
+
+		const modifyOtherKeys = model();
+		expect(modifyOtherKeys.handleKey("\u001b[27;1;27~")).toEqual({ type: "close" });
+	});
 });
