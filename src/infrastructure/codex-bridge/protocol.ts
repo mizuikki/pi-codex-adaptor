@@ -1,5 +1,5 @@
 import Type from "typebox";
-import Schema from "typebox/schema";
+import { Compile } from "typebox/compile";
 
 import {
 	BRIDGE_PROTOCOL_VERSION,
@@ -284,8 +284,8 @@ export type ClientMessage = Type.Static<typeof ClientMessageSchema>;
 export type ServerMessage = Type.Static<typeof ServerMessageSchema>;
 export type BridgeHandshake = Extract<ServerMessage, { type: "handshake" }>["handshake"];
 
-const clientMessageValidator = Schema.Compile(ClientMessageSchema);
-const serverMessageValidator = Schema.Compile(ServerMessageSchema);
+const clientMessageValidator = Compile(ClientMessageSchema);
+const serverMessageValidator = Compile(ServerMessageSchema);
 const encoder = new TextEncoder();
 const decoder = new TextDecoder("utf-8", { fatal: true });
 
