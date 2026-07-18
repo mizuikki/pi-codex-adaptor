@@ -53,8 +53,9 @@ capabilities.
 
 `tools.execute` accepts the official shell surfaces with a command, canonical workspace roots, and
 working directory. TypeScript constructs params from an adaptor-owned allowlist; model arguments are
-never spread wholesale, and the test-only `testBaseUrl` override may only be supplied by host runtime
-options. Native execution host-resolves only real supported shells from fixed system installation
+never spread wholesale. Shell, PTY, patch, plan, and local image operations carry no provider
+connection. Search and image-generation operations carry the active request-scoped connection only.
+Native execution host-resolves only real supported shells from fixed system installation
 directories, rejects workspace-relative or attacker-created executables such as
 `./bash` or `/tmp/bash`, and emits an approval request that discloses the resolved shell plus
 command before spawning through the official process adapter; a path outside every supplied root is

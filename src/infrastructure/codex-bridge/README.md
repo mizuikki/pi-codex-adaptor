@@ -3,7 +3,7 @@
 Sidecar discovery, lifecycle, JSONL envelopes, cancellation, and binary manifest verification belong
 here. OpenAI transport details stay in Rust.
 
-`protocol.ts` is the runtime-validated TypeScript view of adaptor-owned protocol v1 envelopes. Its
+`protocol.ts` is the runtime-validated TypeScript view of adaptor-owned protocol v2 envelopes. Its
 request, event, and result payloads remain `unknown`; it does not define OpenAI wire schemas.
 
 `client.ts` owns bounded process I/O, handshake verification, request correlation, event ordering,
@@ -16,4 +16,4 @@ override paths.
 
 `environment.ts` builds the narrowed child-process environment used by `spawnBridgeTransport`.
 Credential-bearing proxy URLs are rejected, and other credential variables are excluded so secrets
-can only arrive through initialize and authentication_update frames.
+can only arrive through request-scoped provider connections.

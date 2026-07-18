@@ -3,13 +3,16 @@
 `pi-codex-adaptor` is a Pi extension that will adapt the public OpenAI Codex `0.144.3`
 protocol and selected runtime modules without running a second agent inside Pi.
 
-The repository is under active implementation. Protocol v1, the native baseline handshake, official
+The repository is under active implementation. Protocol v2, the native baseline handshake, official
 Responses SSE/WebSocket transport with connect fallback, compact endpoint, and exact model metadata
 resolution are implemented. The versioned configuration store, approval-gated Unified Exec sessions,
 and `/codex` settings overlay are available. The extension replaces only Pi's `openai-codex` stream
-handler with the native bridge adapter, activates the generated update-plan and model-resolved shell
-surface without removing third-party tools, executes approval-gated patches through the official
-parser, supports workspace image inspection, and restores process ownership on session shutdown.
+handler with the native bridge adapter, dispatches both supported Responses APIs by exact provider-id
+activation, and delegates unselected providers directly to Pi's public native streams. It activates
+the generated update-plan and model-resolved shell surface without removing third-party tools,
+executes approval-gated patches through the official parser, supports workspace image inspection, and
+restores process ownership on session shutdown. Because Pi owns one stream handler per API id, the
+adaptor cannot safely compose with another extension that replaces either supported Responses API.
 Pi compaction selects the official RemoteCompactionV2 stream when available and otherwise uses the
 typed Compact endpoint; canonical output is retained as versioned opaque session details for exact
 replay. The generated `image_gen.imagegen` namespace uses the official Images client for generation
