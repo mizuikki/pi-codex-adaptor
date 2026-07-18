@@ -30,6 +30,7 @@ export default function piCodexAdaptor(pi: ExtensionAPI): void {
 	const compactionCoordinator = new CodexCompactionCoordinator();
 	if (typeof pi.registerProvider === "function") {
 		pi.registerProvider("openai-codex", {
+			api: "openai-codex-responses",
 			streamSimple: createCodexStreamSimple(runtime, service, compactions),
 		});
 	}
