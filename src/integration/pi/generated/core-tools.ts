@@ -155,6 +155,14 @@ export const OFFICIAL_CORE_TOOL_CONTRACTS = {
     "parameters": {
       "additionalProperties": false,
       "properties": {
+        "detail": {
+          "description": "Image detail level. Defaults to `high`; use `original` to preserve exact resolution.",
+          "enum": [
+            "high",
+            "original"
+          ],
+          "type": "string"
+        },
         "path": {
           "description": "Local filesystem path to an image file.",
           "type": "string"

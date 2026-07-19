@@ -78,7 +78,17 @@ class FixtureRuntime implements CodexRuntime {
 
 	async executeTool(options: ExecuteToolOptions): Promise<CreateResponseResult> {
 		this.execution = options;
-		if (options.tool === "view_image" || options.tool === "image_gen.imagegen") {
+		if (options.tool === "view_image") {
+			const detail = options.argumentsValue.detail === "original" ? "original" : "high";
+			return {
+				status: "completed",
+				result: {
+					image_url: "data:image/png;base64,ZmFrZS1pbWFnZQ==",
+					detail,
+				},
+			};
+		}
+		if (options.tool === "image_gen.imagegen") {
 			return {
 				status: "completed",
 				result: {
@@ -260,15 +270,26 @@ describe("Pi core tool activation", () => {
 			.get("view_image")
 			?.execute(
 				"image-call",
-				{ path: "/workspace/fixture.png" } as never,
+				{ path: "/workspace/fixture.png", detail: "original" } as never,
 				undefined,
 				undefined,
 				ctx,
 			);
+		expect(tools.get("view_image")?.parameters).toMatchObject({
+			additionalProperties: false,
+			properties: {
+				detail: { type: "string", enum: ["high", "original"] },
+			},
+			required: ["path"],
+		});
+		expect(runtime.execution).toMatchObject({
+			tool: "view_image",
+			argumentsValue: { path: "/workspace/fixture.png", detail: "original" },
+		});
 		expect(image?.content).toEqual([
 			{ type: "image", mimeType: "image/png", data: "ZmFrZS1pbWFnZQ==" },
 		]);
-		expect(image?.details).toEqual({ status: "completed", detail: "high" });
+		expect(image?.details).toEqual({ status: "completed", detail: "original" });
 
 		const generated = await tools
 			.get("image_gen.imagegen")
