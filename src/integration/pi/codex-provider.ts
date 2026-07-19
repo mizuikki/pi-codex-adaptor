@@ -120,15 +120,6 @@ async function runResponse(
 	}
 }
 
-export function supportsProviderWebsockets(
-	model: Pick<Model<string>, "provider">,
-	metadataSupportsWebsockets: boolean,
-): boolean {
-	// Custom Pi providers may reuse official model metadata while exposing only SSE.
-	// The native bridge can use WebSocket transport only for the official provider.
-	return model.provider === "openai-codex" && metadataSupportsWebsockets;
-}
-
 class ResponseState {
 	readonly #output: AssistantMessage;
 	readonly #stream: AssistantMessageEventStream;

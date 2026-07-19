@@ -116,7 +116,7 @@ export function parseModelResolution(
 	}
 	return {
 		model,
-		shellSurface: parseShellSurface(root.shellSurface, model),
+		shellSurface: parseShellSurface(root.shellSurface),
 		autoCompactTokenLimit: parseAutoCompactTokenLimit(root.autoCompactTokenLimit),
 	};
 }
@@ -214,20 +214,9 @@ function managedToolNames(value: unknown): ManagedToolName[] {
 	return names as ManagedToolName[];
 }
 
-function parseShellSurface(value: unknown, model: Record<string, unknown>): ShellSurface {
+function parseShellSurface(value: unknown): ShellSurface {
 	if (value === "unified-exec" || value === "shell-command" || value === "disabled") return value;
-	const shellType = model.shell_type;
-	if (shellType === "unified_exec") return "unified-exec";
-	if (shellType === "disabled") return "disabled";
-	if (
-		shellType === "default" ||
-		shellType === "local" ||
-		shellType === "shell_command" ||
-		shellType === undefined
-	) {
-		return "shell-command";
-	}
-	throw metadataError("OpenAI Codex model metadata did not include a shell surface");
+	throw metadataError("OpenAI Codex model metadata did not include a valid shell surface");
 }
 
 function parseAutoCompactTokenLimit(value: unknown): number | null {

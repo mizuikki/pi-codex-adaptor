@@ -2,9 +2,10 @@ import { describe, expect, test } from "bun:test";
 import { CodexCompactionCoordinator } from "../../src/application/compaction.ts";
 import type { ConfigurationService } from "../../src/application/configuration.ts";
 import type { DiagnosticsSnapshot } from "../../src/application/diagnostics.ts";
+import type { ResolveEffectiveCapabilities } from "../../src/application/resolve-effective-capabilities.ts";
 import { type CodexConfig, createDefaultConfig } from "../../src/domain/config.ts";
 import { SettingsModel } from "../../src/ui/terminal/settings-model.ts";
-import { SettingsOverlay } from "../../src/ui/terminal/settings-overlay.ts";
+import { openSettingsOverlay, SettingsOverlay } from "../../src/ui/terminal/settings-overlay.ts";
 
 function diagnostics(): DiagnosticsSnapshot {
 	return {
@@ -50,6 +51,7 @@ function createCtx(options?: {
 }) {
 	const notifications: string[] = [];
 	let compactCalls = 0;
+	let customCalls = 0;
 	const ctx = {
 		hasUI: true,
 		mode: "tui",
@@ -84,6 +86,7 @@ function createCtx(options?: {
 				return undefined;
 			},
 			async custom() {
+				customCalls += 1;
 				return undefined;
 			},
 		},
@@ -91,14 +94,33 @@ function createCtx(options?: {
 		get compactCalls() {
 			return compactCalls;
 		},
+		get customCalls() {
+			return customCalls;
+		},
 	};
 	return ctx as unknown as ConstructorParameters<typeof SettingsOverlay>[2] & {
 		notifications: string[];
 		compactCalls: number;
+		customCalls: number;
 	};
 }
 
 describe("settings overlay disposal", () => {
+	test("opens with reduced capability context when resolution fails", async () => {
+		const service = createService();
+		const ctx = createCtx();
+		const resolver = {
+			async resolve() {
+				throw new Error("fixture capability failure");
+			},
+		} as unknown as ResolveEffectiveCapabilities;
+
+		await openSettingsOverlay(ctx, service, undefined, undefined, undefined, resolver);
+
+		expect(ctx.notifications).toEqual(["Codex effective capabilities could not be resolved"]);
+		expect(ctx.customCalls).toBe(1);
+	});
+
 	test("Kitty escape closes a pristine overlay", () => {
 		const service = createService();
 		const ctx = createCtx();

@@ -102,6 +102,24 @@ describe("effective capability application use case", () => {
 		});
 		expect(same).toBe(first);
 		expect(runtime.resolveToolsCalls).toBe(1);
+		const unrelated = await resolver.resolve({
+			modelId: "gpt-5.5",
+			providerId: "openai-codex",
+			config: {
+				...config,
+				activation: { providers: ["custom-provider"] },
+				security: { approvalPolicy: "bypass" },
+				codex: {
+					...config.codex,
+					serviceTier: "priority",
+					verbosity: "high",
+					transport: { mode: "sse" },
+				},
+				ui: { status: false },
+			},
+		});
+		expect(unrelated).toBe(first);
+		expect(runtime.resolveToolsCalls).toBe(1);
 		const changed = await resolver.resolve({
 			modelId: "gpt-5.5",
 			providerId: "openai-codex",

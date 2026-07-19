@@ -277,10 +277,18 @@ function unavailable(reason: string): Availability {
 }
 
 function stableCacheKey(input: ResolveEffectiveCapabilitiesInput): string {
+	const compaction = input.config.codex.compaction;
 	return JSON.stringify([
 		input.modelId,
 		input.providerId,
 		input.contextWindow ?? null,
-		input.config,
+		{
+			webSearchMode: input.config.codex.webSearch.mode,
+			viewImage: input.config.tools.optional.viewImage,
+			imageGeneration: input.config.tools.optional.imageGeneration,
+			backgroundSessions: input.config.tools.backgroundSessions,
+			compactionMode: compaction.mode,
+			autoCompactTokenLimit: compaction.mode === "auto" ? compaction.autoCompactTokenLimit : null,
+		},
 	]);
 }

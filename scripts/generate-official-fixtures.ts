@@ -46,7 +46,7 @@ try {
 	const result = await client.request("tools.resolve", {
 		model: fixtureModel(),
 		webSearchMode: "indexed",
-		providerContract: completeProviderContract(true, false, false, false),
+		providerContract: buildProviderContractFixture(true, false, false, false),
 		standaloneWebSearch: { featureEnabled: false, executorAvailable: false },
 		sessions: { enabled: false, executorAvailable: true },
 		shell: { allowLoginShell: false, execPermissionApprovalsEnabled: false },
@@ -125,7 +125,7 @@ async function resolveTools(
 	const result = await client.request("tools.resolve", {
 		model: fixtureModel(shellType),
 		webSearchMode: standaloneWebSearch ? "indexed" : "disabled",
-		providerContract: completeProviderContract(true, true, true, true),
+		providerContract: buildProviderContractFixture(true, true, true, true),
 		standaloneWebSearch: {
 			featureEnabled: standaloneWebSearch,
 			executorAvailable: standaloneWebSearch,
@@ -144,7 +144,7 @@ async function resolveTools(
 	return result.result as Record<string, unknown>;
 }
 
-function completeProviderContract(
+function buildProviderContractFixture(
 	hostedWebSearch: boolean,
 	namespaceTools: boolean,
 	imagesApi: boolean,

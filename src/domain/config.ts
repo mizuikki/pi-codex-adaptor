@@ -278,6 +278,7 @@ function collectCapabilityIssues(
 
 	if (
 		compaction.mode === "auto" &&
+		context.manualCompactionAvailable === undefined &&
 		capabilities !== undefined &&
 		!capabilities.has("remote_compaction_v2") &&
 		!capabilities.has("compact_endpoint")
@@ -292,6 +293,7 @@ function collectCapabilityIssues(
 
 	if (
 		compaction.mode === "auto" &&
+		context.manualCompactionAvailable === undefined &&
 		context.remoteCompactionV2 === false &&
 		context.compactEndpoint === false &&
 		(capabilities === undefined ||
@@ -308,6 +310,7 @@ function collectCapabilityIssues(
 
 	if (
 		config.codex.transport.mode === "auto" &&
+		context.transportAvailable === undefined &&
 		context.providerSupportsWebsockets === false &&
 		capabilities !== undefined &&
 		!capabilities.has("responses_sse")
@@ -322,6 +325,7 @@ function collectCapabilityIssues(
 
 	if (
 		config.codex.transport.mode === "auto" &&
+		context.transportAvailable === undefined &&
 		context.providerSupportsWebsockets !== false &&
 		capabilities !== undefined &&
 		!capabilities.has("responses_websocket") &&
@@ -337,6 +341,7 @@ function collectCapabilityIssues(
 
 	if (
 		config.codex.transport.mode === "sse" &&
+		context.transportAvailable === undefined &&
 		capabilities !== undefined &&
 		!capabilities.has("responses_sse")
 	) {
@@ -350,6 +355,7 @@ function collectCapabilityIssues(
 
 	if (
 		config.codex.webSearch.mode !== "disabled" &&
+		context.webSearchAvailable === undefined &&
 		capabilities !== undefined &&
 		!capabilities.has("standalone_web_search") &&
 		!capabilities.has("hosted_web_search")

@@ -58,9 +58,10 @@ atomic patch commit checks remain mandatory. Preauthorization for an unsupported
   compaction items are excluded from logs and default diagnostics.
 - Responses transport is implemented only by pinned official native modules. TypeScript does not add
   a second retry, SSE, or WebSocket implementation.
-- The complete provider contract is declared explicitly for every `tools.resolve` call. Required
-  provider endpoints that respond as unsupported fail with `provider_contract_mismatch`; errors name
-  only the missing capability and never include endpoint URLs, response bodies, or credentials.
+- The complete provider contract is declared explicitly for every `tools.resolve` call. Missing
+  required contract fields fail with `provider_contract_incomplete`, while provider endpoints that
+  respond as unsupported fail with `provider_contract_mismatch`. Errors name only the missing
+  capability and never include endpoint URLs, response bodies, or credentials.
 - Shell-command models may receive adaptor-owned `exec_command` and `write_stdin` schemas only when
   the verified bridge exposes the managed session executor and background sessions are enabled.
   Requests fail closed when the native executor is missing, and the provider receives one bounded

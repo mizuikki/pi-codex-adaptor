@@ -59,8 +59,7 @@ export async function openSettingsOverlay(
 				contextWindow: ctx.model.contextWindow,
 			});
 		} catch {
-			ctx.ui.notify("Codex effective capabilities could not be resolved", "error");
-			return;
+			ctx.ui.notify("Codex effective capabilities could not be resolved", "warning");
 		}
 	}
 	const snapshot = createDiagnosticsSnapshot(config, nativeDiagnostics, {

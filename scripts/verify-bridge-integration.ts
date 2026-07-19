@@ -117,7 +117,7 @@ try {
 				experimental_supported_tools: [],
 			},
 			webSearchMode: "indexed",
-			providerContract: completeProviderContract(true, true, true, true),
+			providerContract: buildProviderContractFixture(true, true, true, true),
 			standaloneWebSearch: { featureEnabled: false, executorAvailable: true },
 			sessions: { enabled: true, executorAvailable: true },
 			shell: { allowLoginShell: false, execPermissionApprovalsEnabled: false },
@@ -184,7 +184,7 @@ try {
 	server.stop();
 }
 
-function completeProviderContract(
+function buildProviderContractFixture(
 	hostedWebSearch: boolean,
 	namespaceTools: boolean,
 	imagesApi: boolean,

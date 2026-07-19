@@ -31,6 +31,25 @@ describe("capability resolution", () => {
 		);
 		expect(resolved.shellSurface).toBe("unified-exec");
 		expect(resolved.autoCompactTokenLimit).toBe(90_000);
+		expect(() =>
+			parseModelResolution(
+				{
+					model: { slug: "fixture-model", shell_type: "unified_exec" },
+					autoCompactTokenLimit: 90_000,
+				},
+				"fixture-model",
+			),
+		).toThrow(/valid shell surface/);
+		expect(() =>
+			parseModelResolution(
+				{
+					model: { slug: "fixture-model", shell_type: "unified_exec" },
+					shellSurface: "future-shell",
+					autoCompactTokenLimit: 90_000,
+				},
+				"fixture-model",
+			),
+		).toThrow(/valid shell surface/);
 	});
 
 	test("owns the complete provider contract outside model metadata", () => {

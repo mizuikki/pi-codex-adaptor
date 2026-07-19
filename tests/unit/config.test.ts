@@ -184,6 +184,49 @@ describe("versioned product configuration", () => {
 		);
 	});
 
+	test("reports one issue when effective availability supersedes raw bridge evidence", () => {
+		const config = createDefaultConfig();
+		const cases = [
+			{
+				path: "codex.webSearch.mode",
+				context: {
+					bridgeCapabilities: ["responses_sse", "remote_compaction_v2"],
+					webSearchAvailable: false,
+				},
+			},
+			{
+				path: "codex.compaction.mode",
+				context: {
+					bridgeCapabilities: ["responses_sse", "standalone_web_search"],
+					manualCompactionAvailable: false,
+				},
+			},
+			{
+				path: "codex.transport.mode",
+				context: {
+					bridgeCapabilities: ["remote_compaction_v2", "standalone_web_search"],
+					transportAvailable: false,
+					providerSupportsWebsockets: false,
+				},
+			},
+		];
+
+		for (const item of cases) {
+			try {
+				validateConfigForSave(config, item.context);
+				expect.unreachable();
+			} catch (error) {
+				expect(error).toBeInstanceOf(ConfigurationError);
+				const matching = (error as ConfigurationError).issues.filter(
+					(issue) => issue.path === item.path,
+				);
+				expect(matching).toEqual([
+					expect.objectContaining({ path: item.path, code: "capability_unavailable" }),
+				]);
+			}
+		}
+	});
+
 	test("exposes explicit unsupported and disabled reasons without inventing availability", () => {
 		const config = createDefaultConfig();
 		config.tools.backgroundSessions = true;
