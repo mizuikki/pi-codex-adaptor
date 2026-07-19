@@ -345,18 +345,33 @@ function registerNativeTool(
 					details: { status: result.status, detail: details.detail },
 				};
 			}
-			const output = typeof details.output === "string" ? details.output : streamedOutput;
+			const output = modelVisibleNativeToolResult(result.status, details, streamedOutput);
 			return {
 				content: [
 					{
 						type: "text",
-						text: output.length > 0 ? output : `Command ${result.status}`,
+						text: output,
 					},
 				],
 				details: { status: result.status, ...details },
 			};
 		},
 	});
+}
+
+function modelVisibleNativeToolResult(
+	status: string,
+	details: Record<string, unknown>,
+	streamedOutput: string,
+): string {
+	const output = typeof details.output === "string" ? details.output : streamedOutput;
+	const metadata: Record<string, unknown> = { status };
+	for (const [key, value] of Object.entries(details)) {
+		if (key !== "output" && key !== "status") metadata[key] = value;
+	}
+	const serializedMetadata = JSON.stringify(metadata);
+	if (output.length === 0) return serializedMetadata;
+	return `${output}${output.endsWith("\n") ? "" : "\n"}${serializedMetadata}`;
 }
 
 export function nativeAuthorizationFor(policy: ApprovalPolicy): NativeAuthorization {

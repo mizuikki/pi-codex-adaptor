@@ -66,6 +66,9 @@ describe("fake Pi + real native lifecycle", () => {
 			);
 		const sessionId = (started?.details as { session_id?: unknown } | undefined)?.session_id;
 		expect(typeof sessionId).toBe("number");
+		expect(started?.content).toEqual([
+			{ type: "text", text: expect.stringContaining(`"session_id":${String(sessionId)}`) },
+		]);
 
 		const completed = await pi.tools
 			.get("write_stdin")
@@ -78,6 +81,9 @@ describe("fake Pi + real native lifecycle", () => {
 			);
 		expect(completed?.content).toEqual([
 			{ type: "text", text: expect.stringContaining("received:fixture-input") },
+		]);
+		expect(completed?.content).toEqual([
+			{ type: "text", text: expect.stringContaining('"exit_code":0') },
 		]);
 		expect((completed?.details as { exit_code?: unknown } | undefined)?.exit_code).toBe(0);
 

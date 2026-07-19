@@ -363,6 +363,12 @@ describe("Pi core tool activation", () => {
 		});
 		expect(runtime.approvalDecision).toBe("decline");
 		expect(updates).toHaveLength(1);
+		expect(command?.content).toEqual([
+			{
+				type: "text",
+				text: 'fixture output\n{"status":"completed","exit_code":0}',
+			},
+		]);
 		expect(command?.details).toMatchObject({ status: "completed", exit_code: 0 });
 
 		const image = await tools
