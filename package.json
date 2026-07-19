@@ -52,6 +52,7 @@
     "check:native": "bun scripts/check-native.ts",
     "test:bridge": "bun scripts/check-native.ts",
     "build:native": "bun scripts/build-native.ts",
+    "native:local": "bun scripts/prepare-local-native.ts",
     "pack:assemble": "bun scripts/assemble-package.ts",
     "pack:verify": "bun scripts/verify-package.ts",
     "release:verify": "bun scripts/verify-release.ts",

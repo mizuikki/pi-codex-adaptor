@@ -43,37 +43,26 @@ planned npm source after the first release.
 Pi installs local paths by reference (no copy). Prefer an absolute path. Use `-l` to write project
 settings (`.pi/settings.json`) instead of user settings (`~/.pi/agent/settings.json`).
 
-1. Install dependencies and build the native bridge for your host target:
+1. Install dependencies, then build, install, and verify the release bridge for the current host:
 
 ```sh
 bun ci
-
-# Linux x64
-TARGET=x86_64-unknown-linux-musl
-# Linux arm64: aarch64-unknown-linux-musl
-# macOS arm64: aarch64-apple-darwin
-# macOS x64: x86_64-apple-darwin
-# Windows x64: x86_64-pc-windows-msvc
-
-bun run build:native -- --target "$TARGET"
+bun run native:local
 ```
 
-2. Assemble the packaged layout under `native/bin/<target>/` (executable plus
-   `native-artifact.json`). The extension loads that tree from the package root:
+The command infers the host target, embeds the current Git commit, assembles the executable and
+`native-artifact.json`, transactionally replaces `native/bin/<target>/`, and verifies the checksum
+and executable identity. A failed verification restores the previous installed artifact.
 
 ```sh
-bun scripts/assemble-native-artifact.ts \
-  --target "$TARGET" \
-  --executable "native/target/$TARGET/debug/codex-bridge" \
-  --source-commit "$(git rev-parse HEAD)"
-
-mkdir -p native/bin
-cp -a "native/artifacts/$TARGET" native/bin/
+bun run native:local -- --debug
+bun run native:local -- --target aarch64-unknown-linux-musl
+bun run native:local -- --check
 ```
 
-On Windows, use `codex-bridge.exe` as the executable name.
+Cross-target builds verify the manifest and checksum but skip executing the foreign binary.
 
-3. Install into Pi:
+2. Install into Pi:
 
 ```sh
 pi install /absolute/path/to/pi-codex-adaptor
@@ -83,9 +72,9 @@ pi install /absolute/path/to/pi-codex-adaptor
 # pi -e /absolute/path/to/pi-codex-adaptor
 ```
 
-4. Confirm with `pi list`. After install, `/codex` opens the settings overlay. TypeScript changes in
-   this checkout apply on Pi restart or `/reload`; native changes require rebuilding and re-copying
-   into `native/bin`.
+3. Confirm with `pi list`. After install, `/codex` opens the settings overlay. TypeScript changes in
+this checkout apply on Pi restart or `/reload`; native changes require rerunning
+`bun run native:local`.
 
 `package.json` version `0.0.0` enables development bridge handshakes. Packaged launches still require
 a verified `native/bin/<target>/` artifact for the host triple above. `native/artifacts/` alone is not
