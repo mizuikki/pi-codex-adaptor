@@ -79,6 +79,7 @@ use serde_json::Value;
 use serde_json::json;
 use tokio::io::AsyncBufRead;
 use tokio::io::AsyncBufReadExt;
+use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWrite;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
@@ -1763,9 +1764,27 @@ async fn view_image(
     )
     .await?;
     ensure_not_cancelled(cancellation)?;
-    let bytes = tokio::fs::read(&path)
+    let file = tokio::fs::File::open(&path)
         .await
         .map_err(|_| image_error("image_unavailable", "the requested image could not be read"))?;
+    let metadata = file
+        .metadata()
+        .await
+        .map_err(|_| image_error("image_unavailable", "the requested image is unavailable"))?;
+    if !metadata.is_file() {
+        return Err(image_error("image_not_file", "the requested image is not a file").into());
+    }
+    if metadata.len() > MAX_IMAGE_SOURCE_BYTES {
+        return Err(image_error("image_too_large", "the requested image is too large").into());
+    }
+    let mut bytes = Vec::new();
+    file.take(MAX_IMAGE_SOURCE_BYTES.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .await
+        .map_err(|_| image_error("image_unavailable", "the requested image could not be read"))?;
+    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > MAX_IMAGE_SOURCE_BYTES {
+        return Err(image_error("image_too_large", "the requested image is too large").into());
+    }
     let mode = if detail == "original" {
         codex_utils_image::PromptImageMode::Original
     } else {
@@ -5088,6 +5107,85 @@ mod tests {
                 .unwrap_or_default()
                 .starts_with("data:image/png;base64,")
         );
+        tokio::fs::remove_dir_all(workspace)
+            .await
+            .expect("fixture directory should be removed");
+    }
+
+    #[tokio::test]
+    async fn rejects_an_image_that_exceeds_the_limit_while_approval_is_pending() {
+        let workspace = std::env::temp_dir().join(format!(
+            "pi-codex-adaptor-image-growth-fixture-{}",
+            std::process::id()
+        ));
+        let _ = tokio::fs::remove_dir_all(&workspace).await;
+        tokio::fs::create_dir_all(&workspace)
+            .await
+            .expect("fixture directory should be created");
+        let image_path = workspace.join("fixture.png");
+        tokio::fs::write(&image_path, FIXTURE_PNG)
+            .await
+            .expect("fixture image should be written");
+        let (output, mut messages) = mpsc::channel(8);
+        let flow = Arc::new(FlowController::new(
+            "request-growing-image".to_owned(),
+            output,
+        ));
+        let approvals = Arc::new(Mutex::new(HashMap::new()));
+        let sessions = Arc::new(NativeSessions::default());
+        let cancellation = CancellationToken::new();
+        let task_flow = Arc::clone(&flow);
+        let task_approvals = Arc::clone(&approvals);
+        let task_sessions = Arc::clone(&sessions);
+        let task_cancellation = cancellation.clone();
+        let task_workspace = workspace.clone();
+        let task_image_path = image_path.clone();
+        let request = tokio::spawn(async move {
+            tools_execute(
+                "request-growing-image",
+                json!({
+                    "tool": "view_image",
+                    "authorization": "require_approval",
+                    "path": task_image_path,
+                    "detail": "original",
+                    "workspaceRoots": [task_workspace],
+                }),
+                &task_flow,
+                &task_cancellation,
+                &task_flow.output,
+                &task_approvals,
+                &task_sessions,
+            )
+            .await
+        });
+        assert!(matches!(
+            messages.recv().await,
+            Some(ServerMessage::ApprovalRequest {
+                approval: ApprovalRequest {
+                    operation: ApprovalOperation::Filesystem,
+                    ..
+                },
+                ..
+            })
+        ));
+        tokio::fs::OpenOptions::new()
+            .write(true)
+            .open(&image_path)
+            .await
+            .expect("fixture image should open")
+            .set_len(MAX_IMAGE_SOURCE_BYTES.saturating_add(1))
+            .await
+            .expect("fixture image should grow");
+        resolve_only_pending_approval(&approvals, ApprovalDecision::AllowOnce).await;
+        let error = request
+            .await
+            .expect("image task should join")
+            .expect_err("grown image should be rejected");
+        assert!(matches!(
+            error,
+            RequestFailure::Bridge(BridgeError { ref code, .. }) if code == "image_too_large"
+        ));
+        assert!(approvals.lock().await.is_empty());
         tokio::fs::remove_dir_all(workspace)
             .await
             .expect("fixture directory should be removed");
