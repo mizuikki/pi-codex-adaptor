@@ -1,6 +1,6 @@
 # Bridge Protocol
 
-Protocol version 2 is a bounded newline-delimited JSON channel between the TypeScript host and the
+Protocol version 3 is a bounded newline-delimited JSON channel between the TypeScript host and the
 single native `codex-bridge` process. Each line contains exactly one object and is limited to
 16 MiB, excluding the line terminator. The bridge advertises a maximum of 256 unacknowledged stream
 events and reports paused and resumed backpressure states.
@@ -10,7 +10,7 @@ non-secret client identity. The handshake returns protocol,
 official Codex, native target, project source, vendor tree, frame limit, and compiled capability
 identity. A protocol or official baseline mismatch is fatal and must not be downgraded.
 
-Protocol v2 requires an explicit host-owned authorization value on every `tools.execute` params
+Protocol v3 requires an explicit host-owned authorization value on every `tools.execute` params
 object: `authorization: "require_approval" | "preauthorized"`. The `session_write` control frame
 also requires the same field, including when `data` is empty. Missing or unknown values fail closed
 as invalid parameters; there is no implicit default and the field is not part of any model-visible
@@ -49,14 +49,16 @@ Account rate-limit events are consumed and discarded at the native boundary.
 `models.resolve` accepts an exact `{ "modelId": string }` and is credential-free and network-free. It
 uses the pinned Codex model metadata closure, applying exact slug, longest-prefix, one-namespace
 suffix, and official unknown-model fallback rules. It returns the canonical model record together
-with its resolved compaction threshold, shell surface, and complete Codex provider capability
-contract.
+with its resolved compaction threshold and shell surface. Provider capabilities are product-owned
+inputs and are not inferred from model metadata.
 
-`tools.resolve` accepts validated official model metadata and explicit host capability inputs. It
-returns model-visible and dispatch-only official tool JSON, plus shell/web resolution and reason.
-Unified Exec keeps `shell_command` dispatch-only, and Responses Lite never receives a hosted web
-tool. This method resolves contracts only; unsupported native executors are not advertised as bridge
-capabilities.
+`tools.resolve` accepts validated official model metadata, the complete provider contract, explicit
+session executor evidence, and optional feature policy. It returns model-visible and dispatch-only
+tool JSON, authoritative local and hosted names, shell/session/web surfaces, and structured
+availability evidence. When enabled for a shell-command model, managed sessions append the exact
+pinned `exec_command` and `write_stdin` schemas while retaining `shell_command` as the primary
+bounded surface. Unified Exec keeps `shell_command` dispatch-only, disabled shells are never
+supplemented, and missing required executor evidence fails closed.
 
 `tools.execute` accepts the official shell surfaces with a command, canonical workspace roots, and
 working directory. TypeScript constructs params from an adaptor-owned allowlist; model arguments are
@@ -136,8 +138,8 @@ preserved exactly; native code maps it to an effectively unbounded stream idle t
 between `86400001` and `2147483646`, zero, and any larger number remain invalid. Websocket connect
 timeouts stay finite-only within the same 24-hour bound and do not accept the disabled sentinel.
 
-The canonical v2 examples are [client-v2.jsonl](../fixtures/bridge-protocol/client-v2.jsonl) and
-[server-v2.jsonl](../fixtures/bridge-protocol/server-v2.jsonl). Rust contract tests decode every
+The canonical v3 examples are [client-v3.jsonl](../fixtures/bridge-protocol/client-v3.jsonl) and
+[server-v3.jsonl](../fixtures/bridge-protocol/server-v3.jsonl). Rust contract tests decode every
 recorded frame and enforce size, one-frame, unknown-field, opaque-event, required authorization,
 advertised approval order, `allow_session` rejection, zero-frame bypass behavior, and safe
 malformed-frame behavior.

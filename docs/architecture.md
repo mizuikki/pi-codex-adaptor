@@ -21,6 +21,12 @@ The TypeScript/native boundary is a bounded, versioned JSONL protocol. OpenAI wi
 specifications have one native source of truth. TypeScript validates only adaptor-owned envelopes and
 does not maintain a second Responses schema.
 
+`ResolveEffectiveCapabilities` is the application-owned authority for one selected model, provider,
+verified bridge identity, and configuration fingerprint. Provider requests, Pi tool activation,
+compaction, settings, validation, status, and diagnostics consume the same cached snapshot. Native
+`models.resolve` owns model metadata and native `tools.resolve` owns exact model-visible and dispatch
+tool schemas; TypeScript does not reconstruct either result.
+
 Pi owns the persistent approval policy and maps one validated snapshot to one explicit authorization
 value on each native request. The integration layer never infers bypass from UI availability and does
 not cache authorization across calls. Native code owns the explicit allowlist, strict decoding,

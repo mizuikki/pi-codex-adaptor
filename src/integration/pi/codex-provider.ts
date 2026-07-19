@@ -14,10 +14,11 @@ import { CodexCompactionStore } from "../../application/compaction.ts";
 import type { ConfigurationService } from "../../application/configuration.ts";
 import type { ProviderActivationPolicy } from "../../application/provider-activation.ts";
 import {
-	buildToolsResolveParams,
-	CapabilityError,
-	parseModelResolution,
-} from "../../domain/capability.ts";
+	type EffectiveCapabilitySnapshot,
+	ResolveEffectiveCapabilities,
+	withSupplementalSessionInstructions,
+} from "../../application/resolve-effective-capabilities.ts";
+import { CapabilityError } from "../../domain/capability.ts";
 import { createProviderConnection } from "./provider-connection.ts";
 
 export function createCodexStreamSimple(
@@ -25,6 +26,7 @@ export function createCodexStreamSimple(
 	configuration: ConfigurationService,
 	activation: ProviderActivationPolicy,
 	compactions = new CodexCompactionStore(),
+	capabilities = new ResolveEffectiveCapabilities(runtime),
 ): (
 	model: Model<string>,
 	context: Context,
@@ -38,6 +40,7 @@ export function createCodexStreamSimple(
 			configuration,
 			compactions,
 			activation,
+			capabilities,
 			model,
 			context,
 			options,
@@ -52,6 +55,7 @@ async function runResponse(
 	configuration: ConfigurationService,
 	compactions: CodexCompactionStore,
 	activation: ProviderActivationPolicy,
+	capabilities: ResolveEffectiveCapabilities,
 	model: Model<string>,
 	context: Context,
 	options: SimpleStreamOptions | undefined,
@@ -67,20 +71,13 @@ async function runResponse(
 		}
 		const connection = createProviderConnection(model, options);
 		const config = await configuration.load();
-		const resolution = parseModelResolution(await runtime.resolveModel(model.id), model.id);
-		const toolResolution = record(
-			await runtime.resolveTools(
-				buildToolsResolveParams(resolution, {
-					webSearchMode: config.codex.webSearch.mode,
-					viewImage: config.tools.optional.viewImage === "auto",
-					imageGeneration: config.tools.optional.imageGeneration === "auto",
-					standaloneWebSearchExecutorAvailable: true,
-				}),
-			),
-		);
-		const officialTools = Array.isArray(toolResolution?.modelTools)
-			? toolResolution.modelTools
-			: [];
+		const snapshot = await capabilities.resolve({
+			modelId: model.id,
+			providerId: model.provider,
+			config,
+			contextWindow: model.contextWindow,
+		});
+		const officialTools = snapshot.modelTools;
 		let request: unknown = buildRequest(
 			model,
 			context,
@@ -88,6 +85,7 @@ async function runResponse(
 			config.codex,
 			officialTools,
 			compactions,
+			snapshot,
 		);
 		const replacement = await options?.onPayload?.(request, model);
 		if (replacement !== undefined) request = replacement;
@@ -96,10 +94,7 @@ async function runResponse(
 			connection,
 			request,
 			transportMode: config.codex.transport.mode,
-			providerSupportsWebsockets: supportsProviderWebsockets(
-				model,
-				resolution.provider.supportsWebsockets,
-			),
+			providerSupportsWebsockets: snapshot.providerSupportsWebsockets,
 			...(options?.signal === undefined ? {} : { signal: options.signal }),
 			onEvent: (event) => state.accept(event),
 		});
@@ -123,15 +118,6 @@ async function runResponse(
 		stream.push({ type: "error", reason: output.stopReason, error: output });
 		stream.end();
 	}
-}
-
-export function supportsProviderWebsockets(
-	model: Pick<Model<string>, "provider">,
-	metadataSupportsWebsockets: boolean,
-): boolean {
-	// Custom Pi providers may reuse official model metadata while exposing only SSE.
-	// The native bridge can use WebSocket transport only for the official provider.
-	return model.provider === "openai-codex" && metadataSupportsWebsockets;
 }
 
 class ResponseState {
@@ -405,6 +391,7 @@ function buildRequest(
 	},
 	officialTools: readonly unknown[],
 	compactions: CodexCompactionStore,
+	capabilities: EffectiveCapabilitySnapshot,
 ): unknown {
 	const officialNames = officialToolNames(officialTools);
 	const piTools = context.tools
@@ -429,7 +416,7 @@ function buildRequest(
 	const canonicalPrefix = messages === context.messages ? [] : (snapshot?.output ?? []);
 	return {
 		model: model.id,
-		instructions: context.systemPrompt ?? "",
+		instructions: withSupplementalSessionInstructions(context.systemPrompt ?? "", capabilities),
 		input: [...canonicalPrefix, ...responseItemsFromMessages(messages)],
 		tools: tools.length === 0 ? null : tools,
 		tool_choice: "auto",

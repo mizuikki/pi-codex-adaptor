@@ -1,6 +1,35 @@
 {
+  "capabilities": {
+    "applyPatch": {
+      "source": "official",
+      "status": "available"
+    },
+    "imageGeneration": {
+      "reason": "disabled_by_configuration",
+      "status": "disabled"
+    },
+    "sessions": {
+      "reason": "model_shell_disabled",
+      "status": "unavailable"
+    },
+    "viewImage": {
+      "reason": "disabled_by_configuration",
+      "status": "disabled"
+    },
+    "webSearch": {
+      "source": "provider-contract",
+      "status": "available"
+    }
+  },
   "dispatchTools": [],
+  "hostedToolNames": [
+    "web_search"
+  ],
   "imageGenerationSurface": "disabled",
+  "localToolNames": [
+    "update_plan",
+    "apply_patch"
+  ],
   "modelTools": [
     {
       "description": "Updates the task plan.\nProvide an optional explanation and a list of plan items, each with a step and status.\nAt most one step can be in_progress at a time.\n",
@@ -64,6 +93,7 @@
       "type": "web_search"
     }
   ],
+  "sessionSurface": "unavailable",
   "shellSurface": "disabled",
   "webReason": "hosted_provider_capability",
   "webSurface": "hosted"

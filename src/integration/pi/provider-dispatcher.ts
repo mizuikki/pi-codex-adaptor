@@ -16,6 +16,7 @@ import type { CodexRuntime } from "../../application/codex-runtime.ts";
 import { CodexCompactionStore } from "../../application/compaction.ts";
 import type { ConfigurationService } from "../../application/configuration.ts";
 import type { ProviderActivationPolicy } from "../../application/provider-activation.ts";
+import type { ResolveEffectiveCapabilities } from "../../application/resolve-effective-capabilities.ts";
 import { createCodexStreamSimple } from "./codex-provider.ts";
 
 /** Direct Pi-native `openai-responses` stream; never consults the API registry. */
@@ -31,11 +32,18 @@ export function createCodexProviderDispatchers(
 	configuration: ConfigurationService,
 	activation: ProviderActivationPolicy,
 	compactions = new CodexCompactionStore(),
+	capabilities?: ResolveEffectiveCapabilities,
 ): {
 	codexResponses: StreamSimpleDispatcher;
 	openAiResponses: StreamSimpleDispatcher;
 } {
-	const codex = createCodexStreamSimple(runtime, configuration, activation, compactions);
+	const codex = createCodexStreamSimple(
+		runtime,
+		configuration,
+		activation,
+		compactions,
+		capabilities,
+	);
 	return {
 		codexResponses: createDispatcher(activation, codex, piNativeOpenAiCodexResponsesStreamSimple),
 		openAiResponses: createDispatcher(activation, codex, piNativeOpenAiResponsesStreamSimple),

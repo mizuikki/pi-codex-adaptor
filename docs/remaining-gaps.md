@@ -4,6 +4,11 @@ This list tracks Codex `0.144.3` capabilities outside the first stable release. 
 implementation and conformance are both complete. A similar Pi feature is not automatically
 equivalent to the official contract.
 
+The core shell surface is complete for this baseline: shell-command models retain bounded commands
+and receive the exact pinned managed-session contracts when background sessions are enabled. This is
+covered by protocol-v3 resolver, execution, Pi lifecycle, and bundled-catalog reachability tests and
+is therefore not tracked as a remaining gap.
+
 ## P1
 
 - [ ] `request_user_input`: structured model questions, turn suspension, cancellation, headless

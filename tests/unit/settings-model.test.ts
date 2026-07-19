@@ -26,6 +26,26 @@ describe("settings view model", () => {
 		expect(view.state).toBe("pristine");
 	});
 
+	test("keeps background sessions reversible after they are disabled", () => {
+		const config = createDefaultConfig();
+		config.tools.backgroundSessions = false;
+		const view = new SettingsModel(config, {
+			baseline: "0.144.3",
+			provider: "openai-codex",
+			model: "fixture-model",
+			bridge: "protocol v3",
+		});
+
+		view.setCategory("Tools");
+		expect(view.rows().find((row) => row.id === "backgroundSessions")).toMatchObject({
+			value: "off",
+			enabled: true,
+		});
+		view.toggleFocused();
+		expect(view.draft.tools.backgroundSessions).toBe(true);
+		expect(view.state).toBe("dirty");
+	});
+
 	test("supports wide, medium, and narrow layouts", () => {
 		const view = model();
 		expect(view.layoutFor(120)).toBe("wide");

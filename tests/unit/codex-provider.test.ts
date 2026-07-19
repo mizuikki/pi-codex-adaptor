@@ -14,6 +14,7 @@ import {
 } from "../../src/application/compaction.ts";
 import type { ConfigurationService } from "../../src/application/configuration.ts";
 import { ProviderActivationPolicy } from "../../src/application/provider-activation.ts";
+import { SUPPLEMENTAL_SESSION_INSTRUCTIONS } from "../../src/application/resolve-effective-capabilities.ts";
 import { type CodexConfig, createDefaultConfig } from "../../src/domain/config.ts";
 import { createCodexStreamSimple } from "../../src/integration/pi/codex-provider.ts";
 
@@ -21,6 +22,7 @@ class FixtureRuntime implements CodexRuntime {
 	request: CreateResponseOptions | undefined;
 	lastToolsParams: Record<string, unknown> | undefined;
 	calls = 0;
+	shellSurface: "unified-exec" | "shell-command" = "unified-exec";
 
 	async createResponse(options: CreateResponseOptions): Promise<CreateResponseResult> {
 		this.calls += 1;
@@ -87,10 +89,29 @@ class FixtureRuntime implements CodexRuntime {
 		throw new Error("fixture compaction is not configured");
 	}
 
+	async readDiagnostics(): Promise<unknown> {
+		return {
+			capabilities: [
+				"responses_sse",
+				"responses_websocket",
+				"remote_compaction_v2",
+				"compact_endpoint",
+				"update_plan",
+				"unified_exec",
+				"shell_command",
+				"apply_patch",
+				"view_image",
+				"image_generation",
+				"standalone_web_search",
+				"hosted_web_search",
+			],
+		};
+	}
+
 	async resolveModel(modelId: string): Promise<unknown> {
 		return {
 			model: { slug: modelId },
-			shellSurface: "unified-exec",
+			shellSurface: this.shellSurface,
 			autoCompactTokenLimit: 90_000,
 			provider: {
 				name: "Codex",
@@ -105,7 +126,9 @@ class FixtureRuntime implements CodexRuntime {
 
 	async resolveTools(params: unknown): Promise<unknown> {
 		const root = params as Record<string, unknown>;
-		const provider = root.provider as Record<string, unknown>;
+		const provider = root.providerContract as Record<string, unknown>;
+		const sessions = root.sessions as Record<string, unknown>;
+		const supplemental = this.shellSurface === "shell-command" && sessions.enabled === true;
 		// Capture for assertions that tools.resolve no longer receives hard-coded host guesses only.
 		this.lastToolsParams = root;
 		return {
@@ -120,7 +143,30 @@ class FixtureRuntime implements CodexRuntime {
 				...(provider.hostedWebSearch === true
 					? [{ type: "web_search", indexed_web_access: true }]
 					: []),
+				...(supplemental
+					? [
+							{ type: "function", name: "shell_command" },
+							{ type: "function", name: "exec_command" },
+							{ type: "function", name: "write_stdin" },
+						]
+					: []),
 			],
+			dispatchTools: [{ type: "function", name: "shell_command" }],
+			localToolNames: supplemental
+				? ["update_plan", "shell_command", "exec_command", "write_stdin"]
+				: ["update_plan", "exec_command", "write_stdin"],
+			hostedToolNames: provider.hostedWebSearch === true ? ["web_search"] : [],
+			shellSurface: this.shellSurface,
+			sessionSurface: supplemental ? "supplemental" : "official",
+			webSurface: provider.hostedWebSearch === true ? "hosted" : "unsupported",
+			imageGenerationSurface: "disabled",
+			capabilities: {
+				sessions: { status: "available", source: "official" },
+				applyPatch: { status: "unavailable", reason: "model_apply_patch_disabled" },
+				viewImage: { status: "disabled", reason: "disabled_by_configuration" },
+				imageGeneration: { status: "disabled", reason: "disabled_by_configuration" },
+				webSearch: { status: "available", source: "provider-contract" },
+			},
 		};
 	}
 
@@ -330,15 +376,50 @@ describe("Pi Codex provider adapter", () => {
 			{ type: "web_search", indexed_web_access: true },
 		]);
 		expect(runtime.request?.providerSupportsWebsockets).toBe(true);
-		expect(runtime.lastToolsParams?.provider).toEqual({
+		expect(runtime.lastToolsParams?.providerContract).toMatchObject({
 			hostedWebSearch: true,
 			namespaceTools: true,
-			imageGeneration: true,
+			imagesApi: true,
+			searchApi: true,
+		});
+		expect(runtime.lastToolsParams?.sessions).toEqual({
+			enabled: true,
+			executorAvailable: true,
 		});
 		expect(runtime.lastToolsParams?.standaloneWebSearch).toEqual({
 			featureEnabled: false,
 			executorAvailable: true,
 		});
+	});
+
+	test("adds supplemental session guidance exactly once", async () => {
+		const runtime = new FixtureRuntime();
+		runtime.shellSurface = "shell-command";
+		const streamSimple = createCodexStreamSimple(
+			runtime,
+			configuration(),
+			new ProviderActivationPolicy(configuration()),
+			new CodexCompactionStore(),
+		);
+		for await (const _event of streamSimple(model, context, { apiKey: fixtureToken() })) {
+			// drain the response
+		}
+		const request = runtime.request?.request as Record<string, unknown>;
+		const instructions = request.instructions as string;
+		expect(instructions.split(SUPPLEMENTAL_SESSION_INSTRUCTIONS).length - 1).toBe(1);
+		expect(request.tools).toEqual([
+			{
+				type: "function",
+				name: "update_plan",
+				description: "official fixture tool",
+				parameters: { type: "object", properties: {} },
+				strict: false,
+			},
+			{ type: "web_search", indexed_web_access: true },
+			{ type: "function", name: "shell_command" },
+			{ type: "function", name: "exec_command" },
+			{ type: "function", name: "write_stdin" },
+		]);
 	});
 
 	test("treats non-JWT provider credentials as API keys", async () => {

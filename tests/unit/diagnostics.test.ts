@@ -15,7 +15,7 @@ const CHECKSUM = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcd
 describe("redacted diagnostics", () => {
 	test("exports only the allowlisted bridge identity fields by default", () => {
 		const snapshot = createDiagnosticsSnapshot(createDefaultConfig(), {
-			bridgeProtocolVersion: 2,
+			bridgeProtocolVersion: 3,
 			officialCodexVersion: "0.144.3",
 			capabilities: ["responses_sse"],
 			prompt: "private prompt",
@@ -32,7 +32,7 @@ describe("redacted diagnostics", () => {
 				supportedApis: ["openai-responses", "openai-codex-responses"],
 			},
 			bridge: {
-				bridgeProtocolVersion: 2,
+				bridgeProtocolVersion: 3,
 				officialCodexVersion: "0.144.3",
 				capabilities: ["responses_sse"],
 			},
@@ -44,7 +44,7 @@ describe("redacted diagnostics", () => {
 		const snapshot = createDiagnosticsSnapshot(
 			createDefaultConfig(),
 			{
-				bridgeProtocolVersion: 2,
+				bridgeProtocolVersion: 3,
 				officialCodexTag: "rust-v0.144.3",
 				officialSourceCommit: "78ad6e6bfd1d3b6a209acd3ef82172a96b25179c",
 				buildTarget: "x86_64-unknown-linux-musl",
@@ -93,7 +93,7 @@ describe("redacted diagnostics", () => {
 			pi: { version: "0.80.6" },
 			runtime: { os: "linux", arch: "x64" },
 			bridge: {
-				bridgeProtocolVersion: 2,
+				bridgeProtocolVersion: 3,
 				officialCodexTag: "rust-v0.144.3",
 				officialSourceCommit: "78ad6e6bfd1d3b6a209acd3ef82172a96b25179c",
 				buildTarget: "x86_64-unknown-linux-musl",
@@ -144,7 +144,7 @@ describe("redacted diagnostics", () => {
 			},
 		};
 		const snapshot = createDiagnosticsSnapshot(createDefaultConfig(), {
-			bridgeProtocolVersion: 2,
+			bridgeProtocolVersion: 3,
 		});
 		const mutated = {
 			...snapshot,
@@ -175,7 +175,7 @@ describe("redacted diagnostics", () => {
 				providerCount: 1,
 				supportedApis: ["openai-responses", "openai-codex-responses"],
 			},
-			bridge: { bridgeProtocolVersion: 2 },
+			bridge: { bridgeProtocolVersion: 3 },
 			recentErrors: [],
 		});
 		expect(JSON.stringify(captured[0])).not.toContain("secret-token");
@@ -205,9 +205,9 @@ describe("redacted diagnostics", () => {
 				providerCount: 1,
 				supportedApis: ["openai-responses", "openai-codex-responses"],
 			},
-			bridge: { bridgeProtocolVersion: 2, config: createDefaultConfig() as unknown as string },
+			bridge: { bridgeProtocolVersion: 3, config: createDefaultConfig() as unknown as string },
 			recentErrors: [],
 		});
-		expect(snapshot.bridge).toEqual({ bridgeProtocolVersion: 2 });
+		expect(snapshot.bridge).toEqual({ bridgeProtocolVersion: 3 });
 	});
 });

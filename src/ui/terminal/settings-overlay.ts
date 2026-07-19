@@ -9,7 +9,16 @@ import {
 	type DiagnosticsSnapshot,
 	exportDiagnosticsConfirmed,
 } from "../../application/diagnostics.ts";
-import { type CodexConfig, ConfigurationError } from "../../domain/config.ts";
+import {
+	capabilityContextFromSnapshot,
+	type EffectiveCapabilitySnapshot,
+	ResolveEffectiveCapabilities,
+} from "../../application/resolve-effective-capabilities.ts";
+import {
+	type CodexConfig,
+	type ConfigSettingEvaluation,
+	ConfigurationError,
+} from "../../domain/config.ts";
 import { APPROVAL_BYPASS_WARNING, type SettingsEffect, SettingsModel } from "./settings-model.ts";
 
 export async function openSettingsOverlay(
@@ -18,6 +27,7 @@ export async function openSettingsOverlay(
 	runtime?: CodexRuntime,
 	exporter?: DiagnosticsExporter,
 	coordinator?: CodexCompactionCoordinator,
+	capabilityResolver?: ResolveEffectiveCapabilities,
 ): Promise<void> {
 	if (!ctx.hasUI || ctx.mode !== "tui") {
 		ctx.ui.notify("Codex settings require an interactive terminal", "warning");
@@ -36,7 +46,27 @@ export async function openSettingsOverlay(
 		return;
 	}
 	const nativeDiagnostics = await diagnostics(runtime);
-	const snapshot = createDiagnosticsSnapshot(config, nativeDiagnostics);
+	const resolver =
+		capabilityResolver ??
+		(runtime === undefined ? undefined : new ResolveEffectiveCapabilities(runtime));
+	let effective: EffectiveCapabilitySnapshot | undefined;
+	if (resolver !== undefined && ctx.model !== undefined) {
+		try {
+			effective = await resolver.resolve({
+				modelId: ctx.model.id,
+				providerId: ctx.model.provider,
+				config,
+				contextWindow: ctx.model.contextWindow,
+			});
+		} catch {
+			ctx.ui.notify("Codex effective capabilities could not be resolved", "warning");
+		}
+	}
+	const snapshot = createDiagnosticsSnapshot(config, nativeDiagnostics, {
+		...(effective === undefined
+			? {}
+			: { effectiveCapabilities: diagnosticCapabilities(effective) }),
+	});
 	const capabilities = Array.isArray(snapshot.bridge.capabilities)
 		? snapshot.bridge.capabilities.filter((value): value is string => typeof value === "string")
 		: undefined;
@@ -53,10 +83,21 @@ export async function openSettingsOverlay(
 			? {}
 			: { activationModel: { provider: ctx.model.provider, api: ctx.model.api } }),
 		...(capabilities === undefined ? {} : { capabilities }),
+		...(effective === undefined
+			? {}
+			: {
+					disabledReasons: disabledReasons(
+						service.evaluate(
+							config,
+							capabilityContextFromSnapshot(effective, ctx.model?.contextWindow),
+						),
+					),
+					modelAutoCompactTokenLimit: effective.compaction.modelThreshold,
+				}),
 	});
 	await ctx.ui.custom(
 		(_tui, _theme, _keybindings, done) =>
-			new SettingsOverlay(model, service, ctx, snapshot, exporter, done, coordinator),
+			new SettingsOverlay(model, service, ctx, snapshot, exporter, done, coordinator, resolver),
 		{ overlay: true },
 	);
 }
@@ -70,6 +111,53 @@ async function diagnostics(runtime: CodexRuntime | undefined): Promise<unknown> 
 	}
 }
 
+function disabledReasons(
+	evaluations: readonly ConfigSettingEvaluation[],
+): Readonly<Record<string, string>> {
+	const ids: Readonly<Record<string, string>> = {
+		"tools.backgroundSessions": "backgroundSessions",
+		"tools.optional.viewImage": "viewImage",
+		"tools.optional.imageGeneration": "imageGeneration",
+		"codex.transport.mode": "transport",
+		"codex.webSearch.mode": "webSearch",
+		"codex.compaction.mode": "compaction",
+		"codex.compaction.autoCompactTokenLimit": "autoCompactTokenLimit",
+	};
+	const reasons: Record<string, string> = {};
+	for (const evaluation of evaluations) {
+		if (evaluation.availability.status !== "unsupported") continue;
+		const id = ids[evaluation.path];
+		if (id !== undefined) reasons[id] = evaluation.availability.reason;
+	}
+	const compaction = evaluations.find((item) => item.path === "codex.compaction.mode");
+	if (compaction?.availability.status === "unsupported") {
+		reasons.compactNow = compaction.availability.reason;
+	}
+	return reasons;
+}
+
+function diagnosticCapabilities(
+	snapshot: EffectiveCapabilitySnapshot,
+): Readonly<Record<string, unknown>> {
+	return {
+		modelId: snapshot.modelId,
+		shellPrimary: snapshot.shell.primary,
+		sessionSurface: snapshot.shell.sessionSurface,
+		sessions: snapshot.shell.sessions.status,
+		applyPatch: snapshot.applyPatch.status,
+		viewImage: snapshot.viewImage.status,
+		imageGeneration: snapshot.imageGeneration.status,
+		webSearch: snapshot.webSearch.status,
+		webSurface: snapshot.webSurface,
+		manualCompaction: snapshot.compaction.manual.status,
+		automaticCompaction: snapshot.compaction.automatic.status,
+		autoCompactThreshold: snapshot.compaction.threshold,
+		transport: snapshot.transport.status,
+		localTools: snapshot.localTools,
+		hostedTools: snapshot.hostedTools,
+	};
+}
+
 export class SettingsOverlay {
 	focused = true;
 	readonly #model: SettingsModel;
@@ -79,6 +167,7 @@ export class SettingsOverlay {
 	readonly #exporter: DiagnosticsExporter | undefined;
 	readonly #done: (result: undefined) => void;
 	readonly #coordinator: CodexCompactionCoordinator | undefined;
+	readonly #capabilities: ResolveEffectiveCapabilities | undefined;
 	#disposed = false;
 	#taskGeneration = 0;
 	readonly #abortControllers = new Set<AbortController>();
@@ -91,6 +180,7 @@ export class SettingsOverlay {
 		exporter: DiagnosticsExporter | undefined,
 		done: (result: undefined) => void,
 		coordinator?: CodexCompactionCoordinator,
+		capabilities?: ResolveEffectiveCapabilities,
 	) {
 		this.#model = model;
 		this.#service = service;
@@ -99,6 +189,7 @@ export class SettingsOverlay {
 		this.#exporter = exporter;
 		this.#done = done;
 		this.#coordinator = coordinator;
+		this.#capabilities = capabilities;
 	}
 
 	render(width: number): string[] {
@@ -160,7 +251,22 @@ export class SettingsOverlay {
 		await this.#runTask(async () => {
 			try {
 				const config = this.#model.beginSave();
-				await this.#service.applyDraft(config);
+				const selected = this.#ctx.model;
+				const effective =
+					this.#capabilities === undefined || selected === undefined
+						? undefined
+						: await this.#capabilities.resolve({
+								modelId: selected.id,
+								providerId: selected.provider,
+								config,
+								contextWindow: selected.contextWindow,
+							});
+				await this.#service.applyDraft(
+					config,
+					effective === undefined
+						? {}
+						: capabilityContextFromSnapshot(effective, selected?.contextWindow),
+				);
 				if (this.#disposed) return;
 				this.#model.markSaved(config);
 				this.#ctx.ui.notify("Codex settings saved", "info");
@@ -235,7 +341,9 @@ export class SettingsOverlay {
 
 	async #editAutoCompactTokenLimit(): Promise<void> {
 		await this.#runTask(async (signal) => {
-			const current = this.#model.value("autoCompactTokenLimit");
+			const compaction = this.#model.draft.codex.compaction;
+			const current =
+				compaction.mode === "auto" ? String(compaction.autoCompactTokenLimit) : "model";
 			const value = await this.#ctx.ui.input("Auto compact token limit", current);
 			if (this.#disposed || signal.aborted || value === undefined) return;
 			const trimmed = value.trim();

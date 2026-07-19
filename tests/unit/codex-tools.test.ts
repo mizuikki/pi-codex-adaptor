@@ -31,6 +31,25 @@ class FixtureRuntime implements CodexRuntime {
 		throw new Error("fixture compaction is not configured");
 	}
 
+	async readDiagnostics(): Promise<unknown> {
+		return {
+			capabilities: [
+				"responses_sse",
+				"responses_websocket",
+				"remote_compaction_v2",
+				"compact_endpoint",
+				"update_plan",
+				"unified_exec",
+				"shell_command",
+				"apply_patch",
+				"view_image",
+				"image_generation",
+				"standalone_web_search",
+				"hosted_web_search",
+			],
+		};
+	}
+
 	async resolveModel(modelId: string): Promise<unknown> {
 		return {
 			model: {
@@ -54,8 +73,10 @@ class FixtureRuntime implements CodexRuntime {
 
 	async resolveTools(params: unknown): Promise<unknown> {
 		const root = params as Record<string, unknown>;
-		const provider = root.provider as Record<string, unknown>;
+		const provider = root.providerContract as Record<string, unknown>;
 		const standalone = root.standaloneWebSearch as Record<string, unknown>;
+		const sessions = root.sessions as Record<string, unknown>;
+		const optional = root.optional as Record<string, unknown>;
 		const model = root.model as Record<string, unknown>;
 		const useLite = model.use_responses_lite === true;
 		const standaloneAvailable =
@@ -67,16 +88,60 @@ class FixtureRuntime implements CodexRuntime {
 			: provider.hostedWebSearch === true
 				? "hosted"
 				: "unsupported";
+		const sessionEnabled = sessions.enabled === true;
+		const shellTools =
+			this.shellSurface === "unified-exec"
+				? ["exec_command", "write_stdin"]
+				: this.shellSurface === "shell-command"
+					? ["shell_command", ...(sessionEnabled ? ["exec_command", "write_stdin"] : [])]
+					: [];
+		const localToolNames = [
+			"update_plan",
+			"apply_patch",
+			...shellTools,
+			...(optional.viewImage === true ? ["view_image"] : []),
+			...(provider.imagesApi === true && optional.imageGeneration === true
+				? ["image_gen.imagegen"]
+				: []),
+			...(webSurface === "standalone" ? ["web.run"] : []),
+		];
 		return {
 			modelTools: [],
 			dispatchTools:
 				this.shellSurface === "unified-exec" ? [{ type: "function", name: "shell_command" }] : [],
 			shellSurface: this.shellSurface,
+			sessionSurface:
+				this.shellSurface === "unified-exec"
+					? "official"
+					: sessionEnabled
+						? "supplemental"
+						: "disabled",
+			localToolNames,
+			hostedToolNames: webSurface === "hosted" ? ["web_search"] : [],
 			imageGenerationSurface:
-				provider.namespaceTools === true && provider.imageGeneration === true
-					? "standalone"
-					: "disabled",
+				provider.namespaceTools === true && provider.imagesApi === true ? "standalone" : "disabled",
 			webSurface,
+			capabilities: {
+				sessions: sessionEnabled
+					? {
+							status: "available",
+							source: this.shellSurface === "unified-exec" ? "official" : "supplemental",
+						}
+					: { status: "disabled", reason: "disabled_by_configuration" },
+				applyPatch: { status: "available", source: "official" },
+				viewImage:
+					optional.viewImage === true
+						? { status: "available", source: "official" }
+						: { status: "disabled", reason: "disabled_by_configuration" },
+				imageGeneration:
+					optional.imageGeneration === true
+						? { status: "available", source: "provider-contract" }
+						: { status: "disabled", reason: "disabled_by_configuration" },
+				webSearch:
+					webSurface === "unsupported"
+						? { status: "unavailable", reason: "web_search_route_unavailable" }
+						: { status: "available", source: "provider-contract" },
+			},
 		};
 	}
 
@@ -298,6 +363,12 @@ describe("Pi core tool activation", () => {
 		});
 		expect(runtime.approvalDecision).toBe("decline");
 		expect(updates).toHaveLength(1);
+		expect(command?.content).toEqual([
+			{
+				type: "text",
+				text: 'fixture output\n{"status":"completed","exit_code":0}',
+			},
+		]);
 		expect(command?.details).toMatchObject({ status: "completed", exit_code: 0 });
 
 		const image = await tools
