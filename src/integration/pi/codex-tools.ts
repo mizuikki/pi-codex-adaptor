@@ -6,7 +6,9 @@ import type { ConfigurationService } from "../../application/configuration.ts";
 import type { ProviderActivationPolicy } from "../../application/provider-activation.ts";
 import { UpdatePlanUseCase } from "../../application/update-plan.ts";
 import { buildToolsResolveParams, parseModelResolution } from "../../domain/capability.ts";
+import type { CodexConfig } from "../../domain/config.ts";
 import type { PlanUpdate } from "../../domain/plan.ts";
+import { resolveProviderActivation } from "../../domain/provider-activation.ts";
 import { requestCodexApproval } from "../../ui/terminal/approval-prompt.ts";
 import { responseItemsFromMessages } from "./codex-provider.ts";
 import { OFFICIAL_CORE_TOOL_CONTRACTS, PI_CORE_TOOL_PARAMETERS } from "./generated/core-tools.ts";
@@ -28,7 +30,8 @@ type NativeManagedTool = Exclude<ManagedTool, "update_plan" | "image_gen.imagege
 export function registerCodexTools(
 	pi: ExtensionAPI,
 	runtime: CodexRuntime,
-	configuration: ConfigurationService,
+	configuration: Pick<ConfigurationService, "load"> &
+		Partial<Pick<ConfigurationService, "onChange">>,
 	activation: ProviderActivationPolicy,
 ): void {
 	const hiddenDispatchTools = new Set<ManagedTool>();
@@ -42,17 +45,35 @@ export function registerCodexTools(
 	registerStandaloneWebTool(pi, runtime, configuration, activation);
 
 	let activationGeneration = 0;
-	const activate = async (ctx: ExtensionContext): Promise<void> => {
+	// Last session context that owns managed tools/status. Cleared on session_shutdown.
+	let activeContext: ExtensionContext | undefined;
+	const providerActive = (
+		model: ExtensionContext["model"],
+		config: Pick<CodexConfig, "activation"> | undefined,
+	): boolean => {
+		if (config !== undefined) return resolveProviderActivation(model, config).active;
+		return activation.isActive(model);
+	};
+
+	const activate = async (ctx: ExtensionContext, configOverride?: CodexConfig): Promise<void> => {
 		const generation = ++activationGeneration;
 		const selected = ctx.model;
-		if (selected === undefined || !activation.isActive(selected)) {
+		if (selected === undefined || !providerActive(selected, configOverride)) {
 			hiddenDispatchTools.clear();
 			disableManagedTools(pi);
 			setStatus(ctx, undefined);
 			return;
 		}
 		try {
-			const config = await configuration.load();
+			const config = configOverride ?? (await configuration.load());
+			// Re-check after the async load so a mid-flight onChange snapshot is authoritative.
+			if (!providerActive(selected, config)) {
+				if (generation !== activationGeneration) return;
+				hiddenDispatchTools.clear();
+				disableManagedTools(pi);
+				setStatus(ctx, undefined);
+				return;
+			}
 			const resolution = parseModelResolution(await runtime.resolveModel(selected.id), selected.id);
 			if (generation !== activationGeneration) return;
 			const model = resolution.model;
@@ -123,14 +144,36 @@ export function registerCodexTools(
 		}
 	};
 
-	pi.on("session_start", (_event, ctx) => activate(ctx));
-	pi.on("model_select", (_event, ctx) => activate(ctx));
+	const remember = (ctx: ExtensionContext): Promise<void> => {
+		activeContext = ctx;
+		return activate(ctx);
+	};
+
+	// Settings save/reset/restore notify onChange with the validated snapshot. Recompute the
+	// current session surface immediately so optional tools and status match activation/config.
+	const unsubscribeConfig =
+		configuration.onChange?.((config) => {
+			const ctx = activeContext;
+			if (ctx === undefined) return;
+			return activate(ctx, config);
+		}) ?? (() => {});
+
+	pi.on("session_start", (_event, ctx) => remember(ctx));
+	pi.on("model_select", (_event, ctx) => remember(ctx));
+	pi.on("session_shutdown", () => {
+		// Drop the session context, invalidate in-flight activate work, and unsubscribe so a
+		// late save/reset/restore cannot mutate tools/status after shutdown. Matches the
+		// extension root disposing activation and shutting down the runtime on this event.
+		activationGeneration += 1;
+		activeContext = undefined;
+		unsubscribeConfig();
+	});
 }
 
 function registerStandaloneWebTool(
 	pi: ExtensionAPI,
 	runtime: CodexRuntime,
-	configuration: ConfigurationService,
+	configuration: Pick<ConfigurationService, "load">,
 	activation: ProviderActivationPolicy,
 ): void {
 	const namespace = OFFICIAL_CORE_TOOL_CONTRACTS.web;
@@ -263,7 +306,7 @@ function registerPlanTool(pi: ExtensionAPI, activation: ProviderActivationPolicy
 function registerNativeTool(
 	pi: ExtensionAPI,
 	runtime: CodexRuntime,
-	configuration: ConfigurationService,
+	configuration: Pick<ConfigurationService, "load">,
 	activation: ProviderActivationPolicy,
 	name: NativeManagedTool,
 	label: string,

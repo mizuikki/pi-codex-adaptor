@@ -355,6 +355,49 @@ describe("official compaction integration", () => {
 		).toBe(false);
 	});
 
+	test("inactive providers skip Codex compaction without cancelling Pi fallback", async () => {
+		const runtime = new FixtureRuntime();
+		const { handlers, coordinator } = register(
+			runtime,
+			configuration({ mode: "auto", autoCompactTokenLimit: 48_000 }),
+		);
+		let compactCalls = 0;
+		const inactiveCtx = context({
+			tokens: 50_000,
+			compact: () => {
+				compactCalls += 1;
+			},
+		});
+		const baseModel = inactiveCtx.model;
+		expect(baseModel).toBeDefined();
+		if (baseModel === undefined) return;
+		inactiveCtx.model = {
+			...baseModel,
+			provider: "unselected-provider",
+			api: "openai-responses",
+			id: "other-model",
+		};
+
+		// Auto-threshold must not start a Codex compaction cycle for inactive providers.
+		coordinator.setPreviousTokens("session-fixture", 40_000);
+		await handlers.get("turn_end")?.[0]?.({ type: "turn_end" }, inactiveCtx);
+		expect(compactCalls).toBe(0);
+		expect(coordinator.isBusy("session-fixture")).toBe(false);
+		expect(coordinator.getPreviousTokens("session-fixture")).toBeNull();
+
+		// Manual and threshold before_compact must not cancel Pi or call the bridge.
+		for (const reason of ["manual", "threshold"] as const) {
+			const result = await handlers.get("session_before_compact")?.[0]?.(
+				compactEvent(reason, 50_000),
+				inactiveCtx,
+			);
+			expect(result).toBeUndefined();
+			expect(runtime.compactCalls).toBe(0);
+			expect(runtime.compaction).toBeUndefined();
+			expect(coordinator.isBusy("session-fixture")).toBe(false);
+		}
+	});
+
 	test("cancels off and non-crossing threshold events while keeping manual reuse", async () => {
 		expect(
 			shouldAcceptCompactionEvent({

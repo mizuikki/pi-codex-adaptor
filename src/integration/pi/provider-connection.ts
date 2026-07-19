@@ -16,6 +16,8 @@ const MAX_HEADER_VALUE_LENGTH = 1024 * 1024;
 const MAX_ACCOUNT_ID_LENGTH = 256;
 const MAX_RETRIES = 10;
 const MAX_TIMEOUT_MS = 24 * 60 * 60 * 1000;
+/** Pi maps disabled HTTP idle timeout (`0`) to this signed 32-bit max int sentinel. */
+const PI_DISABLED_IDLE_TIMEOUT_MS = 2_147_483_647;
 
 export function createProviderConnection(
 	model: Pick<Model<string>, "provider" | "baseUrl">,
@@ -69,7 +71,7 @@ export function createProviderConnection(
 		authentication: freezeAuthentication(authentication),
 		...(accountId === undefined ? {} : { accountId }),
 		...optionalNumber("maxRetries", options.maxRetries, 0, MAX_RETRIES),
-		...optionalNumber("timeoutMs", options.timeoutMs, 1, MAX_TIMEOUT_MS),
+		...optionalTimeoutMs("timeoutMs", options.timeoutMs),
 		...optionalNumber(
 			"websocketConnectTimeoutMs",
 			options.websocketConnectTimeoutMs,
@@ -238,6 +240,22 @@ function optionalNumber(
 		throw new Error("Provider request settings are invalid");
 	}
 	return { [key]: value };
+}
+
+/**
+ * Maps Pi stream idle timeout settings onto the bridge wire.
+ *
+ * Finite values stay in `[1, MAX_TIMEOUT_MS]`. Pi's disabled HTTP idle timeout is represented as
+ * `2147483647` (signed 32-bit max int) and is forwarded as that exact sentinel so native code can
+ * apply an unbounded stream idle timeout. Values between the 24h bound and the sentinel, and any
+ * larger value, remain invalid.
+ */
+function optionalTimeoutMs(key: "timeoutMs", value: number | undefined): Record<string, number> {
+	if (value === undefined) return {};
+	if (value === PI_DISABLED_IDLE_TIMEOUT_MS) {
+		return { [key]: PI_DISABLED_IDLE_TIMEOUT_MS };
+	}
+	return optionalNumber(key, value, 1, MAX_TIMEOUT_MS);
 }
 
 function freezeAuthentication(

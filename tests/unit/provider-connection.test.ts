@@ -91,4 +91,67 @@ describe("provider connections", () => {
 		expect(Object.isFrozen(connection.headers)).toBe(true);
 		expect(Object.isFrozen(connection.authentication)).toBe(true);
 	});
+
+	test("forwards Pi's disabled HTTP idle timeout sentinel without clamping it", () => {
+		const connection = createProviderConnection(model(), {
+			apiKey: "opaque-fixture-key",
+			timeoutMs: 2_147_483_647,
+		});
+
+		expect(connection.timeoutMs).toBe(2_147_483_647);
+	});
+
+	test("accepts finite timeout boundaries and rejects values outside them", () => {
+		expect(
+			createProviderConnection(model(), {
+				apiKey: "opaque-fixture-key",
+				timeoutMs: 1,
+			}).timeoutMs,
+		).toBe(1);
+		expect(
+			createProviderConnection(model(), {
+				apiKey: "opaque-fixture-key",
+				timeoutMs: 86_400_000,
+			}).timeoutMs,
+		).toBe(86_400_000);
+		expect(() =>
+			createProviderConnection(model(), {
+				apiKey: "opaque-fixture-key",
+				timeoutMs: 0,
+			}),
+		).toThrow("Provider request settings are invalid");
+		expect(() =>
+			createProviderConnection(model(), {
+				apiKey: "opaque-fixture-key",
+				timeoutMs: 86_400_001,
+			}),
+		).toThrow("Provider request settings are invalid");
+		expect(() =>
+			createProviderConnection(model(), {
+				apiKey: "opaque-fixture-key",
+				timeoutMs: 2_147_483_646,
+			}),
+		).toThrow("Provider request settings are invalid");
+		expect(() =>
+			createProviderConnection(model(), {
+				apiKey: "opaque-fixture-key",
+				timeoutMs: 2_147_483_648,
+			}),
+		).toThrow("Provider request settings are invalid");
+	});
+
+	test("keeps websocket connect timeouts finite-only", () => {
+		expect(
+			createProviderConnection(model(), {
+				apiKey: "opaque-fixture-key",
+				websocketConnectTimeoutMs: 86_400_000,
+			}).websocketConnectTimeoutMs,
+		).toBe(86_400_000);
+		expect(() =>
+			createProviderConnection(model(), {
+				apiKey: "opaque-fixture-key",
+				websocketConnectTimeoutMs: 2_147_483_647,
+			}),
+		).toThrow("Provider request settings are invalid");
+	});
 });

@@ -258,4 +258,65 @@ describe("fake Pi + real native lifecycle", () => {
 		expect(pi.activeTools).not.toContain("web.run");
 		expect(pi.status.get("codex-adaptor")).toContain("disabled");
 	}, 60_000);
+
+	test("settings save refreshes optional tools without session_start", async () => {
+		const server = await startFakeResponsesServer([
+			fixtureModelSpec({
+				slug: "gpt-5.5",
+				shellType: "shell_command",
+			}),
+		]);
+		cleanups.push(() => server.stop());
+		const token = fixtureToken();
+		const { runtime } = await createIntegrationRuntime();
+		cleanups.push(async () => runtime.shutdown());
+
+		const service = await configurationService();
+		const pi = createFakePi({ token });
+		registerCodexTools(pi.api, runtime, service, new ProviderActivationPolicy(service));
+		const ctx = pi.context(fixtureModel("gpt-5.5", "openai-codex", server.baseUrl));
+		await emit(pi, "session_start", ctx);
+		expect(pi.activeTools).toContain("view_image");
+		expect(pi.activeTools).toContain("image_gen.imagegen");
+
+		const defaults = await service.load();
+		await service.applyDraft({
+			...defaults,
+			tools: {
+				...defaults.tools,
+				optional: { viewImage: "off", imageGeneration: "off" },
+			},
+			codex: {
+				...defaults.codex,
+				webSearch: { mode: "disabled" },
+			},
+			ui: { status: false },
+		});
+		// ConfigurationService notifies listeners without awaiting them; wait for the surface.
+		await waitFor(
+			() =>
+				!pi.activeTools.includes("view_image") && !pi.activeTools.includes("image_gen.imagegen"),
+			2_000,
+		);
+
+		expect(pi.activeTools).toEqual(["third_party", "update_plan", "apply_patch", "shell_command"]);
+		expect(pi.status.get("codex-adaptor")).toBeUndefined();
+
+		await emit(pi, "session_shutdown", ctx);
+		const toolsAfterShutdown = [...pi.activeTools];
+		await service.resetToDefaults();
+		// Give a late activate attempt time to misbehave if the subscription leaked.
+		await new Promise((resolve) => setTimeout(resolve, 25));
+		expect(pi.activeTools).toEqual(toolsAfterShutdown);
+	}, 60_000);
 });
+
+async function waitFor(predicate: () => boolean, timeoutMs: number): Promise<void> {
+	const started = Date.now();
+	while (!predicate()) {
+		if (Date.now() - started > timeoutMs) {
+			throw new Error("Timed out waiting for managed tool refresh");
+		}
+		await new Promise((resolve) => setTimeout(resolve, 5));
+	}
+}

@@ -6,6 +6,10 @@ import {
 	parseConfig,
 	type WebSearchMode,
 } from "../../domain/config.ts";
+import {
+	type ProviderActivationModel,
+	resolveProviderActivation,
+} from "../../domain/provider-activation.ts";
 import { fitLine, joinFooter, padEndVisible, statusLabel, wrapText } from "./render.ts";
 
 export const SETTINGS_CATEGORIES = ["General", "Tools", "Codex", "Diagnostics"] as const;
@@ -55,6 +59,8 @@ export interface SettingsModelOptions {
 	provider: string;
 	model: string;
 	bridge: string;
+	/** Current Pi model used to recompute the displayed activation route after save/reset/restore. */
+	activationModel?: ProviderActivationModel;
 	activationStatus?: string;
 	capabilities?: readonly string[];
 	disabledReasons?: Readonly<Record<string, string>>;
@@ -68,6 +74,8 @@ export class SettingsModel {
 	#saved: CodexConfig;
 	#draft: CodexConfig;
 	readonly #options: SettingsModelOptions;
+	readonly #activationModel: ProviderActivationModel | undefined;
+	#activationStatus: string | undefined;
 	#categoryIndex = 0;
 	#focus = 0;
 	#region: SettingsFocusRegion = "list";
@@ -83,6 +91,12 @@ export class SettingsModel {
 		this.#saved = structuredClone(config);
 		this.#draft = structuredClone(config);
 		this.#options = options;
+		this.#activationModel = options.activationModel;
+		this.#activationStatus =
+			options.activationStatus ??
+			(options.activationModel === undefined
+				? undefined
+				: formatActivationStatus(options.activationModel, config));
 	}
 
 	get draft(): CodexConfig {
@@ -211,7 +225,7 @@ export class SettingsModel {
 					row(
 						"route",
 						"Current route",
-						this.#options.activationStatus ?? "unavailable",
+						this.#activationStatus ?? "unavailable",
 						"Whether the current provider and API use the Codex adaptor.",
 						"readonly",
 					),
@@ -443,12 +457,14 @@ export class SettingsModel {
 		if (this.#disposed) return;
 		this.#saved = structuredClone(config);
 		this.#draft = structuredClone(config);
+		this.#refreshActivationStatus(config);
 		this.#state = "saved";
 		this.#message = `${statusLabel("ok")} Saved`;
 	}
 
 	markError(message: string, state: "validation-error" | "write-error"): void {
 		if (this.#disposed) return;
+		// Failed saves keep the last persisted activation route; do not reflect the unsaved draft.
 		this.#state = state;
 		this.#message = `${statusLabel("error")} ${message}`;
 	}
@@ -488,6 +504,7 @@ export class SettingsModel {
 		if (this.#disposed) return;
 		this.#saved = structuredClone(config);
 		this.#draft = structuredClone(config);
+		this.#refreshActivationStatus(config);
 		this.#state = "saved";
 		this.#message = `${statusLabel("ok")} Defaults restored`;
 		this.#dialog = { kind: "none" };
@@ -669,10 +686,13 @@ export class SettingsModel {
 	}
 
 	#routeIsActive(): boolean {
-		return (
-			this.#options.activationStatus === undefined ||
-			this.#options.activationStatus.startsWith("active")
-		);
+		return this.#activationStatus === undefined || this.#activationStatus.startsWith("active");
+	}
+
+	#refreshActivationStatus(config: Pick<CodexConfig, "activation">): void {
+		// Recompute only when the live model is known. Static activationStatus callers stay unchanged.
+		if (this.#activationModel === undefined) return;
+		this.#activationStatus = formatActivationStatus(this.#activationModel, config);
 	}
 
 	#handleDialogKey(key: string): SettingsEffect {
@@ -951,4 +971,23 @@ export function parseKey(data: string): string {
 	const key = parseTuiKey(data);
 	if (key === "escape") return "esc";
 	return (key ?? data).toLowerCase().replaceAll("+", "-");
+}
+
+/** Format the current activation route using the shared domain predicate. */
+export function formatActivationStatus(
+	model: ProviderActivationModel | undefined,
+	config: Pick<CodexConfig, "activation">,
+): string {
+	const decision = resolveProviderActivation(model, config);
+	if (decision.active) {
+		return `active (${model?.provider ?? "unknown"} / ${model?.api ?? "unknown"})`;
+	}
+	switch (decision.reason) {
+		case "no_model":
+			return "inactive (no model)";
+		case "provider_not_selected":
+			return `inactive (provider not selected: ${model?.provider ?? "unknown"})`;
+		case "unsupported_pi_api":
+			return `inactive (unsupported API: ${model?.api ?? "unknown"})`;
+	}
 }

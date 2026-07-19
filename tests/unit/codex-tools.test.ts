@@ -9,7 +9,7 @@ import type {
 } from "../../src/application/codex-runtime.ts";
 import type { ConfigurationService } from "../../src/application/configuration.ts";
 import { ProviderActivationPolicy } from "../../src/application/provider-activation.ts";
-import { createDefaultConfig } from "../../src/domain/config.ts";
+import { type CodexConfig, createDefaultConfig } from "../../src/domain/config.ts";
 import { registerCodexTools } from "../../src/integration/pi/codex-tools.ts";
 
 type EventHandler = (event: unknown, ctx: ExtensionContext) => unknown | Promise<unknown>;
@@ -120,8 +120,29 @@ function fixtureToken(): string {
 	return `header.${payload}.signature`;
 }
 
-function configuration(): ConfigurationService {
-	return { load: async () => createDefaultConfig() } as ConfigurationService;
+type TestConfigurationService = ConfigurationService & {
+	config: CodexConfig;
+	publish(config: CodexConfig): Promise<void>;
+};
+
+function configuration(initial = createDefaultConfig()): TestConfigurationService {
+	let current = initial;
+	const listeners = new Set<(config: CodexConfig) => void | Promise<void>>();
+	const service: TestConfigurationService = {
+		get config() {
+			return current;
+		},
+		load: async () => current,
+		onChange: (listener: (config: CodexConfig) => void | Promise<void>) => {
+			listeners.add(listener);
+			return () => listeners.delete(listener);
+		},
+		async publish(config: CodexConfig) {
+			current = config;
+			await Promise.all([...listeners].map((listener) => Promise.resolve(listener(config))));
+		},
+	} as unknown as TestConfigurationService;
+	return service;
 }
 
 function context(provider = "openai-codex"): {
@@ -484,5 +505,151 @@ describe("Pi core tool activation", () => {
 		);
 		expect(runtime.execution?.argumentsValue).toEqual({ prompt: "fixture image" });
 		expect(runtime.execution?.argumentsValue).not.toHaveProperty("connection");
+	});
+
+	test("recomputes managed tools immediately after configuration save", async () => {
+		const runtime = new FixtureRuntime();
+		const handlers = new Map<string, EventHandler[]>();
+		const tools = new Map<string, ToolDefinition>();
+		let active = ["third_party"];
+		const status = new Map<string, string | undefined>();
+		const service = configuration();
+		registerCodexTools(
+			{
+				registerTool: (tool: ToolDefinition) => tools.set(tool.name, tool),
+				on: (event: string, handler: EventHandler) => {
+					handlers.set(event, [...(handlers.get(event) ?? []), handler]);
+				},
+				getActiveTools: () => active,
+				setActiveTools: (next: string[]) => {
+					active = next;
+				},
+			} as never,
+			runtime,
+			service,
+			new ProviderActivationPolicy(service),
+		);
+
+		const { ctx } = context();
+		(ctx.ui as { setStatus?: (key: string, text: string | undefined) => void }).setStatus = (
+			key,
+			text,
+		) => status.set(key, text);
+
+		await handlers.get("session_start")?.[0]?.({ type: "session_start" }, ctx);
+		expect(active).toContain("view_image");
+		expect(active).toContain("image_gen.imagegen");
+		expect(status.get("codex-adaptor")).toContain("unified-exec");
+
+		// Successful settings save/reset/restore publishes the validated snapshot via onChange.
+		await service.publish({
+			...service.config,
+			tools: {
+				...service.config.tools,
+				optional: { viewImage: "off", imageGeneration: "off" },
+			},
+			codex: {
+				...service.config.codex,
+				webSearch: { mode: "disabled" },
+			},
+			ui: { status: false },
+		});
+
+		expect(active).toEqual([
+			"third_party",
+			"update_plan",
+			"apply_patch",
+			"exec_command",
+			"write_stdin",
+		]);
+		expect(active).not.toContain("view_image");
+		expect(active).not.toContain("image_gen.imagegen");
+		expect(status.get("codex-adaptor")).toBeUndefined();
+	});
+
+	test("disables managed tools when activation providers no longer include the model", async () => {
+		const runtime = new FixtureRuntime();
+		const handlers = new Map<string, EventHandler[]>();
+		const tools = new Map<string, ToolDefinition>();
+		let active = ["third_party"];
+		const service = configuration();
+		const policy = new ProviderActivationPolicy(service);
+		registerCodexTools(
+			{
+				registerTool: (tool: ToolDefinition) => tools.set(tool.name, tool),
+				on: (event: string, handler: EventHandler) => {
+					handlers.set(event, [...(handlers.get(event) ?? []), handler]);
+				},
+				getActiveTools: () => active,
+				setActiveTools: (next: string[]) => {
+					active = next;
+				},
+			} as never,
+			runtime,
+			service,
+			policy,
+		);
+
+		const { ctx } = context();
+		await handlers.get("session_start")?.[0]?.({ type: "session_start" }, ctx);
+		expect(active).toContain("update_plan");
+		expect(policy.isActive(ctx.model)).toBe(true);
+
+		await service.publish({
+			...service.config,
+			activation: { providers: ["custom-codex"] },
+		});
+
+		expect(policy.isActive(ctx.model)).toBe(false);
+		expect(active).toEqual(["third_party"]);
+	});
+
+	test("ignores configuration callbacks after session_shutdown", async () => {
+		const runtime = new FixtureRuntime();
+		const handlers = new Map<string, EventHandler[]>();
+		const tools = new Map<string, ToolDefinition>();
+		let active = ["third_party"];
+		const status = new Map<string, string | undefined>();
+		const service = configuration();
+		registerCodexTools(
+			{
+				registerTool: (tool: ToolDefinition) => tools.set(tool.name, tool),
+				on: (event: string, handler: EventHandler) => {
+					handlers.set(event, [...(handlers.get(event) ?? []), handler]);
+				},
+				getActiveTools: () => active,
+				setActiveTools: (next: string[]) => {
+					active = next;
+				},
+			} as never,
+			runtime,
+			service,
+			new ProviderActivationPolicy(service),
+		);
+
+		const { ctx } = context();
+		(ctx.ui as { setStatus?: (key: string, text: string | undefined) => void }).setStatus = (
+			key,
+			text,
+		) => status.set(key, text);
+
+		await handlers.get("session_start")?.[0]?.({ type: "session_start" }, ctx);
+		expect(active).toContain("view_image");
+
+		await handlers.get("session_shutdown")?.[0]?.({ type: "session_shutdown" }, ctx);
+		const toolsAfterShutdown = [...active];
+		const statusAfterShutdown = status.get("codex-adaptor");
+
+		await service.publish({
+			...service.config,
+			tools: {
+				...service.config.tools,
+				optional: { viewImage: "off", imageGeneration: "off" },
+			},
+			ui: { status: false },
+		});
+
+		expect(active).toEqual(toolsAfterShutdown);
+		expect(status.get("codex-adaptor")).toBe(statusAfterShutdown);
 	});
 });

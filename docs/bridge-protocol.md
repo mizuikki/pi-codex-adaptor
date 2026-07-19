@@ -115,6 +115,14 @@ rejected frame, parser snippets, or credential-bearing fragments; invalid JSON a
 map to stable `invalid_frame` protocol messages. Protocol fixtures contain no credentials, user
 paths, account data, prompts, or compaction payloads.
 
+Provider connection `timeoutMs` is the stream idle timeout for selected Responses transport. Finite
+values must fall in `[1, 86400000]` (24 hours). Omission uses the native five-minute default. The
+only accepted value above that bound is `2147483647`, which is Pi's disabled HTTP idle-timeout
+sentinel (Pi maps settings value `0` to this signed 32-bit maximum). On the wire the sentinel is
+preserved exactly; native code maps it to an effectively unbounded stream idle timeout. Values
+between `86400001` and `2147483646`, zero, and any larger number remain invalid. Websocket connect
+timeouts stay finite-only within the same 24-hour bound and do not accept the disabled sentinel.
+
 The canonical v2 examples are [client-v2.jsonl](../fixtures/bridge-protocol/client-v2.jsonl) and
 [server-v2.jsonl](../fixtures/bridge-protocol/server-v2.jsonl). Rust contract tests decode every
 recorded frame and enforce size, one-frame, unknown-field, opaque-event, advertised approval order,

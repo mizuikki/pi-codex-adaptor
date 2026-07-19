@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { Compile } from "typebox/compile";
 
 import {
 	BRIDGE_PROTOCOL_VERSION,
@@ -9,6 +10,7 @@ import {
 	decodeServerFrame,
 	encodeClientMessage,
 	MAX_FRAME_BYTES,
+	ProviderConnectionSchema,
 	ServerFrameDecoder,
 	verifyHandshake,
 } from "../../src/infrastructure/codex-bridge/protocol.ts";
@@ -182,5 +184,24 @@ describe("bridge protocol v2", () => {
 		});
 		expect(new TextDecoder().decode(nonEmpty)).toContain('"data":"sample input"');
 		expect(new TextDecoder().decode(empty)).toContain('"data":""');
+	});
+
+	test("provider connection timeoutMs accepts finite bounds and Pi's disabled sentinel", () => {
+		const validator = Compile(ProviderConnectionSchema);
+		const base = {
+			providerId: "fixture-provider",
+			baseUrl: "https://example.invalid/v1",
+			headers: {},
+			authentication: { kind: "none" as const },
+		};
+
+		expect(validator.Check({ ...base, timeoutMs: 1 })).toBe(true);
+		expect(validator.Check({ ...base, timeoutMs: 86_400_000 })).toBe(true);
+		expect(validator.Check({ ...base, timeoutMs: 2_147_483_647 })).toBe(true);
+		expect(validator.Check({ ...base, timeoutMs: 0 })).toBe(false);
+		expect(validator.Check({ ...base, timeoutMs: 86_400_001 })).toBe(false);
+		expect(validator.Check({ ...base, timeoutMs: 2_147_483_646 })).toBe(false);
+		expect(validator.Check({ ...base, timeoutMs: 2_147_483_648 })).toBe(false);
+		expect(validator.Check({ ...base, websocketConnectTimeoutMs: 2_147_483_647 })).toBe(false);
 	});
 });

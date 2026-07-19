@@ -45,7 +45,11 @@ export const ProviderConnectionSchema = Type.Object(
 		authentication: ProviderAuthentication,
 		accountId: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
 		maxRetries: Type.Optional(Type.Integer({ minimum: 0, maximum: 10 })),
-		timeoutMs: Type.Optional(Type.Integer({ minimum: 1, maximum: 86_400_000 })),
+		// Finite idle timeouts stay within 24h. `2147483647` is Pi's disabled-idle-timeout sentinel
+		// and is the only value above that bound accepted on the wire.
+		timeoutMs: Type.Optional(
+			Type.Union([Type.Integer({ minimum: 1, maximum: 86_400_000 }), Type.Literal(2_147_483_647)]),
+		),
 		websocketConnectTimeoutMs: Type.Optional(Type.Integer({ minimum: 1, maximum: 86_400_000 })),
 	},
 	{ additionalProperties: false },

@@ -10,7 +10,6 @@ import {
 	exportDiagnosticsConfirmed,
 } from "../../application/diagnostics.ts";
 import { type CodexConfig, ConfigurationError } from "../../domain/config.ts";
-import { resolveProviderActivation } from "../../domain/provider-activation.ts";
 import { type SettingsEffect, SettingsModel } from "./settings-model.ts";
 
 export async function openSettingsOverlay(
@@ -49,7 +48,10 @@ export async function openSettingsOverlay(
 			typeof snapshot.bridge.bridgeProtocolVersion === "number"
 				? `protocol v${snapshot.bridge.bridgeProtocolVersion}`
 				: "unavailable",
-		activationStatus: activationStatus(ctx.model, config),
+		// Keep the live model so save/reset/restore can recompute the activation route.
+		...(ctx.model === undefined
+			? {}
+			: { activationModel: { provider: ctx.model.provider, api: ctx.model.api } }),
 		...(capabilities === undefined ? {} : { capabilities }),
 	});
 	await ctx.ui.custom(
@@ -325,15 +327,4 @@ export class SettingsOverlay {
 		this.dispose();
 		this.#done(undefined);
 	}
-}
-
-function activationStatus(model: ExtensionCommandContext["model"], config: CodexConfig): string {
-	const decision = resolveProviderActivation(model, config);
-	if (decision.active)
-		return `active (${model?.provider ?? "unknown"} / ${model?.api ?? "unknown"})`;
-	return decision.reason === "no_model"
-		? "inactive (no model)"
-		: decision.reason === "provider_not_selected"
-			? `inactive (provider not selected: ${model?.provider ?? "unknown"})`
-			: `inactive (unsupported API: ${model?.api ?? "unknown"})`;
 }

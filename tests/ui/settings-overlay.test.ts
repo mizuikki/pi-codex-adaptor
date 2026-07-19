@@ -44,6 +44,8 @@ function createService(config: CodexConfig = createDefaultConfig()) {
 
 function createCtx(options?: {
 	confirm?: boolean;
+	provider?: string;
+	api?: string;
 	compact?: (options?: { onComplete?: () => void; onError?: (error: Error) => void }) => void;
 }) {
 	const notifications: string[] = [];
@@ -52,7 +54,11 @@ function createCtx(options?: {
 		hasUI: true,
 		mode: "tui",
 		cwd: "/workspace",
-		model: { provider: "openai-codex", id: "test-model" },
+		model: {
+			provider: options?.provider ?? "openai-codex",
+			id: "test-model",
+			api: options?.api ?? "openai-codex-responses",
+		},
 		sessionManager: {
 			getSessionId: () => "session-fixture",
 		},
@@ -263,5 +269,70 @@ describe("settings overlay disposal", () => {
 		expect(ctx.notifications.some((message) => message.includes("compaction requested"))).toBe(
 			true,
 		);
+	});
+
+	test("save and reset recompute the displayed activation route from the persisted config", async () => {
+		const service = createService();
+		const ctx = createCtx({ provider: "custom-codex", api: "openai-responses" });
+		const model = new SettingsModel(createDefaultConfig(), {
+			baseline: "0.144.3",
+			provider: "custom-codex",
+			model: "test-model",
+			bridge: "protocol v2",
+			activationModel: { provider: "custom-codex", api: "openai-responses" },
+		});
+		const overlay = new SettingsOverlay(model, service, ctx, diagnostics(), undefined, () => {});
+
+		expect(model.rows().find((row) => row.id === "route")?.value).toBe(
+			"inactive (provider not selected: custom-codex)",
+		);
+
+		model.setActivationProviders(["openai-codex", "custom-codex"]);
+		overlay.handleInput("\u0013");
+		await Promise.resolve();
+		await Promise.resolve();
+
+		expect(model.state).toBe("saved");
+		expect(service.stored.activation.providers).toEqual(["openai-codex", "custom-codex"]);
+		expect(model.rows().find((row) => row.id === "route")?.value).toBe(
+			"active (custom-codex / openai-responses)",
+		);
+
+		overlay.handleInput("r");
+		overlay.handleInput("j");
+		overlay.handleInput("\r");
+		await Promise.resolve();
+		await Promise.resolve();
+
+		expect(model.state).toBe("saved");
+		expect(service.stored).toEqual(createDefaultConfig());
+		expect(model.rows().find((row) => row.id === "route")?.value).toBe(
+			"inactive (provider not selected: custom-codex)",
+		);
+	});
+
+	test("failed save keeps the previous activation route", async () => {
+		const service = createService();
+		service.applyDraft = async () => {
+			throw new Error("write failed");
+		};
+		const ctx = createCtx({ provider: "custom-codex", api: "openai-responses" });
+		const model = new SettingsModel(createDefaultConfig(), {
+			baseline: "0.144.3",
+			provider: "custom-codex",
+			model: "test-model",
+			bridge: "protocol v2",
+			activationModel: { provider: "custom-codex", api: "openai-responses" },
+		});
+		const overlay = new SettingsOverlay(model, service, ctx, diagnostics(), undefined, () => {});
+		const inactive = "inactive (provider not selected: custom-codex)";
+
+		model.setActivationProviders(["openai-codex", "custom-codex"]);
+		overlay.handleInput("\u0013");
+		await Promise.resolve();
+		await Promise.resolve();
+
+		expect(model.state).toBe("write-error");
+		expect(model.rows().find((row) => row.id === "route")?.value).toBe(inactive);
 	});
 });

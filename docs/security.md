@@ -33,6 +33,10 @@ provenance, explicit authorization, and diagnostic redaction as product requirem
 - Approval details prefer workspace-relative paths when a representation under a supplied root is
   sufficient, while retaining inspectable command and file summaries.
 - Credentials are delivered through bounded stdin request frames, never argv or persisted config.
+- Provider connection timeouts are bounded. Finite `timeoutMs` and `websocketConnectTimeoutMs`
+  values are limited to 24 hours. The only exception is Pi's disabled HTTP idle-timeout sentinel
+  `2147483647` on `timeoutMs`, which is an explicit unbounded stream-idle mapping rather than an
+  open-ended numeric range. Arbitrary values above the 24-hour bound remain rejected.
 - Prompts, messages, credentials, complete headers, absolute user paths, account data, and opaque
   compaction items are excluded from logs and default diagnostics.
 - Responses transport is implemented only by pinned official native modules. TypeScript does not add

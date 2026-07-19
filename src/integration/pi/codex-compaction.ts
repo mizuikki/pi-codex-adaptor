@@ -75,7 +75,9 @@ export function registerCodexCompaction(
 			coordinator.end(sessionId, "error");
 			throw new Error("OpenAI Codex compaction requires an active model");
 		}
-		if (!activation.isActive(model)) return { cancel: true };
+		// Inactive providers skip Codex compaction so Pi can fall back to its native path.
+		// True cancellation is reserved for threshold/mode rejection, concurrency, and abort.
+		if (!activation.isActive(model)) return;
 		if (event.signal.aborted) return { cancel: true };
 		let connection: Awaited<ReturnType<typeof resolveProviderConnection>>;
 		try {

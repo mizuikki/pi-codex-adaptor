@@ -5,6 +5,11 @@ use bridge_protocol::BridgeError;
 use bridge_protocol::ErrorCategory;
 use bridge_protocol::ProviderAuthentication;
 use bridge_protocol::ProviderConnection;
+
+/// Maximum finite stream idle / websocket connect timeout accepted on the wire (24 hours).
+const MAX_FINITE_TIMEOUT_MS: u64 = 86_400_000;
+/// Pi maps disabled HTTP idle timeout (`0`) to this signed 32-bit max int sentinel.
+const PI_DISABLED_IDLE_TIMEOUT_MS: u64 = 2_147_483_647;
 use codex_api::ApiError;
 use codex_api::AuthProvider;
 use codex_api::Provider;
@@ -81,7 +86,7 @@ pub fn connect(connection: &ProviderConnection) -> Result<ApiConnection, BridgeE
     let authentication_provider = BridgeAuthProvider::new(connection)?;
     let base_url = validate_base_url(&connection.base_url)?;
     let max_retries = connection.max_retries.unwrap_or(3);
-    let timeout_ms = connection.timeout_ms.unwrap_or(300_000);
+    let stream_idle_timeout = resolve_stream_idle_timeout(connection.timeout_ms)?;
     let websocket_connect_timeout =
         Duration::from_millis(connection.websocket_connect_timeout_ms.unwrap_or(10_000));
     let client = build_reqwest_client_with_custom_ca(reqwest::Client::builder()).map_err(|_| {
@@ -107,7 +112,7 @@ pub fn connect(connection: &ProviderConnection) -> Result<ApiConnection, BridgeE
                 retry_5xx: true,
                 retry_transport: true,
             },
-            stream_idle_timeout: Duration::from_millis(timeout_ms),
+            stream_idle_timeout,
         },
         authentication: Arc::new(authentication_provider),
         websocket_connect_timeout,
@@ -177,15 +182,35 @@ fn validate_provider_connection(connection: &ProviderConnection) -> Result<(), B
     if connection.max_retries.is_some_and(|value| value > 10)
         || connection
             .timeout_ms
-            .is_some_and(|value| value == 0 || value > 86_400_000)
+            .is_some_and(|value| !is_valid_timeout_ms(value))
         || connection
             .websocket_connect_timeout_ms
-            .is_some_and(|value| value == 0 || value > 86_400_000)
+            .is_some_and(|value| value == 0 || value > MAX_FINITE_TIMEOUT_MS)
     {
         return Err(invalid_connection());
     }
     validate_base_url(&connection.base_url)?;
     Ok(())
+}
+
+/// Accepts finite idle timeouts in `[1, MAX_FINITE_TIMEOUT_MS]` plus Pi's disabled sentinel.
+fn is_valid_timeout_ms(value: u64) -> bool {
+    (1..=MAX_FINITE_TIMEOUT_MS).contains(&value) || value == PI_DISABLED_IDLE_TIMEOUT_MS
+}
+
+/// Resolves the official stream idle timeout duration for a validated connection timeout.
+///
+/// Omitted values default to five minutes. Pi's disabled-idle-timeout sentinel maps to an
+/// effectively unbounded duration so long-running streams are not cancelled by the idle timer.
+fn resolve_stream_idle_timeout(timeout_ms: Option<u64>) -> Result<Duration, BridgeError> {
+    match timeout_ms {
+        None => Ok(Duration::from_mins(5)),
+        Some(PI_DISABLED_IDLE_TIMEOUT_MS) => Ok(Duration::from_secs(u64::MAX / 1_000)),
+        Some(value) if (1..=MAX_FINITE_TIMEOUT_MS).contains(&value) => {
+            Ok(Duration::from_millis(value))
+        }
+        Some(_) => Err(invalid_connection()),
+    }
 }
 
 fn validate_base_url(value: &str) -> Result<String, BridgeError> {
@@ -494,5 +519,86 @@ mod tests {
             panic!("invalid header values must be rejected");
         };
         assert_eq!(error.code, "invalid_authentication");
+    }
+
+    fn fixture_connection(timeout_ms: Option<u64>) -> ProviderConnection {
+        ProviderConnection {
+            provider_id: "fixture-provider".to_owned(),
+            base_url: "https://example.invalid/v1".to_owned(),
+            headers: BTreeMap::new(),
+            authentication: ProviderAuthentication::None,
+            account_id: None,
+            max_retries: None,
+            timeout_ms,
+            websocket_connect_timeout_ms: None,
+        }
+    }
+
+    #[test]
+    fn accepts_pi_disabled_idle_timeout_sentinel() {
+        assert!(is_valid_timeout_ms(PI_DISABLED_IDLE_TIMEOUT_MS));
+        assert!(
+            validate_provider_connection(&fixture_connection(Some(PI_DISABLED_IDLE_TIMEOUT_MS)))
+                .is_ok()
+        );
+        let timeout = resolve_stream_idle_timeout(Some(PI_DISABLED_IDLE_TIMEOUT_MS))
+            .expect("disabled sentinel must resolve");
+        assert_eq!(timeout, Duration::from_secs(u64::MAX / 1_000));
+    }
+
+    #[test]
+    fn accepts_finite_timeout_boundaries() {
+        assert!(is_valid_timeout_ms(1));
+        assert!(is_valid_timeout_ms(MAX_FINITE_TIMEOUT_MS));
+        assert!(validate_provider_connection(&fixture_connection(Some(1))).is_ok());
+        assert!(
+            validate_provider_connection(&fixture_connection(Some(MAX_FINITE_TIMEOUT_MS))).is_ok()
+        );
+        assert_eq!(
+            resolve_stream_idle_timeout(Some(1)).expect("minimum timeout"),
+            Duration::from_millis(1)
+        );
+        assert_eq!(
+            resolve_stream_idle_timeout(Some(MAX_FINITE_TIMEOUT_MS)).expect("maximum timeout"),
+            Duration::from_millis(MAX_FINITE_TIMEOUT_MS)
+        );
+        assert_eq!(
+            resolve_stream_idle_timeout(None).expect("default timeout"),
+            Duration::from_mins(5)
+        );
+    }
+
+    #[test]
+    fn rejects_timeouts_outside_finite_bound_except_disabled_sentinel() {
+        assert!(!is_valid_timeout_ms(0));
+        assert!(!is_valid_timeout_ms(MAX_FINITE_TIMEOUT_MS + 1));
+        assert!(!is_valid_timeout_ms(PI_DISABLED_IDLE_TIMEOUT_MS - 1));
+        assert!(!is_valid_timeout_ms(PI_DISABLED_IDLE_TIMEOUT_MS + 1));
+
+        for value in [
+            0,
+            MAX_FINITE_TIMEOUT_MS + 1,
+            PI_DISABLED_IDLE_TIMEOUT_MS - 1,
+            PI_DISABLED_IDLE_TIMEOUT_MS + 1,
+        ] {
+            let Err(error) = validate_provider_connection(&fixture_connection(Some(value))) else {
+                panic!("timeout {value} must be rejected");
+            };
+            assert_eq!(error.code, "invalid_provider_connection");
+            let Err(error) = resolve_stream_idle_timeout(Some(value)) else {
+                panic!("timeout {value} must not resolve");
+            };
+            assert_eq!(error.code, "invalid_provider_connection");
+        }
+    }
+
+    #[test]
+    fn websocket_connect_timeout_does_not_accept_disabled_sentinel() {
+        let mut connection = fixture_connection(None);
+        connection.websocket_connect_timeout_ms = Some(PI_DISABLED_IDLE_TIMEOUT_MS);
+        let Err(error) = validate_provider_connection(&connection) else {
+            panic!("websocket connect timeout must remain finite");
+        };
+        assert_eq!(error.code, "invalid_provider_connection");
     }
 }

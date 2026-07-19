@@ -111,4 +111,76 @@ describe("settings view model", () => {
 		expect(view.handleKey(" ")).toEqual({ type: "none" });
 		expect(view.lines(80)).toEqual(["Settings closed"]);
 	});
+
+	test("recomputes the activation route after successful save and restore", () => {
+		const config = createDefaultConfig();
+		const view = new SettingsModel(config, {
+			baseline: "0.144.3",
+			provider: "custom-codex",
+			model: "fixture-model",
+			bridge: "pending",
+			activationModel: { provider: "custom-codex", api: "openai-responses" },
+		});
+
+		expect(view.rows().find((row) => row.id === "route")?.value).toBe(
+			"inactive (provider not selected: custom-codex)",
+		);
+
+		view.setActivationProviders(["openai-codex", "custom-codex"]);
+		expect(view.state).toBe("dirty");
+		expect(view.rows().find((row) => row.id === "route")?.value).toBe(
+			"inactive (provider not selected: custom-codex)",
+		);
+
+		const saved = view.beginSave();
+		view.markSaved(saved);
+		expect(view.state).toBe("saved");
+		expect(view.rows().find((row) => row.id === "route")?.value).toBe(
+			"active (custom-codex / openai-responses)",
+		);
+
+		view.replaceWithSaved(createDefaultConfig());
+		expect(view.state).toBe("saved");
+		expect(view.rows().find((row) => row.id === "route")?.value).toBe(
+			"inactive (provider not selected: custom-codex)",
+		);
+	});
+
+	test("keeps the last persisted activation route when save fails", () => {
+		const config = createDefaultConfig();
+		const view = new SettingsModel(config, {
+			baseline: "0.144.3",
+			provider: "custom-codex",
+			model: "fixture-model",
+			bridge: "pending",
+			activationModel: { provider: "custom-codex", api: "openai-responses" },
+		});
+
+		const inactive = "inactive (provider not selected: custom-codex)";
+		expect(view.rows().find((row) => row.id === "route")?.value).toBe(inactive);
+
+		view.setActivationProviders(["openai-codex", "custom-codex"]);
+		view.markError("Codex settings could not be saved", "write-error");
+
+		expect(view.state).toBe("write-error");
+		expect(view.rows().find((row) => row.id === "route")?.value).toBe(inactive);
+	});
+
+	test("disables compact now when the current route is inactive", () => {
+		const view = new SettingsModel(createDefaultConfig(), {
+			baseline: "0.144.3",
+			provider: "custom-codex",
+			model: "fixture-model",
+			bridge: "pending",
+			activationModel: { provider: "custom-codex", api: "openai-responses" },
+		});
+
+		view.setCategory("Codex");
+		const compactNow = view.rows().find((row) => row.id === "compactNow");
+		expect(compactNow).toMatchObject({
+			value: "inactive",
+			enabled: false,
+			disabledReason: "Codex route is inactive for the current provider and API.",
+		});
+	});
 });
