@@ -16,6 +16,7 @@ export interface FakePi {
 	providers: string[];
 	status: Map<string, string | undefined>;
 	widgets: Map<string, string[] | undefined>;
+	notifications: string[];
 	context(model?: Model<string> | undefined): ExtensionContext;
 }
 
@@ -30,6 +31,7 @@ export function createFakePi(options: {
 	const providers: string[] = [];
 	const status = new Map<string, string | undefined>();
 	const widgets = new Map<string, string[] | undefined>();
+	const notifications: string[] = [];
 	let activeTools = [...(options.thirdPartyTools ?? ["third_party"])];
 	const cwd = options.cwd ?? process.cwd();
 
@@ -71,7 +73,9 @@ export function createFakePi(options: {
 				setWidget: (key: string, value: string[] | undefined) => widgets.set(key, value),
 				select: async (_title: string, choices: string[]) =>
 					choices.find((choice) => choice.startsWith("Allow once:")) ?? choices[0],
-				notify: () => {},
+				notify: (message: string) => {
+					notifications.push(message);
+				},
 			},
 			sessionManager: {
 				getSessionId: () => "fixture-session",
@@ -96,6 +100,7 @@ export function createFakePi(options: {
 		providers,
 		status,
 		widgets,
+		notifications,
 		context,
 	};
 }

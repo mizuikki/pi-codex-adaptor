@@ -174,16 +174,34 @@ describe("bridge protocol v2", () => {
 			type: "session_write",
 			requestId: "write-1",
 			sessionId: "session-1",
+			authorization: "require_approval",
 			data: "sample input",
 		});
 		const empty = encodeClientMessage({
 			type: "session_write",
 			requestId: "write-2",
 			sessionId: "session-1",
+			authorization: "preauthorized",
 			data: "",
 		});
 		expect(new TextDecoder().decode(nonEmpty)).toContain('"data":"sample input"');
 		expect(new TextDecoder().decode(empty)).toContain('"data":""');
+	});
+
+	test("rejects missing and unknown session_write authorization", () => {
+		const withoutAuthorization = {
+			type: "session_write",
+			requestId: "write-1",
+			sessionId: "session-1",
+			data: "input",
+		};
+		const unknownAuthorization = {
+			...withoutAuthorization,
+			authorization: "allow_once",
+		};
+
+		expect(() => encodeClientMessage(withoutAuthorization as never)).toThrow("protocol v2");
+		expect(() => encodeClientMessage(unknownAuthorization as never)).toThrow("protocol v2");
 	});
 
 	test("provider connection timeoutMs accepts finite bounds and Pi's disabled sentinel", () => {

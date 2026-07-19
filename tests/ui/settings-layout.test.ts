@@ -116,6 +116,7 @@ describe("settings layout snapshots", () => {
 		view.setCategory("Tools");
 		view.moveFocus(1);
 		view.moveFocus(1);
+		view.moveFocus(1);
 		const text = snapshot(view, 100);
 		expect(text).toContain("[disabled]");
 		expect(text).toContain("provider does not advertise image generation");

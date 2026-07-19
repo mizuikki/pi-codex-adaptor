@@ -13,7 +13,16 @@ Continue editing selected by default. `R` opens an explicit reset-to-defaults co
 selected by default. Unsupported capability-dependent settings include a textual reason; color is never
 the only state signal.
 
+The Tools category includes an `Approval policy` enum with `prompt` and `bypass`. Prompt is the safe
+default. Cycling from prompt to bypass opens a confirmation with Cancel focused by default. The
+confirmation states that native commands run with the user's permissions and that workspace roots do
+not sandbox shell behavior. Cancel leaves the draft unchanged; enabling bypass marks the draft dirty
+and emits one warning. Switching back to prompt needs no confirmation. A saved bypass policy adds
+`approvals:bypass` to the adaptor status only when status output is enabled, and emits one warning at
+session startup. Direct valid file configuration is supported, including headless sessions; bypass
+does not create per-tool-call notifications.
+
 Approval prompts owned by the terminal UI default to Decline, then Cancel, then Allow once. Headless
-mode does not open an overlay, animate, or wait for input. Diagnostics have a stable plain text or
-machine-readable form and exclude user content and secrets. Overlay disposal aborts in-flight UI tasks
-and ignores late updates.
+prompt mode does not open an overlay, animate, or wait for input and is never inferred to mean bypass.
+Diagnostics have a stable plain text or machine-readable form and exclude user content and secrets.
+Overlay disposal aborts in-flight UI tasks and ignores late updates.

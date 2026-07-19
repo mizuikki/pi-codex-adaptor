@@ -21,6 +21,12 @@ The TypeScript/native boundary is a bounded, versioned JSONL protocol. OpenAI wi
 specifications have one native source of truth. TypeScript validates only adaptor-owned envelopes and
 does not maintain a second Responses schema.
 
+Pi owns the persistent approval policy and maps one validated snapshot to one explicit authorization
+value on each native request. The integration layer never infers bypass from UI availability and does
+not cache authorization across calls. Native code owns the explicit allowlist, strict decoding,
+workspace and provider validation, cancellation checks, approval state, and side-effect commit points.
+Bypass removes only the interactive approval wait; it does not provide an OS sandbox.
+
 ## Module ownership
 
 | Module | Owns | Must not own |

@@ -16,7 +16,8 @@ shell behavior from the official model and feature resolver. Resolve standalone 
 namespaces, descriptions, schemas, freeform formats, and termination behavior.
 
 Expose `apply_patch`, `view_image`, and `image_gen.imagegen` only when their official capabilities
-resolve. Native execution waits for Pi approval and workspace policy decisions.
+resolve. Native execution uses prompt approval or explicit Pi-owned per-request preauthorization;
+workspace policy and native validation remain mandatory.
 
 ## Consequences
 

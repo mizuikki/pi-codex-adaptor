@@ -302,6 +302,25 @@ describe("fake Pi + real native lifecycle", () => {
 		expect(pi.activeTools).toEqual(["third_party", "update_plan", "apply_patch", "shell_command"]);
 		expect(pi.status.get("codex-adaptor")).toBeUndefined();
 
+		await service.applyDraft({
+			...defaults,
+			security: { approvalPolicy: "bypass" },
+		});
+		await waitFor(
+			() => pi.status.get("codex-adaptor")?.includes("approvals:bypass") === true,
+			2_000,
+		);
+		expect(pi.status.get("codex-adaptor")).toContain("approvals:bypass");
+		await emit(pi, "session_start", ctx);
+		const bypassWarnings = pi.notifications.filter((message) =>
+			message.includes("approval bypass is enabled"),
+		);
+		expect(bypassWarnings).toHaveLength(1);
+		await emit(pi, "session_start", ctx);
+		expect(
+			pi.notifications.filter((message) => message.includes("approval bypass is enabled")),
+		).toHaveLength(1);
+
 		await emit(pi, "session_shutdown", ctx);
 		const toolsAfterShutdown = [...pi.activeTools];
 		await service.resetToDefaults();

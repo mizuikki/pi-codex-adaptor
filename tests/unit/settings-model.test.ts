@@ -47,6 +47,17 @@ describe("settings view model", () => {
 		expect(view.state).toBe("dirty");
 	});
 
+	test("exposes the approval policy in Tools and keeps prompt as the safe default", () => {
+		const view = model();
+		view.setCategory("Tools");
+		const policy = view.rows().find((row) => row.id === "approvalPolicy");
+		expect(policy).toMatchObject({
+			label: "Approval policy",
+			value: "prompt",
+			kind: "enum",
+		});
+	});
+
 	test("edits the auto compact threshold in the draft only", () => {
 		const view = model();
 		view.moveCategory(1);

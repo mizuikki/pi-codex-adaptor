@@ -26,6 +26,7 @@ use bridge_protocol::ClientMessage;
 use bridge_protocol::ErrorCategory;
 use bridge_protocol::MAX_FRAME_BYTES;
 use bridge_protocol::MAX_PENDING_EVENTS;
+use bridge_protocol::NativeAuthorization;
 use bridge_protocol::OFFICIAL_CODEX_TAG;
 use bridge_protocol::OFFICIAL_CODEX_VERSION;
 use bridge_protocol::OFFICIAL_SOURCE_COMMIT;
@@ -103,6 +104,15 @@ const MAX_IMAGE_REFERENCE_DATA_URL_BYTES: usize = 64 * 1024 * 1024;
 const MAX_PATCH_BYTES: usize = 4 * 1024 * 1024;
 const MAX_IMAGE_PROMPT_BYTES: usize = 64 * 1024;
 const MAX_GENERATED_IMAGE_BYTES: usize = 24 * 1024 * 1024;
+const PREAUTHORIZED_TOOLS: &[&str] = &[
+    "exec_command",
+    "shell_command",
+    "write_stdin",
+    "apply_patch",
+    "view_image",
+    "image_gen.imagegen",
+    "web.run",
+];
 static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
 static NEXT_APPROVAL_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -543,6 +553,7 @@ struct OptionalToolCapabilities {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ToolExecuteParams {
     tool: String,
+    authorization: NativeAuthorization,
     #[serde(default)]
     connection: Option<ProviderConnection>,
     command: Option<String>,
@@ -758,8 +769,12 @@ impl ConnectionState {
             ClientMessage::SessionWrite {
                 request_id,
                 session_id,
+                authorization,
                 data,
-            } => self.write_session(request_id, session_id, data).await?,
+            } => {
+                self.write_session(request_id, session_id, authorization, data)
+                    .await?;
+            }
             ClientMessage::SessionResize {
                 request_id,
                 session_id,
@@ -934,6 +949,7 @@ impl ConnectionState {
         &mut self,
         request_id: String,
         session_id: String,
+        authorization: NativeAuthorization,
         data: String,
     ) -> io::Result<()> {
         if !self.claim(&request_id).await? {
@@ -952,7 +968,7 @@ impl ConnectionState {
                 .complete(request_id, json!({ "sessionId": session_id }))
                 .await;
         }
-        // Non-empty writes must wait for Pi approval before mutating process stdin.
+        // Non-empty writes must be authorized before mutating process stdin.
         // Approval correlation requires a background task so the connection loop can
         // still process approval_decision frames.
         let cancellation = CancellationToken::new();
@@ -973,6 +989,7 @@ impl ConnectionState {
             let message = match write_session_stdin(
                 &request_id,
                 &session_id,
+                authorization,
                 data,
                 &session,
                 &output,
@@ -1399,6 +1416,17 @@ async fn tools_execute(
 ) -> Result<RequestSuccess, RequestFailure> {
     let params = serde_json::from_value::<ToolExecuteParams>(params)
         .map_err(|_| invalid_params("tools.execute parameters are invalid"))?;
+    if params.authorization == NativeAuthorization::Preauthorized
+        && !PREAUTHORIZED_TOOLS.contains(&params.tool.as_str())
+    {
+        return Err(BridgeError {
+            category: ErrorCategory::CapabilityError,
+            code: "preauthorization_unsupported".to_owned(),
+            message: "preauthorization is not supported for the requested native tool".to_owned(),
+            retryable: false,
+        }
+        .into());
+    }
     if params.tool == "write_stdin" {
         return write_stdin(
             request_id,
@@ -1461,8 +1489,10 @@ async fn execute_shell_tool(
         .ok_or_else(|| invalid_params("tools.execute requires a command"))?;
     let workdir = validate_workspace(&params.workdir, &params.workspace_roots).await?;
     let shell_program = resolve_supported_shell(params.shell)?;
+    let use_login_shell = resolve_use_login_shell(params.login, params.allow_login_shell)?;
     await_command_approval(
         request_id,
+        params.authorization,
         &command,
         &shell_program,
         &workdir,
@@ -1473,7 +1503,6 @@ async fn execute_shell_tool(
     )
     .await?;
     ensure_not_cancelled(cancellation)?;
-    let use_login_shell = resolve_use_login_shell(params.login, params.allow_login_shell)?;
     if params.tool == "exec_command" {
         let yield_ms = params.yield_time_ms.unwrap_or(10_000).clamp(250, 30_000);
         return run_exec_process(
@@ -1549,6 +1578,7 @@ async fn validate_workspace(
 #[allow(clippy::too_many_arguments)]
 async fn await_command_approval(
     request_id: &str,
+    authorization: NativeAuthorization,
     command: &str,
     shell: &str,
     workdir: &Path,
@@ -1558,8 +1588,9 @@ async fn await_command_approval(
     cancellation: &CancellationToken,
 ) -> Result<(), RequestFailure> {
     let workdir = display_path_for_approval(workdir, workspace_roots).await;
-    await_approval(
+    authorize_operation(
         request_id,
+        authorization,
         ApprovalOperation::Command,
         format!("{shell}: {command}"),
         json!({
@@ -1573,6 +1604,37 @@ async fn await_command_approval(
         cancellation,
     )
     .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn authorize_operation(
+    request_id: &str,
+    authorization: NativeAuthorization,
+    operation: ApprovalOperation,
+    summary: String,
+    details: Value,
+    declined_message: &str,
+    output: &mpsc::Sender<ServerMessage>,
+    approvals: &Arc<Mutex<HashMap<String, oneshot::Sender<ApprovalDecision>>>>,
+    cancellation: &CancellationToken,
+) -> Result<(), RequestFailure> {
+    ensure_not_cancelled(cancellation)?;
+    match authorization {
+        NativeAuthorization::Preauthorized => Ok(()),
+        NativeAuthorization::RequireApproval => {
+            await_approval(
+                request_id,
+                operation,
+                summary,
+                details,
+                declined_message,
+                output,
+                approvals,
+                cancellation,
+            )
+            .await
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1678,9 +1740,19 @@ async fn view_image(
     let candidate =
         resolve_view_image_path(&path, &params.workdir, &params.workspace_roots).await?;
     let path = validate_workspace_file(&candidate, &params.workspace_roots).await?;
+    let metadata = tokio::fs::metadata(&path)
+        .await
+        .map_err(|_| image_error("image_unavailable", "the requested image is unavailable"))?;
+    if !metadata.is_file() {
+        return Err(image_error("image_not_file", "the requested image is not a file").into());
+    }
+    if metadata.len() > MAX_IMAGE_SOURCE_BYTES {
+        return Err(image_error("image_too_large", "the requested image is too large").into());
+    }
     let path_display = display_path_for_approval(&path, &params.workspace_roots).await;
-    await_approval(
+    authorize_operation(
         request_id,
+        params.authorization,
         ApprovalOperation::Filesystem,
         "Read image file".to_owned(),
         json!({ "path": path_display }),
@@ -1691,15 +1763,6 @@ async fn view_image(
     )
     .await?;
     ensure_not_cancelled(cancellation)?;
-    let metadata = tokio::fs::metadata(&path)
-        .await
-        .map_err(|_| image_error("image_unavailable", "the requested image is unavailable"))?;
-    if !metadata.is_file() {
-        return Err(image_error("image_not_file", "the requested image is not a file").into());
-    }
-    if metadata.len() > MAX_IMAGE_SOURCE_BYTES {
-        return Err(image_error("image_too_large", "the requested image is too large").into());
-    }
     let bytes = tokio::fs::read(&path)
         .await
         .map_err(|_| image_error("image_unavailable", "the requested image could not be read"))?;
@@ -1759,8 +1822,9 @@ async fn apply_patch(
         return Err(patch_error("empty_patch", "the patch does not modify any files").into());
     }
     let paths = validate_patch_paths(&parsed.hunks, &workdir, &params.workspace_roots).await?;
-    await_approval(
+    authorize_operation(
         request_id,
+        params.authorization,
         ApprovalOperation::Patch,
         format!("Modify {} file(s)", paths.len()),
         json!({ "paths": paths }),
@@ -1840,8 +1904,28 @@ async fn image_generation(
             display_paths.push(display_path_for_approval(&absolute, &params.workspace_roots).await);
             paths.push(absolute);
         }
-        await_approval(
+        let mut validated_reference_bytes = referenced_bytes;
+        for path in &paths {
+            let metadata = tokio::fs::metadata(path).await.map_err(|_| {
+                image_error("image_unavailable", "a referenced image is unavailable")
+            })?;
+            let remaining_bytes =
+                MAX_IMAGE_REFERENCE_BYTES.saturating_sub(validated_reference_bytes);
+            if !metadata.is_file()
+                || metadata.len() > MAX_IMAGE_SOURCE_BYTES
+                || metadata.len() > remaining_bytes
+            {
+                return Err(image_error(
+                    "invalid_image_reference",
+                    "the referenced images are invalid or too large",
+                )
+                .into());
+            }
+            validated_reference_bytes = validated_reference_bytes.saturating_add(metadata.len());
+        }
+        authorize_operation(
             request_id,
+            params.authorization,
             ApprovalOperation::Filesystem,
             format!("Read {} referenced image(s)", paths.len()),
             json!({ "paths": display_paths }),
@@ -1853,6 +1937,7 @@ async fn image_generation(
         .await?;
         ensure_not_cancelled(cancellation)?;
         for path in paths {
+            ensure_not_cancelled(cancellation)?;
             let metadata = tokio::fs::metadata(&path).await.map_err(|_| {
                 image_error("image_unavailable", "a referenced image is unavailable")
             })?;
@@ -1936,8 +2021,15 @@ async fn image_generation(
         images.extend(recent.into_iter().map(|image_url| ImageUrl { image_url }));
     }
 
-    await_approval(
+    let connection = params
+        .connection
+        .as_ref()
+        .ok_or_else(|| invalid_params("image_gen.imagegen requires a provider connection"))?;
+    let connection = api::connect(connection)?;
+
+    authorize_operation(
         request_id,
+        params.authorization,
         ApprovalOperation::Network,
         "image_gen.imagegen network access".to_owned(),
         json!({
@@ -1952,11 +2044,6 @@ async fn image_generation(
     .await?;
     ensure_not_cancelled(cancellation)?;
 
-    let connection = params
-        .connection
-        .as_ref()
-        .ok_or_else(|| invalid_params("image_gen.imagegen requires a provider connection"))?;
-    let connection = api::connect(connection)?;
     let client = ImagesClient::new(
         connection.transport,
         connection.provider,
@@ -2061,8 +2148,15 @@ async fn standalone_web_search(
         WebSearchMode::Indexed => ExternalWebAccessMode::Indexed,
         WebSearchMode::Live => ExternalWebAccessMode::Live,
     };
-    await_approval(
+    let connection = params
+        .connection
+        .as_ref()
+        .ok_or_else(|| invalid_params("web.run requires a provider connection"))?;
+    let connection = api::connect(connection)?;
+
+    authorize_operation(
         request_id,
+        params.authorization,
         ApprovalOperation::Network,
         "standalone web.run network access".to_owned(),
         json!({
@@ -2091,11 +2185,6 @@ async fn standalone_web_search(
         }),
         max_output_tokens: Some(10_000),
     };
-    let connection = params
-        .connection
-        .as_ref()
-        .ok_or_else(|| invalid_params("web.run requires a provider connection"))?;
-    let connection = api::connect(connection)?;
     let client = SearchClient::new(
         connection.transport,
         connection.provider,
@@ -2405,9 +2494,11 @@ async fn run_exec_process(
     )))
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn write_session_stdin(
     request_id: &str,
     session_id: &str,
+    authorization: NativeAuthorization,
     data: String,
     session: &NativeSession,
     output: &mpsc::Sender<ServerMessage>,
@@ -2419,8 +2510,9 @@ async fn write_session_stdin(
         return Ok(json!({ "sessionId": session_id }));
     }
     let (preview, truncated) = bounded_session_input_preview(&data);
-    await_approval(
+    authorize_operation(
         request_id,
+        authorization,
         ApprovalOperation::Command,
         preview.clone(),
         json!({
@@ -2468,8 +2560,9 @@ async fn write_stdin(
     // Empty polls are non-mutating and must not re-prompt for approval.
     if !chars.is_empty() {
         let (preview, truncated) = bounded_session_input_preview(&chars);
-        await_approval(
+        authorize_operation(
             request_id,
+            params.authorization,
             ApprovalOperation::Command,
             preview.clone(),
             json!({
@@ -3812,6 +3905,15 @@ mod tests {
             .expect("approval waiter should be active");
     }
 
+    fn assert_no_approval_messages(messages: &mut mpsc::Receiver<ServerMessage>) {
+        while let Ok(message) = messages.try_recv() {
+            assert!(
+                !matches!(message, ServerMessage::ApprovalRequest { .. }),
+                "preauthorized operations must not emit approval requests"
+            );
+        }
+    }
+
     fn initialization() -> &'static str {
         concat!(
             "{\"type\":\"initialize\",\"requestId\":\"init-1\",\"protocolVersion\":2,",
@@ -3861,6 +3963,66 @@ mod tests {
         };
         assert_eq!(error.category, ErrorCategory::ProtocolError);
         assert_eq!(error.code, "protocol_version_mismatch");
+    }
+
+    #[tokio::test]
+    async fn rejects_missing_unknown_and_unsupported_native_authorization() {
+        let (output, _messages) = mpsc::channel(8);
+        let flow = FlowController::new("request-authorization".to_owned(), output);
+        let cancellation = CancellationToken::new();
+        let approvals = Arc::new(Mutex::new(HashMap::new()));
+        let sessions = Arc::new(NativeSessions::default());
+
+        for params in [
+            json!({
+                "tool": "shell_command",
+                "command": "printf fixture",
+                "workdir": ".",
+                "workspaceRoots": ["."]
+            }),
+            json!({
+                "tool": "shell_command",
+                "authorization": "allow_once",
+                "command": "printf fixture",
+                "workdir": ".",
+                "workspaceRoots": ["."]
+            }),
+        ] {
+            let error = tools_execute(
+                "request-authorization",
+                params,
+                &flow,
+                &cancellation,
+                &flow.output,
+                &approvals,
+                &sessions,
+            )
+            .await
+            .expect_err("invalid authorization must fail closed");
+            assert!(
+                matches!(error, RequestFailure::Bridge(error) if error.code == "invalid_params")
+            );
+        }
+
+        let error = tools_execute(
+            "request-authorization-unsupported",
+            json!({
+                "tool": "future_native_tool",
+                "authorization": "preauthorized"
+            }),
+            &flow,
+            &cancellation,
+            &flow.output,
+            &approvals,
+            &sessions,
+        )
+        .await
+        .expect_err("unsupported preauthorization must fail closed");
+        assert!(matches!(
+            error,
+            RequestFailure::Bridge(error) if error.code == "preauthorization_unsupported"
+        ));
+        assert!(approvals.lock().await.is_empty());
     }
 
     #[tokio::test]
@@ -4169,6 +4331,7 @@ mod tests {
                 "request-1",
                 json!({
                     "tool": "shell_command",
+                    "authorization": "require_approval",
                     "command": "printf fixture",
                     "workdir": workspace_text,
                     "workspaceRoots": [workspace.to_string_lossy()],
@@ -4214,6 +4377,130 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn preauthorized_shell_tools_skip_approval_state_and_frames() {
+        let workspace = std::env::current_dir().expect("test workspace should resolve");
+        let workspace_text = workspace.to_string_lossy().into_owned();
+
+        for tool in ["exec_command", "shell_command"] {
+            let (output, mut messages) = mpsc::channel(8);
+            let flow = FlowController::new(format!("request-bypass-{tool}"), output);
+            let approvals = Arc::new(Mutex::new(HashMap::new()));
+            let sessions = Arc::new(NativeSessions::default());
+            let params = if tool == "exec_command" {
+                json!({
+                    "tool": tool,
+                    "authorization": "preauthorized",
+                    "cmd": "printf fixture",
+                    "workdir": workspace_text,
+                    "workspaceRoots": [workspace.to_string_lossy()],
+                    "yield_time_ms": 1_000,
+                    "allow_background_sessions": false,
+                })
+            } else {
+                json!({
+                    "tool": tool,
+                    "authorization": "preauthorized",
+                    "command": "printf fixture",
+                    "workdir": workspace_text,
+                    "workspaceRoots": [workspace.to_string_lossy()],
+                    "timeoutMs": 10_000,
+                })
+            };
+            let result = tools_execute(
+                &format!("request-bypass-{tool}"),
+                params,
+                &flow,
+                &CancellationToken::new(),
+                &flow.output,
+                &approvals,
+                &sessions,
+            )
+            .await
+            .expect("preauthorized shell tool should complete");
+            assert_eq!(result.status, TerminalStatus::Completed);
+            assert!(
+                result.result["output"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .contains("fixture")
+            );
+            assert_no_approval_messages(&mut messages);
+            assert!(approvals.lock().await.is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn preauthorized_shell_result_matches_prompt_approved_result() {
+        async fn run(
+            authorization: NativeAuthorization,
+            request_id: &str,
+            workspace: &Path,
+        ) -> Result<RequestSuccess, RequestFailure> {
+            let (output, mut messages) = mpsc::channel(8);
+            let flow = Arc::new(FlowController::new(request_id.to_owned(), output));
+            let approvals = Arc::new(Mutex::new(HashMap::new()));
+            let sessions = Arc::new(NativeSessions::default());
+            let task_flow = Arc::clone(&flow);
+            let task_approvals = Arc::clone(&approvals);
+            let task_sessions = Arc::clone(&sessions);
+            let task_authorization = authorization;
+            let task_request_id = request_id.to_owned();
+            let task_workspace = workspace.to_path_buf();
+            let task_workspace_root = workspace.to_path_buf();
+            let request = tokio::spawn(async move {
+                tools_execute(
+                    &task_request_id,
+                    json!({
+                        "tool": "shell_command",
+                        "authorization": task_authorization,
+                        "command": "printf fixture",
+                        "workdir": task_workspace,
+                        "workspaceRoots": [task_workspace_root],
+                        "timeoutMs": 10_000,
+                    }),
+                    &task_flow,
+                    &CancellationToken::new(),
+                    &task_flow.output,
+                    &task_approvals,
+                    &task_sessions,
+                )
+                .await
+            });
+            if authorization == NativeAuthorization::RequireApproval {
+                assert!(matches!(
+                    messages.recv().await,
+                    Some(ServerMessage::ApprovalRequest { .. })
+                ));
+                resolve_only_pending_approval(&approvals, ApprovalDecision::AllowOnce).await;
+            }
+            let result = request.await.expect("shell task should join")?;
+            assert_no_approval_messages(&mut messages);
+            assert!(approvals.lock().await.is_empty());
+            Ok(result)
+        }
+
+        let workspace = std::env::current_dir().expect("test workspace should resolve");
+        let prompt = run(
+            NativeAuthorization::RequireApproval,
+            "request-prompt-result",
+            &workspace,
+        )
+        .await
+        .expect("prompt shell should complete");
+        let bypass = run(
+            NativeAuthorization::Preauthorized,
+            "request-bypass-result",
+            &workspace,
+        )
+        .await
+        .expect("preauthorized shell should complete");
+
+        assert_eq!(bypass.status, prompt.status);
+        assert_eq!(bypass.result["exitCode"], prompt.result["exitCode"]);
+        assert_eq!(bypass.result["output"], prompt.result["output"]);
+    }
+
+    #[tokio::test]
     async fn rejects_python_as_shell_before_approval() {
         let workspace = std::env::current_dir().expect("test workspace should resolve");
         let workspace_text = workspace.to_string_lossy().into_owned();
@@ -4229,6 +4516,7 @@ mod tests {
             "request-python-shell",
             json!({
                 "tool": "exec_command",
+                "authorization": "require_approval",
                 "cmd": "print('nope')",
                 "shell": "python",
                 "workdir": workspace_text,
@@ -4284,6 +4572,7 @@ mod tests {
                         &request_id,
                         json!({
                             "tool": "exec_command",
+                            "authorization": "require_approval",
                             "cmd": "printf fixture",
                             "shell": shell,
                             "workdir": workspace_text,
@@ -4352,6 +4641,7 @@ mod tests {
                 "request-patch",
                 json!({
                     "tool": "apply_patch",
+                    "authorization": "require_approval",
                     "input": "*** Begin Patch\n*** Update File: fixture.txt\n@@\n-before\n+after\n*** Add File: added.txt\n+added\n*** End Patch",
                     "workdir": task_workspace,
                     "workspaceRoots": [task_workspace_root],
@@ -4397,6 +4687,53 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn preauthorized_patch_skips_approval_state_after_path_validation() {
+        let workspace = std::env::temp_dir().join(format!(
+            "pi-codex-adaptor-bypass-patch-fixture-{}",
+            std::process::id()
+        ));
+        let _ = tokio::fs::remove_dir_all(&workspace).await;
+        tokio::fs::create_dir_all(&workspace)
+            .await
+            .expect("fixture directory should be created");
+        tokio::fs::write(workspace.join("fixture.txt"), "before\n")
+            .await
+            .expect("fixture file should be written");
+        let (output, mut messages) = mpsc::channel(8);
+        let flow = FlowController::new("request-bypass-patch".to_owned(), output);
+        let approvals = Arc::new(Mutex::new(HashMap::new()));
+        let sessions = Arc::new(NativeSessions::default());
+        let result = tools_execute(
+            "request-bypass-patch",
+            json!({
+                "tool": "apply_patch",
+                "authorization": "preauthorized",
+                "input": "*** Begin Patch\n*** Update File: fixture.txt\n@@\n-before\n+after\n*** End Patch",
+                "workdir": workspace,
+                "workspaceRoots": [workspace],
+            }),
+            &flow,
+            &CancellationToken::new(),
+            &flow.output,
+            &approvals,
+            &sessions,
+        )
+        .await
+        .expect("preauthorized patch should apply");
+
+        assert_eq!(result.result["modified"][0], "fixture.txt");
+        assert_eq!(
+            tokio::fs::read_to_string(workspace.join("fixture.txt"))
+                .await
+                .expect("updated file should be readable"),
+            "after\n"
+        );
+        assert_no_approval_messages(&mut messages);
+        assert!(approvals.lock().await.is_empty());
+        let _ = tokio::fs::remove_dir_all(workspace).await;
+    }
+
+    #[tokio::test]
     #[allow(clippy::too_many_lines)]
     async fn keeps_unified_exec_sessions_for_write_and_poll() {
         let workspace = std::env::current_dir().expect("test workspace should resolve");
@@ -4420,6 +4757,7 @@ mod tests {
                 "request-session",
                 json!({
                     "tool": "exec_command",
+                    "authorization": "require_approval",
                     "cmd": command,
                     "workdir": workspace_text,
                     "workspaceRoots": [workspace.to_string_lossy()],
@@ -4456,6 +4794,7 @@ mod tests {
                 "request-poll",
                 json!({
                     "tool": "write_stdin",
+                    "authorization": "require_approval",
                     "session_id": session_id,
                     "chars": "fixture\n",
                     "yield_time_ms": process_test_timeout_ms(),
@@ -4498,6 +4837,195 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn preauthorized_session_writes_skip_approval_state() {
+        let workspace = std::env::current_dir().expect("test workspace should resolve");
+        let workspace_text = workspace.to_string_lossy().into_owned();
+        let (output, mut messages) = mpsc::channel(16);
+        let flow = FlowController::new("request-bypass-session".to_owned(), output);
+        let approvals = Arc::new(Mutex::new(HashMap::new()));
+        let sessions = Arc::new(NativeSessions::default());
+        let command = if cfg!(windows) {
+            "$line = [Console]::In.ReadLine(); Write-Output $line"
+        } else {
+            "read line; printf '%s' \"$line\""
+        };
+        let initial = tools_execute(
+            "request-bypass-session-start",
+            json!({
+                "tool": "exec_command",
+                "authorization": "preauthorized",
+                "cmd": command,
+                "workdir": workspace_text,
+                "workspaceRoots": [workspace.to_string_lossy()],
+                "yield_time_ms": 250,
+                "allow_background_sessions": true,
+            }),
+            &flow,
+            &CancellationToken::new(),
+            &flow.output,
+            &approvals,
+            &sessions,
+        )
+        .await
+        .expect("preauthorized command should yield a session");
+        let session_number = initial.result["session_id"]
+            .as_u64()
+            .expect("running command should return a session id");
+        let session_id = session_number.to_string();
+        let (_, session) = sessions
+            .get(&session_id)
+            .await
+            .expect("session should remain active");
+        let cancelled_write = CancellationToken::new();
+        cancelled_write.cancel();
+        let cancelled = write_session_stdin(
+            "request-bypass-control-write-cancelled",
+            &session_id,
+            NativeAuthorization::Preauthorized,
+            "should-not-be-written\n".to_owned(),
+            &session,
+            &flow.output,
+            &approvals,
+            &cancelled_write,
+        )
+        .await;
+        assert!(matches!(cancelled, Err(RequestFailure::Cancelled)));
+        assert_no_approval_messages(&mut messages);
+        assert!(approvals.lock().await.is_empty());
+        let direct_write = write_session_stdin(
+            "request-bypass-control-write",
+            &session_id,
+            NativeAuthorization::Preauthorized,
+            "fixture\n".to_owned(),
+            &session,
+            &flow.output,
+            &approvals,
+            &CancellationToken::new(),
+        )
+        .await
+        .expect("preauthorized control write should complete");
+        assert_eq!(direct_write["sessionId"], session_id);
+        assert_no_approval_messages(&mut messages);
+        assert!(approvals.lock().await.is_empty());
+
+        let poll = tools_execute(
+            "request-bypass-session-poll",
+            json!({
+                "tool": "write_stdin",
+                "authorization": "preauthorized",
+                "session_id": session_number,
+                "chars": "",
+                "yield_time_ms": process_test_timeout_ms(),
+            }),
+            &flow,
+            &CancellationToken::new(),
+            &flow.output,
+            &approvals,
+            &sessions,
+        )
+        .await
+        .expect("preauthorized session poll should complete");
+        assert_eq!(poll.result["exit_code"], 0);
+        assert!(
+            poll.result["output"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("fixture")
+        );
+        assert_no_approval_messages(&mut messages);
+        assert!(approvals.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn preauthorized_write_stdin_skips_approval_state() {
+        let workspace = std::env::current_dir().expect("test workspace should resolve");
+        let workspace_text = workspace.to_string_lossy().into_owned();
+        let (output, mut messages) = mpsc::channel(16);
+        let flow = FlowController::new("request-bypass-write-stdin".to_owned(), output);
+        let approvals = Arc::new(Mutex::new(HashMap::new()));
+        let sessions = Arc::new(NativeSessions::default());
+        let command = if cfg!(windows) {
+            "$line = [Console]::In.ReadLine(); Write-Output $line"
+        } else {
+            "read line; printf '%s' \"$line\""
+        };
+        let initial = tools_execute(
+            "request-bypass-write-stdin-start",
+            json!({
+                "tool": "exec_command",
+                "authorization": "preauthorized",
+                "cmd": command,
+                "workdir": workspace_text,
+                "workspaceRoots": [workspace.to_string_lossy()],
+                "yield_time_ms": 250,
+                "allow_background_sessions": true,
+            }),
+            &flow,
+            &CancellationToken::new(),
+            &flow.output,
+            &approvals,
+            &sessions,
+        )
+        .await
+        .expect("preauthorized command should yield a session");
+        let session_id = initial.result["session_id"]
+            .as_u64()
+            .expect("running command should return a session id");
+
+        let cancelled = CancellationToken::new();
+        cancelled.cancel();
+        let cancelled_result = tools_execute(
+            "request-bypass-write-stdin-cancelled",
+            json!({
+                "tool": "write_stdin",
+                "authorization": "preauthorized",
+                "session_id": session_id,
+                "chars": "should-not-be-written\n",
+                "yield_time_ms": process_test_timeout_ms(),
+            }),
+            &flow,
+            &cancelled,
+            &flow.output,
+            &approvals,
+            &sessions,
+        )
+        .await;
+        assert!(matches!(cancelled_result, Err(RequestFailure::Cancelled)));
+        assert_no_approval_messages(&mut messages);
+        assert!(approvals.lock().await.is_empty());
+
+        let result = tools_execute(
+            "request-bypass-write-stdin",
+            json!({
+                "tool": "write_stdin",
+                "authorization": "preauthorized",
+                "session_id": session_id,
+                "chars": "fixture\n",
+                "yield_time_ms": process_test_timeout_ms(),
+            }),
+            &flow,
+            &CancellationToken::new(),
+            &flow.output,
+            &approvals,
+            &sessions,
+        )
+        .await
+        .expect("preauthorized write_stdin should complete");
+
+        assert_eq!(result.status, TerminalStatus::Completed);
+        assert_eq!(result.result["exit_code"], 0);
+        assert!(
+            result.result["output"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("fixture")
+        );
+        assert_no_approval_messages(&mut messages);
+        assert!(approvals.lock().await.is_empty());
+        assert!(sessions.get(&session_id.to_string()).await.is_none());
+    }
+
+    #[tokio::test]
     async fn reads_an_approved_workspace_image_with_the_official_image_adapter() {
         let workspace = std::env::temp_dir().join(format!(
             "pi-codex-adaptor-image-fixture-{}",
@@ -4525,6 +5053,7 @@ mod tests {
                 "request-image",
                 json!({
                     "tool": "view_image",
+                    "authorization": "require_approval",
                     "path": image_path,
                     "detail": "original",
                     "workspaceRoots": [task_workspace],
@@ -4565,6 +5094,53 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn preauthorized_view_image_skips_approval_state_after_file_validation() {
+        let workspace = std::env::temp_dir().join(format!(
+            "pi-codex-adaptor-bypass-image-fixture-{}",
+            std::process::id()
+        ));
+        let _ = tokio::fs::remove_dir_all(&workspace).await;
+        tokio::fs::create_dir_all(&workspace)
+            .await
+            .expect("fixture directory should be created");
+        let image_path = workspace.join("fixture.png");
+        tokio::fs::write(&image_path, FIXTURE_PNG)
+            .await
+            .expect("fixture image should be written");
+        let (output, mut messages) = mpsc::channel(8);
+        let flow = FlowController::new("request-bypass-image".to_owned(), output);
+        let approvals = Arc::new(Mutex::new(HashMap::new()));
+        let sessions = Arc::new(NativeSessions::default());
+        let result = tools_execute(
+            "request-bypass-image",
+            json!({
+                "tool": "view_image",
+                "authorization": "preauthorized",
+                "path": image_path,
+                "detail": "original",
+                "workspaceRoots": [workspace],
+            }),
+            &flow,
+            &CancellationToken::new(),
+            &flow.output,
+            &approvals,
+            &sessions,
+        )
+        .await
+        .expect("preauthorized image read should complete");
+        assert_eq!(result.result["detail"], "original");
+        assert!(
+            result.result["image_url"]
+                .as_str()
+                .unwrap_or_default()
+                .starts_with("data:image/png;base64,")
+        );
+        assert_no_approval_messages(&mut messages);
+        assert!(approvals.lock().await.is_empty());
+        let _ = tokio::fs::remove_dir_all(workspace).await;
+    }
+
+    #[tokio::test]
     async fn generates_an_image_with_the_official_typed_client() {
         let (base_url, server) = spawn_fixture_http_server(
             json!({
@@ -4593,6 +5169,7 @@ mod tests {
                 "request-imagegen",
                 json!({
                     "tool": "image_gen.imagegen",
+                    "authorization": "require_approval",
                     "prompt": "fixture image",
                     "workdir": task_workspace,
                     "workspaceRoots": [task_workspace],
@@ -4632,6 +5209,58 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn preauthorized_image_generation_skips_file_and_network_approvals() {
+        let (base_url, server) = spawn_fixture_http_server(
+            json!({
+                "created": 1,
+                "data": [{ "b64_json": "ZmFrZQ==" }]
+            })
+            .to_string(),
+        )
+        .await;
+        let workspace = std::env::temp_dir().join(format!(
+            "pi-codex-adaptor-bypass-imagegen-fixture-{}",
+            std::process::id()
+        ));
+        let _ = tokio::fs::remove_dir_all(&workspace).await;
+        tokio::fs::create_dir_all(&workspace)
+            .await
+            .expect("fixture directory should be created");
+        let image_path = workspace.join("reference.png");
+        tokio::fs::write(&image_path, FIXTURE_PNG)
+            .await
+            .expect("fixture image should be written");
+        let (output, mut messages) = mpsc::channel(8);
+        let flow = FlowController::new("request-bypass-imagegen".to_owned(), output);
+        let approvals = Arc::new(Mutex::new(HashMap::new()));
+        let sessions = Arc::new(NativeSessions::default());
+        let result = tools_execute(
+            "request-bypass-imagegen",
+            json!({
+                "tool": "image_gen.imagegen",
+                "authorization": "preauthorized",
+                "prompt": "fixture image",
+                "referencedImagePaths": [image_path],
+                "workdir": workspace,
+                "workspaceRoots": [workspace],
+                "connection": fixture_connection(base_url),
+            }),
+            &flow,
+            &CancellationToken::new(),
+            &flow.output,
+            &approvals,
+            &sessions,
+        )
+        .await
+        .expect("preauthorized image generation should complete");
+        assert_eq!(result.result["image_url"], "data:image/png;base64,ZmFrZQ==");
+        assert_no_approval_messages(&mut messages);
+        assert!(approvals.lock().await.is_empty());
+        server.await.expect("fixture server should join");
+        let _ = tokio::fs::remove_dir_all(workspace).await;
+    }
+
+    #[tokio::test]
     async fn runs_standalone_web_search_with_the_official_search_client() {
         let (base_url, server) = spawn_fixture_http_server(
             json!({ "encrypted_output": "opaque", "output": "fixture search" }).to_string(),
@@ -4653,6 +5282,7 @@ mod tests {
                 "request-web",
                 json!({
                     "tool": "web.run",
+                    "authorization": "require_approval",
                     "commands": { "search_query": [{ "q": "fixture" }] },
                     "conversationItems": [],
                     "model": "fixture-model",
@@ -4696,6 +5326,113 @@ mod tests {
             .expect("web search task should join")
             .expect("web search should complete");
         assert_eq!(result.result["output"], "fixture search");
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn preauthorized_web_search_skips_network_approval_state() {
+        let (base_url, server) = spawn_fixture_http_server(
+            json!({ "encrypted_output": "opaque", "output": "fixture search" }).to_string(),
+        )
+        .await;
+        let workspace = std::env::current_dir().expect("fixture workdir should resolve");
+        let (output, mut messages) = mpsc::channel(8);
+        let flow = FlowController::new("request-bypass-web".to_owned(), output);
+        let approvals = Arc::new(Mutex::new(HashMap::new()));
+        let sessions = Arc::new(NativeSessions::default());
+        let result = tools_execute(
+            "request-bypass-web",
+            json!({
+                "tool": "web.run",
+                "authorization": "preauthorized",
+                "commands": { "search_query": [{ "q": "fixture" }] },
+                "conversationItems": [],
+                "model": "fixture-model",
+                "requestSessionId": "fixture-session",
+                "webSearchMode": "indexed",
+                "workdir": workspace,
+                "workspaceRoots": [workspace],
+                "connection": fixture_connection(base_url),
+            }),
+            &flow,
+            &CancellationToken::new(),
+            &flow.output,
+            &approvals,
+            &sessions,
+        )
+        .await
+        .expect("preauthorized web search should complete");
+        assert_eq!(result.result["output"], "fixture search");
+        assert_no_approval_messages(&mut messages);
+        assert!(approvals.lock().await.is_empty());
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn preauthorized_cancellation_blocks_image_and_web_network_calls() {
+        let (base_url, hits, server) = spawn_counting_fixture_http_server().await;
+        let workspace = std::env::current_dir().expect("fixture workdir should resolve");
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+
+        let (image_output, mut image_messages) = mpsc::channel(8);
+        let image_flow = FlowController::new(
+            "request-bypass-cancel-image-network".to_owned(),
+            image_output,
+        );
+        let image_approvals = Arc::new(Mutex::new(HashMap::new()));
+        let image_sessions = Arc::new(NativeSessions::default());
+        let image = tools_execute(
+            "request-bypass-cancel-image-network",
+            json!({
+                "tool": "image_gen.imagegen",
+                "authorization": "preauthorized",
+                "prompt": "fixture image",
+                "workdir": workspace,
+                "workspaceRoots": [workspace],
+                "connection": fixture_connection(base_url.clone()),
+            }),
+            &image_flow,
+            &cancellation,
+            &image_flow.output,
+            &image_approvals,
+            &image_sessions,
+        )
+        .await;
+        assert!(matches!(image, Err(RequestFailure::Cancelled)));
+        assert_no_approval_messages(&mut image_messages);
+        assert!(image_approvals.lock().await.is_empty());
+
+        let (web_output, mut web_messages) = mpsc::channel(8);
+        let web_flow =
+            FlowController::new("request-bypass-cancel-web-network".to_owned(), web_output);
+        let web_approvals = Arc::new(Mutex::new(HashMap::new()));
+        let web_sessions = Arc::new(NativeSessions::default());
+        let web = tools_execute(
+            "request-bypass-cancel-web-network",
+            json!({
+                "tool": "web.run",
+                "authorization": "preauthorized",
+                "commands": { "search_query": [{ "q": "fixture" }] },
+                "conversationItems": [],
+                "model": "fixture-model",
+                "requestSessionId": "fixture-session",
+                "webSearchMode": "indexed",
+                "workdir": workspace,
+                "workspaceRoots": [workspace],
+                "connection": fixture_connection(base_url),
+            }),
+            &web_flow,
+            &cancellation,
+            &web_flow.output,
+            &web_approvals,
+            &web_sessions,
+        )
+        .await;
+        assert!(matches!(web, Err(RequestFailure::Cancelled)));
+        assert_no_approval_messages(&mut web_messages);
+        assert!(web_approvals.lock().await.is_empty());
+        assert_eq!(hits.load(Ordering::SeqCst), 0);
         server.abort();
     }
 
@@ -4927,6 +5664,7 @@ mod tests {
             "request-escape",
             json!({
                 "tool": "shell_command",
+                "authorization": "require_approval",
                 "command": "printf fixture",
                 "workdir": outside,
                 "workspaceRoots": [workspace],
@@ -4948,6 +5686,172 @@ mod tests {
             other => panic!("expected workspace escape error, got {other:?}"),
         };
         assert_eq!(err.code, "workspace_escape");
+    }
+
+    #[tokio::test]
+    async fn preauthorized_workspace_escape_still_fails_before_side_effect() {
+        let workspace = std::env::current_dir().expect("workspace");
+        let outside = std::env::temp_dir();
+        let (output, mut messages) = mpsc::channel(8);
+        let flow = FlowController::new("request-bypass-escape".to_owned(), output);
+        let approvals = Arc::new(Mutex::new(HashMap::new()));
+        let sessions = Arc::new(NativeSessions::default());
+        let cancellation = CancellationToken::new();
+        let result = tools_execute(
+            "request-bypass-escape",
+            json!({
+                "tool": "shell_command",
+                "authorization": "preauthorized",
+                "command": "printf fixture",
+                "workdir": outside,
+                "workspaceRoots": [workspace],
+                "timeoutMs": 1_000,
+            }),
+            &flow,
+            &cancellation,
+            &flow.output,
+            &approvals,
+            &sessions,
+        )
+        .await;
+        assert!(matches!(
+            result,
+            Err(RequestFailure::Bridge(error)) if error.code == "workspace_escape"
+        ));
+        assert_no_approval_messages(&mut messages);
+        assert!(approvals.lock().await.is_empty());
+
+        let (patch_output, mut patch_messages) = mpsc::channel(8);
+        let patch_flow =
+            FlowController::new("request-bypass-patch-escape".to_owned(), patch_output);
+        let patch_approvals = Arc::new(Mutex::new(HashMap::new()));
+        let patch_sessions = Arc::new(NativeSessions::default());
+        let patch = tools_execute(
+            "request-bypass-patch-escape",
+            json!({
+                "tool": "apply_patch",
+                "authorization": "preauthorized",
+                "input": "*** Begin Patch\n*** Add File: ../escape.txt\n+escape\n*** End Patch",
+                "workdir": workspace,
+                "workspaceRoots": [workspace],
+            }),
+            &patch_flow,
+            &CancellationToken::new(),
+            &patch_flow.output,
+            &patch_approvals,
+            &patch_sessions,
+        )
+        .await;
+        assert!(matches!(
+            patch,
+            Err(RequestFailure::Bridge(error)) if error.code == "invalid_patch_path"
+        ));
+        assert_no_approval_messages(&mut patch_messages);
+        assert!(patch_approvals.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn preauthorized_cancellation_blocks_shell_patch_and_image_side_effects() {
+        let workspace = std::env::temp_dir().join(format!(
+            "pi-codex-adaptor-bypass-cancel-{}",
+            std::process::id()
+        ));
+        let _ = tokio::fs::remove_dir_all(&workspace).await;
+        tokio::fs::create_dir_all(&workspace)
+            .await
+            .expect("workspace should be created");
+        let target = workspace.join("fixture.txt");
+        let image = workspace.join("fixture.png");
+        tokio::fs::write(&target, "before\n")
+            .await
+            .expect("patch target should be written");
+        tokio::fs::write(&image, FIXTURE_PNG)
+            .await
+            .expect("image fixture should be written");
+
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+
+        let (shell_output, mut shell_messages) = mpsc::channel(8);
+        let shell_flow =
+            FlowController::new("request-bypass-cancel-shell".to_owned(), shell_output);
+        let shell_approvals = Arc::new(Mutex::new(HashMap::new()));
+        let shell_sessions = Arc::new(NativeSessions::default());
+        let shell = tools_execute(
+            "request-bypass-cancel-shell",
+            json!({
+                "tool": "shell_command",
+                "authorization": "preauthorized",
+                "command": "printf should-not-run",
+                "workdir": workspace,
+                "workspaceRoots": [workspace],
+            }),
+            &shell_flow,
+            &cancellation,
+            &shell_flow.output,
+            &shell_approvals,
+            &shell_sessions,
+        )
+        .await;
+        assert!(matches!(shell, Err(RequestFailure::Cancelled)));
+        assert_no_approval_messages(&mut shell_messages);
+        assert!(shell_approvals.lock().await.is_empty());
+        assert!(shell_sessions.entries.lock().await.is_empty());
+
+        let (patch_output, mut patch_messages) = mpsc::channel(8);
+        let patch_flow =
+            FlowController::new("request-bypass-cancel-patch".to_owned(), patch_output);
+        let patch_approvals = Arc::new(Mutex::new(HashMap::new()));
+        let patch_sessions = Arc::new(NativeSessions::default());
+        let patch = tools_execute(
+            "request-bypass-cancel-patch",
+            json!({
+                "tool": "apply_patch",
+                "authorization": "preauthorized",
+                "input": "*** Begin Patch\n*** Update File: fixture.txt\n@@\n-before\n+after\n*** End Patch",
+                "workdir": workspace,
+                "workspaceRoots": [workspace],
+            }),
+            &patch_flow,
+            &cancellation,
+            &patch_flow.output,
+            &patch_approvals,
+            &patch_sessions,
+        )
+        .await;
+        assert!(matches!(patch, Err(RequestFailure::Cancelled)));
+        assert_no_approval_messages(&mut patch_messages);
+        assert_eq!(
+            tokio::fs::read_to_string(&target).await.expect("target"),
+            "before\n"
+        );
+
+        let (image_output, mut image_messages) = mpsc::channel(8);
+        let image_flow =
+            FlowController::new("request-bypass-cancel-image".to_owned(), image_output);
+        let image_approvals = Arc::new(Mutex::new(HashMap::new()));
+        let image_sessions = Arc::new(NativeSessions::default());
+        let image_result = tools_execute(
+            "request-bypass-cancel-image",
+            json!({
+                "tool": "view_image",
+                "authorization": "preauthorized",
+                "path": image,
+                "workdir": workspace,
+                "workspaceRoots": [workspace],
+            }),
+            &image_flow,
+            &cancellation,
+            &image_flow.output,
+            &image_approvals,
+            &image_sessions,
+        )
+        .await;
+        assert!(matches!(image_result, Err(RequestFailure::Cancelled)));
+        assert_no_approval_messages(&mut image_messages);
+        assert!(image_approvals.lock().await.is_empty());
+
+        let _ = tokio::fs::remove_dir_all(workspace).await;
     }
 
     #[tokio::test]
@@ -4977,6 +5881,7 @@ mod tests {
                         &request_id,
                         json!({
                             "tool": "shell_command",
+                            "authorization": "require_approval",
                             "command": "printf fixture",
                             "workdir": workspace_text,
                             "workspaceRoots": [workspace],
@@ -5034,6 +5939,7 @@ mod tests {
                 "request-truncate",
                 json!({
                     "tool": "shell_command",
+                    "authorization": "require_approval",
                     "command": command,
                     "workdir": workspace_text,
                     "workspaceRoots": [workspace],
@@ -5090,6 +5996,7 @@ mod tests {
                 "request-cancel-process",
                 json!({
                     "tool": "shell_command",
+                    "authorization": "require_approval",
                     "command": command,
                     "workdir": workspace_text,
                     "workspaceRoots": [workspace],
@@ -5161,6 +6068,7 @@ mod tests {
                 "request-patch-cancel-before",
                 json!({
                     "tool": "apply_patch",
+                    "authorization": "require_approval",
                     "input": "*** Begin Patch\n*** Update File: fixture.txt\n@@\n-before\n+after\n*** End Patch",
                     "workdir": task_workspace,
                     "workspaceRoots": [task_workspace_root],
@@ -5229,6 +6137,7 @@ mod tests {
                 "request-patch-cancel-after",
                 json!({
                     "tool": "apply_patch",
+                    "authorization": "require_approval",
                     "input": "*** Begin Patch\n*** Update File: fixture.txt\n@@\n-before\n+after\n*** End Patch",
                     "workdir": task_workspace,
                     "workspaceRoots": [task_workspace_root],
@@ -5437,6 +6346,7 @@ mod tests {
                     &task_request_id,
                     json!({
                         "tool": "image_gen.imagegen",
+                        "authorization": "require_approval",
                         "prompt": "fixture image",
                         "workdir": task_workspace,
                         "workspaceRoots": [task_workspace],
@@ -5524,6 +6434,7 @@ mod tests {
                 "request-imagegen-ref",
                 json!({
                     "tool": "image_gen.imagegen",
+                    "authorization": "require_approval",
                     "prompt": "fixture image",
                     "referencedImagePaths": [task_image],
                     "workdir": task_workspace,
@@ -5620,6 +6531,7 @@ mod tests {
                 "request-relative-cmd",
                 json!({
                     "tool": "shell_command",
+                    "authorization": "require_approval",
                     "command": "printf fixture",
                     "workdir": task_workspace.join("nested"),
                     "workspaceRoots": [task_workspace],
@@ -5678,6 +6590,7 @@ mod tests {
                 "request-relative-image",
                 json!({
                     "tool": "view_image",
+                    "authorization": "require_approval",
                     "path": task_image,
                     "detail": "original",
                     "workspaceRoots": [task_workspace],
@@ -5736,6 +6649,7 @@ mod tests {
                 "request-empty-poll-start",
                 json!({
                     "tool": "exec_command",
+                    "authorization": "require_approval",
                     "cmd": command,
                     "workdir": workspace_text,
                     "workspaceRoots": [workspace],
@@ -5763,6 +6677,7 @@ mod tests {
             "request-empty-poll",
             json!({
                 "tool": "write_stdin",
+                "authorization": "require_approval",
                 "session_id": session_id,
                 "chars": "",
                 "yield_time_ms": 50,
@@ -5829,6 +6744,7 @@ mod tests {
                     &task_start_id,
                     json!({
                         "tool": "exec_command",
+                        "authorization": "require_approval",
                         "cmd": command,
                         "workdir": workspace_text,
                         "workspaceRoots": [task_workspace],
@@ -5864,6 +6780,7 @@ mod tests {
                     &task_write_id,
                     json!({
                         "tool": "write_stdin",
+                        "authorization": "require_approval",
                         "session_id": session_id,
                         "chars": format!("{task_secret}\n"),
                         "yield_time_ms": 5_000,
@@ -5964,6 +6881,7 @@ mod tests {
                 "request-write-stdin-cancel",
                 json!({
                     "tool": "exec_command",
+                    "authorization": "require_approval",
                     "cmd": command,
                     "workdir": workspace_text,
                     "workspaceRoots": [workspace],
@@ -5998,6 +6916,7 @@ mod tests {
                 "request-write-stdin-poll",
                 json!({
                     "tool": "write_stdin",
+                    "authorization": "require_approval",
                     "session_id": session_id,
                     "chars": "",
                     "yield_time_ms": 30_000,
@@ -6057,6 +6976,7 @@ mod tests {
                 "request-session-write-start",
                 json!({
                     "tool": "exec_command",
+                    "authorization": "require_approval",
                     "cmd": command,
                     "workdir": workspace_text,
                     "workspaceRoots": [task_workspace],
@@ -6098,6 +7018,7 @@ mod tests {
                 write_session_stdin(
                     "request-session-write",
                     &session_id,
+                    NativeAuthorization::RequireApproval,
                     format!("{secret}\n"),
                     &session,
                     &write_output,
@@ -6197,6 +7118,7 @@ mod tests {
                     &task_start_id,
                     json!({
                         "tool": "exec_command",
+                        "authorization": "require_approval",
                         "cmd": command,
                         "workdir": workspace_text,
                         "workspaceRoots": [task_workspace],
@@ -6238,6 +7160,7 @@ mod tests {
                 write_session_stdin(
                     &task_write_id,
                     &task_session_id,
+                    NativeAuthorization::RequireApproval,
                     format!("{task_secret}\n"),
                     &session,
                     &write_output,
@@ -6319,6 +7242,7 @@ mod tests {
                 "request-empty-session-write-start",
                 json!({
                     "tool": "exec_command",
+                    "authorization": "require_approval",
                     "cmd": command,
                     "workdir": workspace_text,
                     "workspaceRoots": [workspace],
@@ -6351,6 +7275,7 @@ mod tests {
         let result = write_session_stdin(
             "request-empty-session-write",
             &session_id,
+            NativeAuthorization::RequireApproval,
             String::new(),
             &session,
             &flow.output,
@@ -6483,6 +7408,7 @@ mod tests {
                 "request-relative-view-image",
                 json!({
                     "tool": "view_image",
+                    "authorization": "require_approval",
                     "path": "fixture.png",
                     "detail": "original",
                     "workdir": task_workdir,
@@ -6570,6 +7496,7 @@ mod tests {
                 &format!("request-view-escape-{label}"),
                 json!({
                     "tool": "view_image",
+                    "authorization": "require_approval",
                     "path": path,
                     "detail": "high",
                     "workdir": workspace,
@@ -6815,6 +7742,7 @@ mod tests {
                 "request-order",
                 json!({
                     "tool": "shell_command",
+                    "authorization": "require_approval",
                     "command": "printf fixture",
                     "workdir": workspace_text,
                     "workspaceRoots": [workspace.to_string_lossy()],
@@ -6871,6 +7799,7 @@ mod tests {
                 "request-session-decision",
                 json!({
                     "tool": "shell_command",
+                    "authorization": "require_approval",
                     "command": "printf fixture",
                     "workdir": workspace_text,
                     "workspaceRoots": [workspace.to_string_lossy()],
@@ -6925,6 +7854,7 @@ mod tests {
             "method": "tools.execute",
             "params": {
                 "tool": "shell_command",
+                "authorization": "require_approval",
                 "command": "printf fixture",
                 "workdir": workspace_text,
                 "workspaceRoots": [workspace.to_string_lossy()],

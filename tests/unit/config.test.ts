@@ -16,6 +16,26 @@ describe("versioned product configuration", () => {
 			mode: "auto",
 			autoCompactTokenLimit: "model",
 		});
+		expect(config.security).toEqual({ approvalPolicy: "prompt" });
+	});
+
+	test("accepts the explicit prompt and bypass security policies", () => {
+		const config = createDefaultConfig();
+		expect(parseConfig(config).security.approvalPolicy).toBe("prompt");
+		expect(
+			parseConfig({ ...config, security: { approvalPolicy: "bypass" } }).security.approvalPolicy,
+		).toBe("bypass");
+	});
+
+	test("rejects missing and unknown security policies", () => {
+		const config = createDefaultConfig();
+		const withoutSecurity = { ...config } as Record<string, unknown>;
+		delete withoutSecurity.security;
+		expect(() => parseConfig(withoutSecurity)).toThrow(ConfigurationError);
+		expect(() => parseConfig({ ...config, security: { approvalPolicy: "allow_once" } })).toThrow(
+			ConfigurationError,
+		);
+		expect(() => parseConfig({ ...config, security: {} })).toThrow(ConfigurationError);
 	});
 
 	test("accepts off compaction without an inactive threshold", () => {
