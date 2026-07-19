@@ -4,8 +4,7 @@ import type {
 	Model,
 	SimpleStreamOptions,
 } from "@earendil-works/pi-ai";
-import { streamSimple as streamOpenAiCodexResponses } from "@earendil-works/pi-ai/api/openai-codex-responses";
-import { streamSimple as streamOpenAiResponses } from "@earendil-works/pi-ai/api/openai-responses";
+import { streamSimple as streamPiNative } from "@earendil-works/pi-ai/compat";
 
 import type { CodexRuntime } from "../../application/codex-runtime.ts";
 import { CodexCompactionStore } from "../../application/compaction.ts";
@@ -27,12 +26,12 @@ export function createCodexProviderDispatchers(
 		codexResponses: createDispatcher(
 			activation,
 			codex,
-			streamOpenAiCodexResponses as unknown as StreamSimpleDispatcher,
+			streamPiNative as unknown as StreamSimpleDispatcher,
 		),
 		openAiResponses: createDispatcher(
 			activation,
 			codex,
-			streamOpenAiResponses as unknown as StreamSimpleDispatcher,
+			streamPiNative as unknown as StreamSimpleDispatcher,
 		),
 	};
 }
