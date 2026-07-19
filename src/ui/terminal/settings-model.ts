@@ -29,6 +29,7 @@ export type SettingsDialog =
 	| { kind: "none" }
 	| { kind: "dirty-close"; focus: number }
 	| { kind: "reset-confirm"; focus: number }
+	| { kind: "approval-bypass-confirm"; focus: number }
 	| { kind: "help" };
 
 export type SettingsEffect =
@@ -40,7 +41,8 @@ export type SettingsEffect =
 	| { type: "export" }
 	| { type: "edit-providers" }
 	| { type: "edit-auto-compact" }
-	| { type: "reset-defaults" };
+	| { type: "reset-defaults" }
+	| { type: "approval-bypass-enabled" };
 
 export type SettingsRowKind = "readonly" | "toggle" | "enum" | "action" | "number";
 
@@ -68,7 +70,13 @@ export interface SettingsModelOptions {
 
 const DIRTY_CLOSE_OPTIONS = ["Continue editing", "Discard changes", "Save"] as const;
 const RESET_OPTIONS = ["Cancel", "Reset to defaults"] as const;
+const APPROVAL_BYPASS_OPTIONS = ["Cancel", "Enable bypass"] as const;
 const NAV_WIDTH = 20;
+
+export const APPROVAL_BYPASS_WARNING =
+	"Codex approval bypass is enabled: native commands run with the user's permissions, and workspace roots do not sandbox shell behavior.";
+const APPROVAL_BYPASS_CONFIRMATION =
+	"Bypass preauthorizes supported native operations per request. Native commands run with the user's permissions, and workspace roots do not sandbox shell behavior.";
 
 export class SettingsModel {
 	#saved: CodexConfig;
@@ -254,6 +262,13 @@ export class SettingsModel {
 						"toggle",
 					),
 					row(
+						"approvalPolicy",
+						"Approval policy",
+						this.#draft.security.approvalPolicy,
+						"Prompt is the safe default. Bypass preauthorizes supported native operations per request without an OS sandbox.",
+						"enum",
+					),
+					row(
 						"viewImage",
 						"view_image",
 						this.#draft.tools.optional.viewImage,
@@ -405,12 +420,20 @@ export class SettingsModel {
 		this.#markDirty();
 	}
 
-	cycleFocused(): void {
-		if (this.#disposed || this.#dialog.kind !== "none") return;
+	cycleFocused(): SettingsEffect {
+		if (this.#disposed || this.#dialog.kind !== "none") return { type: "none" };
 		const current = this.focusedRow();
-		if (current === undefined || !current.enabled || current.kind !== "enum") return;
+		if (current === undefined || !current.enabled || current.kind !== "enum") {
+			return { type: "none" };
+		}
 		let changed = true;
-		if (current.id === "viewImage") {
+		if (current.id === "approvalPolicy") {
+			if (this.#draft.security.approvalPolicy === "prompt") {
+				this.#dialog = { kind: "approval-bypass-confirm", focus: 0 };
+				return { type: "none" };
+			}
+			this.#draft.security.approvalPolicy = "prompt";
+		} else if (current.id === "viewImage") {
 			this.#draft.tools.optional.viewImage = flipAutoOff(this.#draft.tools.optional.viewImage);
 		} else if (current.id === "imageGeneration") {
 			this.#draft.tools.optional.imageGeneration = flipAutoOff(
@@ -442,6 +465,7 @@ export class SettingsModel {
 			changed = false;
 		}
 		if (changed) this.#markDirty();
+		return { type: "none" };
 	}
 
 	beginSave(): CodexConfig {
@@ -671,8 +695,7 @@ export class SettingsModel {
 			return { type: "none" };
 		}
 		if (current.kind === "enum") {
-			this.cycleFocused();
-			return { type: "none" };
+			return this.cycleFocused();
 		}
 		if (current.id === "autoCompactTokenLimit") return { type: "edit-auto-compact" };
 		if (current.id === "providers") return { type: "edit-providers" };
@@ -758,6 +781,37 @@ export class SettingsModel {
 				}
 				this.#dialog = { kind: "none" };
 				return { type: "reset-defaults" };
+			}
+		}
+		if (dialog.kind === "approval-bypass-confirm") {
+			if (key === "esc") {
+				this.#dialog = { kind: "none" };
+				return { type: "none" };
+			}
+			if (key === "up" || key === "k") {
+				this.#dialog = {
+					kind: "approval-bypass-confirm",
+					focus: Math.max(0, dialog.focus - 1),
+				};
+				return { type: "none" };
+			}
+			if (key === "down" || key === "j") {
+				this.#dialog = {
+					kind: "approval-bypass-confirm",
+					focus: Math.min(APPROVAL_BYPASS_OPTIONS.length - 1, dialog.focus + 1),
+				};
+				return { type: "none" };
+			}
+			if (key === "enter" || key === "space") {
+				const selected = APPROVAL_BYPASS_OPTIONS[dialog.focus] ?? APPROVAL_BYPASS_OPTIONS[0];
+				if (selected === "Enable bypass") {
+					this.#draft.security.approvalPolicy = "bypass";
+					this.#markDirty();
+					this.#dialog = { kind: "none" };
+					return { type: "approval-bypass-enabled" };
+				}
+				this.#dialog = { kind: "none" };
+				return { type: "none" };
 			}
 		}
 		return { type: "none" };
@@ -905,6 +959,20 @@ export class SettingsModel {
 				"",
 			];
 			for (const [index, option] of RESET_OPTIONS.entries()) {
+				const prefix = index === this.#dialog.focus ? ">" : " ";
+				lines.push(fitLine(`${prefix} ${option}`, width));
+			}
+			lines.push("", fitLine("Default: Cancel", width));
+			return lines;
+		}
+		if (this.#dialog.kind === "approval-bypass-confirm") {
+			const lines = [
+				fitLine("Enable approval bypass", width),
+				"",
+				...wrapText(APPROVAL_BYPASS_CONFIRMATION, width),
+				"",
+			];
+			for (const [index, option] of APPROVAL_BYPASS_OPTIONS.entries()) {
 				const prefix = index === this.#dialog.focus ? ">" : " ";
 				lines.push(fitLine(`${prefix} ${option}`, width));
 			}

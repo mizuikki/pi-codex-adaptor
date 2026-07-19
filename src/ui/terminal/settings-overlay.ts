@@ -10,7 +10,7 @@ import {
 	exportDiagnosticsConfirmed,
 } from "../../application/diagnostics.ts";
 import { type CodexConfig, ConfigurationError } from "../../domain/config.ts";
-import { type SettingsEffect, SettingsModel } from "./settings-model.ts";
+import { APPROVAL_BYPASS_WARNING, type SettingsEffect, SettingsModel } from "./settings-model.ts";
 
 export async function openSettingsOverlay(
 	ctx: ExtensionCommandContext,
@@ -149,6 +149,9 @@ export class SettingsOverlay {
 				return;
 			case "reset-defaults":
 				await this.#resetDefaults();
+				return;
+			case "approval-bypass-enabled":
+				this.#ctx.ui.notify(APPROVAL_BYPASS_WARNING, "warning");
 				return;
 		}
 	}

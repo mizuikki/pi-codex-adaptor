@@ -130,6 +130,7 @@ try {
 			"tools.execute",
 			{
 				tool: "shell_command",
+				authorization: "require_approval",
 				command: process.platform === "win32" ? "echo fixture" : "printf fixture",
 				workdir: repositoryRoot,
 				workspaceRoots: [repositoryRoot],
@@ -149,6 +150,31 @@ try {
 			(command.result as { exitCode?: unknown }).exitCode !== 0
 		) {
 			throw new Error("Native shell execution did not complete");
+		}
+
+		let bypassApproval = false;
+		const bypass = await client.request(
+			"tools.execute",
+			{
+				tool: "shell_command",
+				authorization: "preauthorized",
+				command: process.platform === "win32" ? "echo fixture-bypass" : "printf fixture-bypass",
+				workdir: repositoryRoot,
+				workspaceRoots: [repositoryRoot],
+				timeoutMs: 10_000,
+				login: false,
+				allowLoginShell: false,
+				...(process.platform === "win32" ? { shell: "cmd.exe" } : {}),
+			},
+			{
+				onApprovalRequest: (approval) => {
+					bypassApproval = true;
+					return client.decideApproval(approval.approvalId, "decline");
+				},
+			},
+		);
+		if (bypass.status !== "completed" || bypassApproval) {
+			throw new Error("Native preauthorized shell execution did not bypass approval");
 		}
 	} finally {
 		await client.shutdown();

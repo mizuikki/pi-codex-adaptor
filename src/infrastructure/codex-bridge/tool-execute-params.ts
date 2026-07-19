@@ -5,6 +5,8 @@
  * connections are attached separately by the runtime for network tools.
  */
 
+import type { NativeAuthorization } from "../../application/codex-runtime.ts";
+
 const TOOL_EXECUTE_ARGUMENT_KEYS = [
 	"command",
 	"cmd",
@@ -49,6 +51,7 @@ export interface ToolsExecuteParamsInput {
 	argumentsValue: Record<string, unknown>;
 	workdir: string;
 	workspaceRoots: readonly string[];
+	authorization: NativeAuthorization;
 }
 
 /**
@@ -61,6 +64,7 @@ export function buildToolsExecuteParams(input: ToolsExecuteParamsInput): Record<
 		tool: input.tool,
 		workdir: input.workdir,
 		workspaceRoots: [...input.workspaceRoots],
+		authorization: input.authorization,
 	};
 	for (const key of TOOL_EXECUTE_ARGUMENT_KEYS) {
 		if (!Object.hasOwn(input.argumentsValue, key)) {

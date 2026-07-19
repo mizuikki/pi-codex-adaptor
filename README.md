@@ -5,12 +5,12 @@ protocol and selected runtime modules without running a second agent inside Pi.
 
 The repository is under active implementation. Protocol v2, the native baseline handshake, official
 Responses SSE/WebSocket transport with connect fallback, compact endpoint, and exact model metadata
-resolution are implemented. The versioned configuration store, approval-gated Unified Exec sessions,
+resolution are implemented. The versioned configuration store, prompt-approved or preauthorized Unified Exec sessions,
 and `/codex` settings overlay are available. The extension replaces only Pi's `openai-codex` stream
 handler with the native bridge adapter, dispatches both supported Responses APIs by exact provider-id
 activation, and delegates unselected providers directly to Pi's public native streams. It activates
 the generated update-plan and model-resolved shell surface without removing third-party tools,
-executes approval-gated patches through the official parser, supports workspace image inspection, and
+executes prompt-approved or explicitly preauthorized patches through the official parser, supports workspace image inspection, and
 restores process ownership on session shutdown. Because Pi owns one stream handler per API id, the
 adaptor cannot safely compose with another extension that replaces either supported Responses API.
 Pi compaction selects the official RemoteCompactionV2 stream when available and otherwise uses the
@@ -108,6 +108,20 @@ The product contract, security boundary, and upstream source pin are documented 
 [`docs/official-baseline.md`](./docs/official-baseline.md).
 Capabilities outside the first release are tracked in
 [`docs/remaining-gaps.md`](./docs/remaining-gaps.md).
+
+## Configuration and security
+
+The exact schema v2 configuration includes `security.approvalPolicy`, which defaults to `prompt`:
+
+```json
+{ "security": { "approvalPolicy": "prompt" } }
+```
+
+The `/codex` Tools settings can explicitly enable `bypass`. This is Pi-owned per-request
+preauthorization for the supported native allowlist, not an OS sandbox: native commands run with the
+user's permissions, and workspace roots do not sandbox shell behavior. Native validation and
+cancellation still apply. Invalid or incomplete configuration is rejected rather than defaulting to
+bypass.
 
 ## License
 

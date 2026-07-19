@@ -1,15 +1,20 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import type { TSchema } from "typebox";
-import type { CodexApprovalRequest, CodexRuntime } from "../../application/codex-runtime.ts";
+import type {
+	CodexApprovalRequest,
+	CodexRuntime,
+	NativeAuthorization,
+} from "../../application/codex-runtime.ts";
 import type { ConfigurationService } from "../../application/configuration.ts";
 import type { ProviderActivationPolicy } from "../../application/provider-activation.ts";
 import { UpdatePlanUseCase } from "../../application/update-plan.ts";
 import { buildToolsResolveParams, parseModelResolution } from "../../domain/capability.ts";
-import type { CodexConfig } from "../../domain/config.ts";
+import type { ApprovalPolicy, CodexConfig } from "../../domain/config.ts";
 import type { PlanUpdate } from "../../domain/plan.ts";
 import { resolveProviderActivation } from "../../domain/provider-activation.ts";
 import { requestCodexApproval } from "../../ui/terminal/approval-prompt.ts";
+import { APPROVAL_BYPASS_WARNING } from "../../ui/terminal/settings-model.ts";
 import { responseItemsFromMessages } from "./codex-provider.ts";
 import { OFFICIAL_CORE_TOOL_CONTRACTS, PI_CORE_TOOL_PARAMETERS } from "./generated/core-tools.ts";
 import { assertProviderActive, resolveProviderConnection } from "./provider-connection.ts";
@@ -35,13 +40,14 @@ export function registerCodexTools(
 	activation: ProviderActivationPolicy,
 ): void {
 	const hiddenDispatchTools = new Set<ManagedTool>();
+	let startupBypassWarningShown = false;
 	registerPlanTool(pi, activation);
 	registerNativeTool(pi, runtime, configuration, activation, "exec_command", "Execute command");
 	registerNativeTool(pi, runtime, configuration, activation, "write_stdin", "Write to session");
 	registerNativeTool(pi, runtime, configuration, activation, "shell_command", "Run shell command");
 	registerNativeTool(pi, runtime, configuration, activation, "apply_patch", "Apply patch");
 	registerNativeTool(pi, runtime, configuration, activation, "view_image", "View image");
-	registerImageGenerationTool(pi, runtime, activation);
+	registerImageGenerationTool(pi, runtime, configuration, activation);
 	registerStandaloneWebTool(pi, runtime, configuration, activation);
 
 	let activationGeneration = 0;
@@ -55,17 +61,29 @@ export function registerCodexTools(
 		return activation.isActive(model);
 	};
 
-	const activate = async (ctx: ExtensionContext, configOverride?: CodexConfig): Promise<void> => {
+	const activate = async (
+		ctx: ExtensionContext,
+		configOverride?: CodexConfig,
+		startupWarning = false,
+	): Promise<void> => {
 		const generation = ++activationGeneration;
 		const selected = ctx.model;
-		if (selected === undefined || !providerActive(selected, configOverride)) {
-			hiddenDispatchTools.clear();
-			disableManagedTools(pi);
-			setStatus(ctx, undefined);
-			return;
-		}
 		try {
 			const config = configOverride ?? (await configuration.load());
+			if (
+				startupWarning &&
+				!startupBypassWarningShown &&
+				config.security.approvalPolicy === "bypass"
+			) {
+				startupBypassWarningShown = true;
+				ctx.ui.notify(APPROVAL_BYPASS_WARNING, "warning");
+			}
+			if (selected === undefined || !providerActive(selected, config)) {
+				hiddenDispatchTools.clear();
+				disableManagedTools(pi);
+				setStatus(ctx, undefined);
+				return;
+			}
 			// Re-check after the async load so a mid-flight onChange snapshot is authoritative.
 			if (!providerActive(selected, config)) {
 				if (generation !== activationGeneration) return;
@@ -133,7 +151,11 @@ export function registerCodexTools(
 				typeof toolResolution?.webSurface === "string" ? toolResolution.webSurface : "unsupported";
 			setStatus(
 				ctx,
-				config.ui.status ? `Codex 0.144.3 | ${shellSurface} | ${webSurface}` : undefined,
+				config.ui.status
+					? `Codex 0.144.3 | ${shellSurface} | ${webSurface}${
+							config.security.approvalPolicy === "bypass" ? " | approvals:bypass" : ""
+						}`
+					: undefined,
 			);
 		} catch {
 			if (generation === activationGeneration) {
@@ -144,9 +166,9 @@ export function registerCodexTools(
 		}
 	};
 
-	const remember = (ctx: ExtensionContext): Promise<void> => {
+	const remember = (ctx: ExtensionContext, startupWarning = false): Promise<void> => {
 		activeContext = ctx;
-		return activate(ctx);
+		return activate(ctx, undefined, startupWarning);
 	};
 
 	// Settings save/reset/restore notify onChange with the validated snapshot. Recompute the
@@ -158,7 +180,7 @@ export function registerCodexTools(
 			return activate(ctx, config);
 		}) ?? (() => {});
 
-	pi.on("session_start", (_event, ctx) => remember(ctx));
+	pi.on("session_start", (_event, ctx) => remember(ctx, true));
 	pi.on("model_select", (_event, ctx) => remember(ctx));
 	pi.on("session_shutdown", () => {
 		// Drop the session context, invalidate in-flight activate work, and unsubscribe so a
@@ -166,6 +188,7 @@ export function registerCodexTools(
 		// extension root disposing activation and shutting down the runtime on this event.
 		activationGeneration += 1;
 		activeContext = undefined;
+		startupBypassWarningShown = false;
 		unsubscribeConfig();
 	});
 }
@@ -192,12 +215,12 @@ function registerStandaloneWebTool(
 			),
 		renderResult: (result, options, theme) => renderToolResult(result, options, theme),
 		execute: async (_toolCallId, params, signal, _onUpdate, ctx) => {
+			const config = await configuration.load();
 			const connection = await resolveProviderConnection(
 				ctx,
 				activation,
 				"Codex tools are inactive for the selected provider and API",
 			);
-			const config = await configuration.load();
 			const conversationItems = responseItemsFromMessages(
 				ctx.sessionManager.getBranch().flatMap((entry) => {
 					const value = record(entry);
@@ -215,6 +238,7 @@ function registerStandaloneWebTool(
 				}),
 				workdir: ctx.cwd,
 				workspaceRoots: [ctx.cwd],
+				authorization: nativeAuthorizationFor(config.security.approvalPolicy),
 				...(signal === undefined ? {} : { signal }),
 				onApproval: (approval) => requestApproval(ctx, approval, signal),
 			});
@@ -231,6 +255,7 @@ function registerStandaloneWebTool(
 function registerImageGenerationTool(
 	pi: ExtensionAPI,
 	runtime: CodexRuntime,
+	configuration: Pick<ConfigurationService, "load">,
 	activation: ProviderActivationPolicy,
 ): void {
 	const namespace = OFFICIAL_CORE_TOOL_CONTRACTS.image_gen;
@@ -248,6 +273,7 @@ function registerImageGenerationTool(
 				0,
 			),
 		execute: async (_toolCallId, params, signal, _onUpdate, ctx) => {
+			const config = await configuration.load();
 			const connection = await resolveProviderConnection(
 				ctx,
 				activation,
@@ -260,6 +286,7 @@ function registerImageGenerationTool(
 				argumentsValue,
 				workdir: ctx.cwd,
 				workspaceRoots: [ctx.cwd],
+				authorization: nativeAuthorizationFor(config.security.approvalPolicy),
 				...(signal === undefined ? {} : { signal }),
 				onApproval: (approval) => requestApproval(ctx, approval, signal),
 			});
@@ -354,6 +381,7 @@ function registerNativeTool(
 				argumentsValue: buildNativeToolArguments(name, params, config.tools.backgroundSessions),
 				workdir: workdirFrom(params, ctx.cwd),
 				workspaceRoots: [ctx.cwd],
+				authorization: nativeAuthorizationFor(config.security.approvalPolicy),
 				...(signal === undefined ? {} : { signal }),
 				onEvent: (event) => {
 					const delta = toolOutputDelta(event);
@@ -387,6 +415,15 @@ function registerNativeTool(
 			};
 		},
 	});
+}
+
+export function nativeAuthorizationFor(policy: ApprovalPolicy): NativeAuthorization {
+	switch (policy) {
+		case "prompt":
+			return "require_approval";
+		case "bypass":
+			return "preauthorized";
+	}
 }
 
 async function requestApproval(

@@ -205,6 +205,34 @@ describe("settings overlay disposal", () => {
 		expect(model.state).toBe("saved");
 	});
 
+	test("approval bypass confirmation warns only after explicit enablement", async () => {
+		const service = createService();
+		const ctx = createCtx();
+		const model = new SettingsModel(createDefaultConfig(), {
+			baseline: "0.144.3",
+			provider: "openai-codex",
+			model: "test-model",
+			bridge: "protocol v2",
+		});
+		const overlay = new SettingsOverlay(model, service, ctx, diagnostics(), undefined, () => {});
+
+		model.moveCategory(1);
+		model.moveFocus(1);
+		overlay.handleInput("\r");
+		await Promise.resolve();
+		expect(model.dialog).toEqual({ kind: "approval-bypass-confirm", focus: 0 });
+		expect(ctx.notifications).toEqual([]);
+
+		overlay.handleInput("j");
+		overlay.handleInput("\r");
+		await Promise.resolve();
+		expect(model.draft.security.approvalPolicy).toBe("bypass");
+		expect(model.state).toBe("dirty");
+		expect(ctx.notifications).toHaveLength(1);
+		expect(ctx.notifications[0]).toContain("user's permissions");
+		expect(ctx.notifications[0]).toContain("workspace roots do not sandbox shell behavior");
+	});
+
 	test("blocks manual compact while coordinator is busy", async () => {
 		const service = createService();
 		const coordinator = new CodexCompactionCoordinator();

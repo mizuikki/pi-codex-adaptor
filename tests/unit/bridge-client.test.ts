@@ -308,8 +308,8 @@ describe("bridge process client", () => {
 		const client = await connect(transport);
 
 		await client.decideApproval("approval-1", "allow_once");
-		await client.writeSession("session-1", "input");
-		await client.writeSession("session-1", "");
+		await client.writeSession("session-1", "input", "require_approval");
+		await client.writeSession("session-1", "", "preauthorized");
 		await client.resizeSession("session-1", 120, 40);
 		await client.terminateSession("session-1");
 
@@ -324,12 +324,14 @@ describe("bridge process client", () => {
 				type: "session_write",
 				requestId: expect.any(String),
 				sessionId: "session-1",
+				authorization: "require_approval",
 				data: "input",
 			},
 			{
 				type: "session_write",
 				requestId: expect.any(String),
 				sessionId: "session-1",
+				authorization: "preauthorized",
 				data: "",
 			},
 			{
@@ -353,13 +355,14 @@ describe("bridge process client", () => {
 		const client = await connect(transport);
 		const secret = "SECRET_SESSION_WRITE_PAYLOAD";
 
-		await client.writeSession("session-1", secret);
+		await client.writeSession("session-1", secret, "require_approval");
 		const write = transport.controlMessages.find(
 			(message) => message.type === "session_write" && message.data === secret,
 		);
 		expect(write).toMatchObject({
 			type: "session_write",
 			sessionId: "session-1",
+			authorization: "require_approval",
 			data: secret,
 		});
 		await client.shutdown();
@@ -379,7 +382,7 @@ describe("bridge process client", () => {
 
 		const pending = client.request(
 			"tools.execute",
-			{ tool: "shell_command", command: "sleep 30" },
+			{ tool: "shell_command", authorization: "require_approval", command: "sleep 30" },
 			{
 				signal: controller.signal,
 				onApprovalRequest: (approval) => {
@@ -470,7 +473,7 @@ describe("bridge process client", () => {
 		const client = await connect(transport);
 		const controller = new AbortController();
 
-		const pending = client.writeSession("session-1", "input", {
+		const pending = client.writeSession("session-1", "input", "preauthorized", {
 			signal: controller.signal,
 		});
 		controller.abort();

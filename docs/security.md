@@ -1,7 +1,22 @@
 # Security Design
 
 Pi packages execute with the user's full permissions. This project therefore treats source
-provenance, explicit authorization, and diagnostic redaction as product requirements.
+provenance, explicit authorization, and diagnostic redaction as product requirements. `prompt` is the
+safe default. `bypass` is an explicit Pi-owned per-request authorization mode, not an OS sandbox:
+native commands run with the user's permissions, and workspace roots do not sandbox shell behavior.
+
+## Approval policy
+
+The exact configuration v2 shape requires `security.approvalPolicy` with one of `prompt` or `bypass`.
+Pi loads one validated snapshot at the beginning of each registered native tool call and maps it to
+one required bridge authorization value. The snapshot is not cached on the bridge and a configuration
+change cannot switch the policy halfway through an active operation.
+
+The preauthorization allowlist is fixed: `exec_command`, `shell_command`, non-empty `write_stdin`,
+non-empty `session_write`, `apply_patch`, `view_image`, `image_gen.imagegen`, and `web.run`. Empty
+stdin/session writes remain non-mutating polls. Bypass emits no approval request or decision frame and
+does not allocate approval state, while native validation, workspace containment, cancellation, and
+atomic patch commit checks remain mandatory. Preauthorization for an unsupported tool is rejected.
 
 - TypeScript builds `tools.execute` params from an adaptor-owned allowlist. Model tool arguments are
   never spread into the bridge request. Provider connections are attached only to Responses,
@@ -12,19 +27,21 @@ provenance, explicit authorization, and diagnostic redaction as product requirem
   workspace-relative or attacker-created executables such as `./bash` or `/tmp/bash`, rejects
   arbitrary programs such as Python or Node, and discloses the resolved shell plus command in the
   approval summary and details before spawning.
-- Commands, patches, filesystem reads, network actions, non-empty Unified Exec `write_stdin` writes,
-  and non-empty `session_write` control frames must wait for Pi approval and workspace policy
-  decisions before native execution. Empty `write_stdin` polls and empty session writes remain
-  non-mutating and do not re-prompt. Session write approvals include the session id and a bounded
-  input preview for inspection; that preview must not appear in diagnostics. Approval requests
-  advertise only `decline`, `cancel`, and `allow_once` in that order; unadvertised `allow_session` is
-  rejected and never authorizes execution. Approval waits race request cancellation, dispose the Pi
-  use opaque server-generated IDs, dispose the Pi approval UI fail-closed, remove native approval-map
-  entries on every cancel or drop path, and never authorize a late decision for an expired approval
-  id. A late or unknown approval decision caused by cancellation completes as a no-op and must not
-  fail the entire bridge connection.
-  `image_gen.imagegen` requires network approval before any Images API call in addition to
-  referenced-file approval, and referenced images have aggregate raw and encoded memory limits.
+- In prompt mode, commands, patches, filesystem reads, network actions, non-empty Unified Exec
+  `write_stdin` writes, and non-empty `session_write` control frames wait for Pi approval and
+  workspace policy decisions before native execution. Empty `write_stdin` polls and empty session
+  writes remain non-mutating and do not re-prompt. Session write approvals include the session id
+  and a bounded input preview for inspection; that preview must not appear in diagnostics. Approval
+  requests advertise only `decline`, `cancel`, and `allow_once` in that order; unadvertised
+  `allow_session` is rejected and never authorizes execution. Approval waits race request
+  cancellation, use opaque server-generated IDs, dispose the Pi approval UI fail-closed, remove
+  native approval-map entries on every cancel or drop path, and never authorize a late decision for
+  an expired approval id. A late or unknown approval decision caused by cancellation completes as a
+  no-op and must not fail the entire bridge connection. `image_gen.imagegen` requires network
+  approval before any Images API call in addition to referenced-file approval.
+- In bypass mode, the same operations run only after validation and the same cancellation/commit
+  checks, but the bridge returns directly from authorization without an approval frame or map entry.
+  Referenced images still have aggregate raw and encoded memory limits.
 - `apply_patch` defines an atomic commit point immediately before the blocking filesystem apply.
   Cancellation before that point prevents mutation. After the apply begins, the request waits for
   the real terminal outcome rather than reporting `aborted` while files continue to change.

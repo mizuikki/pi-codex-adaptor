@@ -194,6 +194,7 @@ describe("cancellation and approval recovery", () => {
 
 		const pending = runtime.executeTool({
 			tool: "shell_command",
+			authorization: "require_approval",
 			argumentsValue: { command: "sleep 30" },
 			workdir: "/tmp",
 			workspaceRoots: ["/tmp"],
@@ -238,6 +239,7 @@ describe("cancellation and approval recovery", () => {
 
 		const pending = runtime.executeTool({
 			tool: "shell_command",
+			authorization: "require_approval",
 			argumentsValue: { command: "printf should-not-run" },
 			workdir: "/tmp",
 			workspaceRoots: ["/tmp"],

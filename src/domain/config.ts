@@ -4,6 +4,7 @@ export type Verbosity = "low" | "medium" | "high";
 export type TransportMode = "auto" | "sse";
 export type WebSearchMode = "disabled" | "cached" | "indexed" | "live";
 export type ShellSurface = "unified-exec" | "shell-command" | "disabled";
+export type ApprovalPolicy = "prompt" | "bypass";
 
 export type CompactionConfig =
 	| { mode: "off" }
@@ -19,6 +20,7 @@ export interface CodexConfig {
 			imageGeneration: AutoOrOff;
 		};
 	};
+	security: { approvalPolicy: ApprovalPolicy };
 	codex: {
 		serviceTier: ServiceTier;
 		verbosity: Verbosity;
@@ -94,6 +96,7 @@ export function createDefaultConfig(): CodexConfig {
 			backgroundSessions: true,
 			optional: { viewImage: "auto", imageGeneration: "auto" },
 		},
+		security: { approvalPolicy: "prompt" },
 		codex: {
 			serviceTier: "default",
 			verbosity: "low",
@@ -109,11 +112,12 @@ export function parseConfig(value: unknown): CodexConfig {
 	const issues: ConfigurationIssue[] = [];
 	const root = record(value, "$", issues);
 	if (root === undefined) throw new ConfigurationError(issues);
-	exactKeys(root, ["schemaVersion", "activation", "tools", "codex", "ui"], "$", issues);
+	exactKeys(root, ["schemaVersion", "activation", "tools", "security", "codex", "ui"], "$", issues);
 
 	const schemaVersion = literal(root.schemaVersion, 2, "schemaVersion", issues);
 	const activation = parseActivation(root.activation, issues);
 	const tools = parseTools(root.tools, issues);
+	const security = parseSecurity(root.security, issues);
 	const codex = parseCodex(root.codex, issues);
 	const ui = parseUi(root.ui, issues);
 	if (
@@ -121,12 +125,13 @@ export function parseConfig(value: unknown): CodexConfig {
 		schemaVersion === undefined ||
 		activation === undefined ||
 		tools === undefined ||
+		security === undefined ||
 		codex === undefined ||
 		ui === undefined
 	) {
 		throw new ConfigurationError(issues);
 	}
-	return { schemaVersion, activation, tools, codex, ui };
+	return { schemaVersion, activation, tools, security, codex, ui };
 }
 
 /** Schema-parse a draft and apply capability-aware save gates for the supplied context. */
@@ -550,6 +555,22 @@ function parseTools(
 		imageGeneration === undefined
 		? undefined
 		: { backgroundSessions, optional: { viewImage, imageGeneration } };
+}
+
+function parseSecurity(
+	value: unknown,
+	issues: ConfigurationIssue[],
+): CodexConfig["security"] | undefined {
+	const security = record(value, "security", issues);
+	if (security === undefined) return undefined;
+	exactKeys(security, ["approvalPolicy"], "security", issues);
+	const approvalPolicy = enumValue(
+		security.approvalPolicy,
+		["prompt", "bypass"],
+		"security.approvalPolicy",
+		issues,
+	);
+	return approvalPolicy === undefined ? undefined : { approvalPolicy };
 }
 
 function parseCodex(

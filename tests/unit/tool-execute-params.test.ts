@@ -8,17 +8,20 @@ describe("tools.execute param allowlist", () => {
 			tool: "image_gen.imagegen",
 			argumentsValue: {
 				prompt: "fixture image",
+				authorization: "preauthorized",
 				connection: { baseUrl: "http://127.0.0.1:9/v1", token: "fixture-token" },
 				providerId: "model-injected",
 			},
 			workdir: "/workspace",
 			workspaceRoots: ["/workspace"],
+			authorization: "require_approval",
 		});
 
 		expect(params).toEqual({
 			tool: "image_gen.imagegen",
 			workdir: "/workspace",
 			workspaceRoots: ["/workspace"],
+			authorization: "require_approval",
 			prompt: "fixture image",
 		});
 		expect(params).not.toHaveProperty("connection");
@@ -37,6 +40,7 @@ describe("tools.execute param allowlist", () => {
 			},
 			workdir: "/workspace",
 			workspaceRoots: ["/workspace"],
+			authorization: "preauthorized",
 		});
 
 		expect(params.commands).toEqual({ search_query: [{ q: "fixture" }] });
@@ -58,12 +62,14 @@ describe("tools.execute param allowlist", () => {
 			},
 			workdir: "/workspace",
 			workspaceRoots: ["/workspace"],
+			authorization: "require_approval",
 		});
 
 		expect(params).toEqual({
 			tool: "exec_command",
 			workdir: "/workspace",
 			workspaceRoots: ["/workspace"],
+			authorization: "require_approval",
 			cmd: "printf fixture",
 			shell: "/bin/bash",
 			login: false,

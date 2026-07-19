@@ -22,8 +22,8 @@ The first stable release will provide:
 - the official shell resolver and its `exec_command`/`write_stdin` or `shell_command` surface;
 - `apply_patch`, `view_image`, and `image_gen.imagegen` when their official capabilities resolve;
 - standalone `web.run` or hosted `web_search`, selected by provider capability;
-- Pi approvals before native command, patch, filesystem, image, network, or non-empty session stdin
-  execution;
+- Pi interactive approval before native command, patch, filesystem, image, network, or non-empty
+  session stdin execution in prompt mode, with an explicit Pi-owned per-request bypass option;
 - one `/codex` settings and diagnostics entry point.
 
 This contract does not promise complete Codex CLI parity. P1 and P2 capabilities are tracked in
@@ -51,7 +51,11 @@ categories are `ConfigurationError`, `AuthenticationError`, `ProtocolError`, `Ca
 Credentials enter the bridge only through bounded, request-scoped provider connections. They must not
 appear in argv, configuration files, logs, snapshots, errors, or diagnostics.
 Prompts, messages, headers, opaque compaction items, and absolute user paths are excluded from default
-diagnostics. Native operations wait for an explicit Pi approval decision and workspace policy result.
+diagnostics. `prompt` is the safe default: native operations wait for an explicit Pi approval decision
+and workspace policy result. `bypass` is explicit Pi-owned per-request preauthorization for the fixed
+native allowlist; it is not an OS sandbox. Native commands run with the user's permissions, and
+workspace roots do not sandbox shell behavior. Validation, workspace containment, cancellation, and
+side-effect ordering remain native responsibilities in both modes.
 
 ## Configuration
 
@@ -73,6 +77,9 @@ The new-install default is:
       "viewImage": "auto",
       "imageGeneration": "auto"
     }
+  },
+  "security": {
+    "approvalPolicy": "prompt"
   },
   "codex": {
     "serviceTier": "default",
@@ -104,10 +111,10 @@ backpressure, and safe process shutdown. The bridge compiles and links the pinne
 modules and advertises Responses SSE/WebSocket, the Compact endpoint, RemoteCompactionV2, model
 metadata, update-plan, hosted and standalone web, Unified Exec, shell-command, apply-patch,
 view-image, and image generation capabilities. It resolves the official tool contracts, including
-hidden unified-exec fallback dispatch, and requires Pi approval for command, patch, filesystem,
-image, and network work. Separately, canonical workspace roots constrain command working
+hidden unified-exec fallback dispatch, and supports either prompt approval or explicit per-request
+preauthorization for command, patch, filesystem, image, and network work. Separately, canonical workspace roots constrain command working
 directories, patch targets, viewed images, and referenced image-generation inputs. Unified Exec
-pipe/PTY sessions support bounded polling, approval-gated non-empty stdin writes, resize,
+pipe/PTY sessions support bounded polling, prompt-approved or preauthorized non-empty stdin writes, resize,
 termination, cancellation, and shutdown cleanup. Pi activation is reversible, preserves third-party
 tools, replays opaque compaction output, and renders compact tool state inline.
 `/codex` exposes settings, manual compaction, and a confirmed, redacted diagnostics export. Remaining

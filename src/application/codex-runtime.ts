@@ -71,6 +71,9 @@ export interface CompactResponseOptions {
 	signal?: AbortSignal;
 }
 
+/** Authorization selected by Pi for one native request. */
+export type NativeAuthorization = "require_approval" | "preauthorized";
+
 export interface CodexApprovalRequest {
 	approvalId: string;
 	operation: "command" | "patch" | "filesystem" | "network";
@@ -87,6 +90,7 @@ export interface ExecuteToolOptions {
 	argumentsValue: Record<string, unknown>;
 	workdir: string;
 	workspaceRoots: readonly string[];
+	authorization: NativeAuthorization;
 	signal?: AbortSignal;
 	onEvent?(event: unknown): void | Promise<void>;
 	onApproval?(

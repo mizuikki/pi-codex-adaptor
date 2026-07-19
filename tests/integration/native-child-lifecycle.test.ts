@@ -110,6 +110,7 @@ describe("native child integration", () => {
 			"tools.execute",
 			{
 				tool: "shell_command",
+				authorization: "require_approval",
 				command: process.platform === "win32" ? "echo fixture" : "printf fixture",
 				workdir: repositoryRoot,
 				workspaceRoots: [repositoryRoot],
@@ -141,6 +142,7 @@ describe("native child integration", () => {
 			"tools.execute",
 			{
 				tool: "exec_command",
+				authorization: "require_approval",
 				cmd: "sleep 30",
 				workdir: repositoryRoot,
 				workspaceRoots: [repositoryRoot],
@@ -298,6 +300,7 @@ describe("native child integration", () => {
 			"tools.execute",
 			{
 				tool: "shell_command",
+				authorization: "require_approval",
 				command: "sleep 30",
 				workdir: repositoryRoot,
 				workspaceRoots: [repositoryRoot],
@@ -328,6 +331,7 @@ describe("native child integration", () => {
 			"tools.execute",
 			{
 				tool: "apply_patch",
+				authorization: "require_approval",
 				input: "*** Begin Patch\n*** Add File: cancelled.txt\n+cancelled\n*** End Patch",
 				workdir: workspace,
 				workspaceRoots: [workspace],
@@ -363,6 +367,7 @@ describe("native child integration", () => {
 
 		const pending = runtime.executeTool({
 			tool: "shell_command",
+			authorization: "require_approval",
 			argumentsValue: {
 				command: "echo should-not-run",
 				login: false,
@@ -384,6 +389,7 @@ describe("native child integration", () => {
 
 		const next = await runtime.executeTool({
 			tool: "shell_command",
+			authorization: "require_approval",
 			argumentsValue: {
 				command: "echo next",
 				login: false,

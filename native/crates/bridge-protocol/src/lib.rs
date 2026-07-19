@@ -73,6 +73,7 @@ pub enum ClientMessage {
     SessionWrite {
         request_id: String,
         session_id: String,
+        authorization: NativeAuthorization,
         data: String,
     },
     /// Changes the terminal dimensions of a running native session.
@@ -168,6 +169,14 @@ pub enum ApprovalDecision {
     AllowSession,
     Decline,
     Cancel,
+}
+
+/// Authorization selected by Pi for one native request.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NativeAuthorization {
+    RequireApproval,
+    Preauthorized,
 }
 
 impl ApprovalDecision {

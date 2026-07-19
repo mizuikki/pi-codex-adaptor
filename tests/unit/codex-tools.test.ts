@@ -10,7 +10,10 @@ import type {
 import type { ConfigurationService } from "../../src/application/configuration.ts";
 import { ProviderActivationPolicy } from "../../src/application/provider-activation.ts";
 import { type CodexConfig, createDefaultConfig } from "../../src/domain/config.ts";
-import { registerCodexTools } from "../../src/integration/pi/codex-tools.ts";
+import {
+	nativeAuthorizationFor,
+	registerCodexTools,
+} from "../../src/integration/pi/codex-tools.ts";
 
 type EventHandler = (event: unknown, ctx: ExtensionContext) => unknown | Promise<unknown>;
 
@@ -18,6 +21,7 @@ class FixtureRuntime implements CodexRuntime {
 	shellSurface: "unified-exec" | "shell-command" | "disabled" = "unified-exec";
 	execution: ExecuteToolOptions | undefined;
 	approvalDecision: string | undefined;
+	onExecute: (() => void | Promise<void>) | undefined;
 
 	async createResponse(_options: CreateResponseOptions): Promise<CreateResponseResult> {
 		throw new Error("fixture response execution is not configured");
@@ -78,6 +82,7 @@ class FixtureRuntime implements CodexRuntime {
 
 	async executeTool(options: ExecuteToolOptions): Promise<CreateResponseResult> {
 		this.execution = options;
+		await this.onExecute?.();
 		if (options.tool === "view_image") {
 			const detail = options.argumentsValue.detail === "original" ? "original" : "high";
 			return {
@@ -98,13 +103,15 @@ class FixtureRuntime implements CodexRuntime {
 			};
 		}
 		await options.onEvent?.({ type: "tool.output.delta", text: "fixture output" });
-		this.approvalDecision = await options.onApproval?.({
-			approvalId: "approval-fixture",
-			operation: "command",
-			summary: "fixture command",
-			details: { workdir: options.workdir },
-			availableDecisions: ["allow_once", "decline", "cancel"],
-		});
+		if (options.authorization === "require_approval") {
+			this.approvalDecision = await options.onApproval?.({
+				approvalId: "approval-fixture",
+				operation: "command",
+				summary: "fixture command",
+				details: { workdir: options.workdir },
+				availableDecisions: ["allow_once", "decline", "cancel"],
+			});
+		}
 		return { status: "completed", result: { output: "fixture output", exit_code: 0 } };
 	}
 
@@ -187,6 +194,11 @@ function context(provider = "openai-codex"): {
 }
 
 describe("Pi core tool activation", () => {
+	test("maps each persistent policy to one explicit native authorization", () => {
+		expect(nativeAuthorizationFor("prompt")).toBe("require_approval");
+		expect(nativeAuthorizationFor("bypass")).toBe("preauthorized");
+	});
+
 	test("recomputes the managed shell surface without deleting third-party tools", async () => {
 		const runtime = new FixtureRuntime();
 		const handlers = new Map<string, EventHandler[]>();
@@ -276,6 +288,7 @@ describe("Pi core tool activation", () => {
 			tool: "exec_command",
 			workdir: "/workspace",
 			workspaceRoots: ["/workspace"],
+			authorization: "require_approval",
 			argumentsValue: {
 				cmd: "fixture command",
 				allow_background_sessions: true,
@@ -331,6 +344,46 @@ describe("Pi core tool activation", () => {
 			);
 		expect(web?.content).toEqual([{ type: "text", text: "fixture output" }]);
 		expect(web?.details).toEqual({ status: "completed" });
+	});
+
+	test("snapshots bypass authorization at native tool dispatch", async () => {
+		const runtime = new FixtureRuntime();
+		const tools = new Map<string, ToolDefinition>();
+		const service = configuration({
+			...createDefaultConfig(),
+			security: { approvalPolicy: "bypass" },
+		});
+		runtime.onExecute = () =>
+			service.publish({ ...createDefaultConfig(), security: { approvalPolicy: "prompt" } });
+		registerCodexTools(
+			{
+				registerTool: (tool: ToolDefinition) => tools.set(tool.name, tool),
+				on: () => {},
+				getActiveTools: () => [],
+				setActiveTools: () => {},
+			} as never,
+			runtime,
+			service,
+			new ProviderActivationPolicy(service),
+		);
+		const { ctx } = context();
+
+		await tools
+			.get("exec_command")
+			?.execute(
+				"exec-call",
+				{ cmd: "fixture command", workdir: "/workspace" } as never,
+				undefined,
+				undefined,
+				ctx,
+			);
+
+		expect(runtime.execution).toMatchObject({
+			tool: "exec_command",
+			authorization: "preauthorized",
+		});
+		expect(runtime.approvalDecision).toBeUndefined();
+		expect(service.config.security.approvalPolicy).toBe("prompt");
 	});
 
 	test("rejects update_plan while Pi plan-mode is active", async () => {

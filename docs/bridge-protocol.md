@@ -10,6 +10,13 @@ non-secret client identity. The handshake returns protocol,
 official Codex, native target, project source, vendor tree, frame limit, and compiled capability
 identity. A protocol or official baseline mismatch is fatal and must not be downgraded.
 
+Protocol v2 requires an explicit host-owned authorization value on every `tools.execute` params
+object: `authorization: "require_approval" | "preauthorized"`. The `session_write` control frame
+also requires the same field, including when `data` is empty. Missing or unknown values fail closed
+as invalid parameters; there is no implicit default and the field is not part of any model-visible
+tool schema. Pi maps the persistent `security.approvalPolicy` setting to one value for each original
+tool call and does not store it in the bridge client.
+
 Every operation uses a request ID. IDs remain unique for a connection, and the bridge closes a
 connection before retaining more than 65,536 IDs. Stream events also carry a monotonically
 increasing sequence number. The host acknowledges consumed sequences, and the bridge stops producing
@@ -59,7 +66,11 @@ Native execution host-resolves only real supported shells from fixed system inst
 directories, rejects workspace-relative or attacker-created executables such as
 `./bash` or `/tmp/bash`, and emits an approval request that discloses the resolved shell plus
 command before spawning through the official process adapter; a path outside every supplied root is
-rejected before approval. Approval details use
+rejected before authorization. In `preauthorized` mode, supported operations emit no
+`approval_request` or `approval_decision` frames and do not touch approval state. The fixed
+preauthorization allowlist is `exec_command`, `shell_command`, non-empty `write_stdin`, non-empty
+`session_write`, `apply_patch`, `view_image`, `image_gen.imagegen`, and `web.run`; preauthorization for
+any other recognized tool is rejected. Approval details use
 workspace-relative path representations when a path is inside a supplied root, while command and file
 summaries remain inspectable. Approval requests advertise only `decline`, `cancel`, and `allow_once`,
 in that order, because Pi has no session-scoped approval policy surface. An unadvertised
@@ -68,20 +79,21 @@ approval remains pending until a valid advertised decision arrives. Shell spawni
 rules) and truncates final tool output with the official token-budget helpers, defaulting to 10_000
 tokens and reporting `original_token_count` when truncated. Unified Exec can yield a numeric session
 identifier, accepts subsequent `write_stdin` polls, supports pipe and PTY processes, and drains
-bounded output while the process remains in the native session table. Non-empty `write_stdin` input
-waits for a command approval that includes the session id and a bounded inspectable input preview
-before any process stdin write; empty polls remain non-mutating and do not re-prompt. Cancelling a
+bounded output while the process remains in the native session table. In prompt mode, non-empty
+`write_stdin` input waits for a command approval that includes the session id and a bounded inspectable
+input preview before any process stdin write; bypass validates and writes directly. Empty polls remain
+non-mutating and do not re-prompt. Cancelling a
 `write_stdin` poll terminates the process and removes the session deterministically. Non-empty
-`session_write` control frames use the same approval-before-side-effect path as `write_stdin`
-(session id plus bounded input preview; decline/cancel/non-echoing guarantees) and only mutate
-process stdin after an advertised decision; empty session writes remain non-mutating and do not
-re-prompt. Session resize and terminate control frames are correlated independently, and shutdown
-terminates every remaining process tree. Output is streamed as acknowledged events and capped at one
-MiB between polls.
+`session_write` control frames use the same prompt approval-before-side-effect or bypass validation
+path as `write_stdin` (session id plus bounded input preview; decline/cancel/non-echoing guarantees).
+Empty session writes remain non-mutating and do not re-prompt. Session resize and terminate control
+frames are correlated independently, and shutdown terminates every remaining process tree. Output is
+streamed as acknowledged events and capped at one MiB between polls.
 
 `apply_patch` accepts the official freeform patch grammar, rejects absolute and parent-traversal
 paths, verifies every source and move destination against canonical Pi-supplied workspace roots,
-and waits for patch approval before invoking the pinned official parser and context matcher.
+and waits for patch approval in prompt mode before invoking the pinned official parser and context
+matcher; bypass retains validation and the commit-point cancellation check without approval state.
 Cancellation is honored before approval and at an atomic commit point immediately before the
 blocking filesystem apply begins. Once that apply starts, the request waits for completion and
 reports the actual terminal outcome instead of claiming `aborted` while mutation continues. Tool
@@ -89,23 +101,24 @@ results list only workspace-relative affected paths; parser or filesystem failur
 absolute paths across the bridge.
 
 `view_image` resolves relative paths against the validated tool workdir (never the bridge process
-CWD), canonicalizes the result under a Pi-supplied workspace root, waits for a filesystem approval
-whose details prefer a workspace-relative path, bounds source and result sizes, and decodes or
-resizes through the official image adapter. The returned data URL is converted to Pi
-image content at the integration boundary and is not copied into diagnostics or tool details.
+CWD), canonicalizes the result under a Pi-supplied workspace root, and in prompt mode waits for a
+filesystem approval whose details prefer a workspace-relative path. It bounds source and result
+sizes, then decodes or resizes through the official image adapter. The returned data URL is converted
+to Pi image content at the integration boundary and is not copied into diagnostics or tool details.
 
 `image_gen.imagegen` keeps the official namespace and model-facing description. Native execution
 uses the typed Images client with the pinned `gpt-image-2` defaults. Referenced files are canonical,
 workspace-scoped, filesystem-approved, aggregate-size-bounded, and decoded through the official
-image adapter; recent conversation images are selected by Pi and bounded to five. Every Images API call also waits for an
-explicit network approval, and decline or cancel prevents server contact. Generated bytes are
+image adapter; recent conversation images are selected by Pi and bounded to five. Every Images API
+call also waits for an explicit network approval in prompt mode; bypass skips only that approval
+state, and decline or cancel prevents server contact in prompt mode. Generated bytes are
 base64-validated and size-limited before Pi receives image content, and are omitted from tool details
 and diagnostics.
 
 `web.run` keeps the official namespace and extension schema. It validates the official command union,
-uses the typed Search client with the canonical conversation tail, waits for network approval, and
-returns bounded official search output. Hosted `web_search` remains a Responses tool and is never
-executed a second time through the Search client.
+uses the typed Search client with the canonical conversation tail, waits for network approval in
+prompt mode, and returns bounded official search output. Hosted `web_search` remains a Responses
+tool and is never executed a second time through the Search client.
 
 Credentials may appear only in request-scoped provider connections on stdin. The connection carries a
 provider id, validated API root, ordinary provider headers, bearer-or-header-only authentication,
@@ -125,5 +138,6 @@ timeouts stay finite-only within the same 24-hour bound and do not accept the di
 
 The canonical v2 examples are [client-v2.jsonl](../fixtures/bridge-protocol/client-v2.jsonl) and
 [server-v2.jsonl](../fixtures/bridge-protocol/server-v2.jsonl). Rust contract tests decode every
-recorded frame and enforce size, one-frame, unknown-field, opaque-event, advertised approval order,
-`allow_session` rejection, and safe malformed-frame behavior.
+recorded frame and enforce size, one-frame, unknown-field, opaque-event, required authorization,
+advertised approval order, `allow_session` rejection, zero-frame bypass behavior, and safe
+malformed-frame behavior.

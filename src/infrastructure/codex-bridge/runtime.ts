@@ -134,6 +134,7 @@ export class BundledCodexRuntime implements CodexRuntime {
 				argumentsValue: options.argumentsValue,
 				workdir: options.workdir,
 				workspaceRoots: options.workspaceRoots,
+				authorization: options.authorization,
 			});
 			if (isNetworkTool(options.tool) && options.connection !== undefined) {
 				params.connection = options.connection;

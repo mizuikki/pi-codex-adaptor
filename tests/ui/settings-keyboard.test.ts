@@ -77,6 +77,48 @@ describe("settings keyboard state machine", () => {
 		expect(view.handleKey("\r")).toEqual({ type: "reset-defaults" });
 	});
 
+	test("approval bypass confirmation defaults to cancel", () => {
+		const view = model();
+		view.setCategory("Tools");
+		view.moveFocus(1);
+
+		expect(view.handleKey("\r")).toEqual({ type: "none" });
+		expect(view.dialog).toEqual({ kind: "approval-bypass-confirm", focus: 0 });
+		expect(view.draft.security.approvalPolicy).toBe("prompt");
+		expect(view.lines(80).join("\n")).toContain("> Cancel");
+		expect(view.lines(80).join("\n")).toContain("user's permissions");
+		expect(view.lines(80).join("\n")).toContain("workspace roots do not sandbox shell");
+		expect(view.lines(80).join("\n")).toContain("behavior.");
+
+		// Escape cancels without changing the draft.
+		expect(view.handleKey("\u001b")).toEqual({ type: "none" });
+		expect(view.dialog).toEqual({ kind: "none" });
+		expect(view.draft.security.approvalPolicy).toBe("prompt");
+		expect(view.state).toBe("pristine");
+
+		view.handleKey("\r");
+		view.handleKey("j");
+		expect(view.dialog).toEqual({ kind: "approval-bypass-confirm", focus: 1 });
+		expect(view.handleKey("\r")).toEqual({ type: "approval-bypass-enabled" });
+		expect(view.dialog).toEqual({ kind: "none" });
+		expect(view.draft.security.approvalPolicy).toBe("bypass");
+		expect(view.state).toBe("dirty");
+
+		// Returning to prompt is immediate and remains a draft-only change.
+		view.handleKey("\r");
+		expect(view.draft.security.approvalPolicy).toBe("prompt");
+	});
+
+	test.each([120, 80, 40, 20])("approval bypass confirmation stays within width %d", (width) => {
+		const view = model();
+		view.setWidth(width);
+		view.setCategory("Tools");
+		view.moveFocus(1);
+		view.handleKey("\r");
+
+		expect(view.lines(width).every((line) => line.length <= width)).toBe(true);
+	});
+
 	test("ctrl+s save and category shortcuts remain contextual", () => {
 		const view = model();
 		view.setWidth(100);
