@@ -200,7 +200,7 @@ describe("versioned product configuration", () => {
 					path: "tools.backgroundSessions",
 					availability: {
 						status: "unsupported",
-						reason: "Unavailable: background sessions apply only to Unified Exec",
+						reason: "Unavailable: the current model has no managed-session route",
 					},
 				},
 				{

@@ -17,10 +17,10 @@ import {
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 
-describe("bridge protocol v2", () => {
+describe("bridge protocol v3", () => {
 	test("decodes every native server contract frame", async () => {
 		const fixture = await readFile(
-			resolve(repositoryRoot, "fixtures/bridge-protocol/server-v2.jsonl"),
+			resolve(repositoryRoot, "fixtures/bridge-protocol/server-v3.jsonl"),
 			"utf8",
 		);
 		const messages = fixture.trimEnd().split("\n").map(decodeServerFrame);
@@ -88,7 +88,7 @@ describe("bridge protocol v2", () => {
 
 	test("decodes arbitrarily chunked process output", async () => {
 		const fixture = await readFile(
-			resolve(repositoryRoot, "fixtures/bridge-protocol/server-v2.jsonl"),
+			resolve(repositoryRoot, "fixtures/bridge-protocol/server-v3.jsonl"),
 		);
 		const decoder = new ServerFrameDecoder();
 		const messages = [];
@@ -110,7 +110,7 @@ describe("bridge protocol v2", () => {
 
 	test("advertises approval decisions in decline, cancel, allow_once order", async () => {
 		const fixture = await readFile(
-			resolve(repositoryRoot, "fixtures/bridge-protocol/server-v2.jsonl"),
+			resolve(repositoryRoot, "fixtures/bridge-protocol/server-v3.jsonl"),
 			"utf8",
 		);
 		const approval = fixture
@@ -138,14 +138,14 @@ describe("bridge protocol v2", () => {
 			expect(error).toBeInstanceOf(BridgeProtocolError);
 			expect(String(error)).not.toContain(secret);
 			expect((error as BridgeProtocolError).message).toBe(
-				"Bridge frame does not match protocol v2",
+				"Bridge frame does not match protocol v3",
 			);
 		}
 	});
 
 	test("verifies every immutable handshake field", async () => {
 		const fixture = await readFile(
-			resolve(repositoryRoot, "fixtures/bridge-protocol/server-v2.jsonl"),
+			resolve(repositoryRoot, "fixtures/bridge-protocol/server-v3.jsonl"),
 			"utf8",
 		);
 		const message = decodeServerFrame(fixture.split("\n")[0] ?? "");
@@ -200,8 +200,8 @@ describe("bridge protocol v2", () => {
 			authorization: "allow_once",
 		};
 
-		expect(() => encodeClientMessage(withoutAuthorization as never)).toThrow("protocol v2");
-		expect(() => encodeClientMessage(unknownAuthorization as never)).toThrow("protocol v2");
+		expect(() => encodeClientMessage(withoutAuthorization as never)).toThrow("protocol v3");
+		expect(() => encodeClientMessage(unknownAuthorization as never)).toThrow("protocol v3");
 	});
 
 	test("provider connection timeoutMs accepts finite bounds and Pi's disabled sentinel", () => {

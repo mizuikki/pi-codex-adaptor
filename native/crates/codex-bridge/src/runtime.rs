@@ -514,8 +514,9 @@ struct ModelsResolveParams {
 struct ToolsResolveParams {
     model: ModelInfo,
     web_search_mode: WebSearchMode,
-    provider: ToolProviderCapabilities,
+    provider_contract: CompleteProviderContract,
     standalone_web_search: StandaloneWebSearchCapabilities,
+    sessions: SessionCapabilities,
     shell: ShellToolOptions,
     #[serde(default)]
     optional: OptionalToolCapabilities,
@@ -523,10 +524,30 @@ struct ToolsResolveParams {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct ToolProviderCapabilities {
+#[allow(clippy::struct_excessive_bools)]
+struct CompleteProviderContract {
+    responses_sse: bool,
+    responses_websocket: ProviderWebsocketContract,
+    remote_compaction_v2: bool,
+    compact_endpoint: bool,
     hosted_web_search: bool,
     namespace_tools: bool,
-    image_generation: bool,
+    images_api: bool,
+    search_api: bool,
+}
+
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum ProviderWebsocketContract {
+    OfficialOnly,
+    Unavailable,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SessionCapabilities {
+    enabled: bool,
+    executor_available: bool,
 }
 
 #[derive(Deserialize)]
@@ -696,7 +717,9 @@ impl ConnectionState {
                 protocol_error(
                     None,
                     "initialization_required",
-                    "the first client frame must initialize protocol v2".to_owned(),
+                    format!(
+                        "the first client frame must initialize protocol v{BRIDGE_PROTOCOL_VERSION}"
+                    ),
                 ),
             )
             .await?;
@@ -2102,7 +2125,7 @@ async fn image_generation(
         )
         .await?
     }
-    .map_err(|error| api::map_api_error(&error))?;
+    .map_err(|error| api::map_provider_contract_error(&error, "images_api"))?;
     let encoded = response
         .data
         .into_iter()
@@ -2212,7 +2235,7 @@ async fn standalone_web_search(
     let response =
         await_with_cancellation(cancellation, client.search(&request, HeaderMap::default()))
             .await?
-            .map_err(|error| api::map_api_error(&error))?;
+            .map_err(|error| api::map_provider_contract_error(&error, "search_api"))?;
     if response.output.len() > MAX_SESSION_OUTPUT_BYTES {
         return Err(BridgeError {
             category: ErrorCategory::NativeToolError,
@@ -3196,6 +3219,7 @@ fn finalize_process_output(
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn tools_resolve(params: Value) -> Result<Value, RequestFailure> {
     let parsed = serde_json::from_value::<ToolsResolveParams>(params)
         .map_err(|_| invalid_params("tools.resolve parameters are invalid"))?;
@@ -3213,54 +3237,110 @@ fn tools_resolve(params: Value) -> Result<Value, RequestFailure> {
         allow_login_shell: parsed.shell.allow_login_shell,
         exec_permission_approvals_enabled: parsed.shell.exec_permission_approvals_enabled,
     };
+    if parsed.sessions.enabled && !parsed.sessions.executor_available {
+        return Err(BridgeError {
+            category: ErrorCategory::CapabilityError,
+            code: "session_executor_unavailable".to_owned(),
+            message: "background sessions require the native managed-session executor".to_owned(),
+            retryable: false,
+        }
+        .into());
+    }
+    if !parsed.provider_contract.responses_sse
+        || !parsed.provider_contract.remote_compaction_v2
+        || !parsed.provider_contract.compact_endpoint
+    {
+        return Err(BridgeError {
+            category: ErrorCategory::CapabilityError,
+            code: "provider_contract_incomplete".to_owned(),
+            message: "the selected provider contract is incomplete".to_owned(),
+            retryable: false,
+        }
+        .into());
+    }
+    match parsed.provider_contract.responses_websocket {
+        ProviderWebsocketContract::OfficialOnly | ProviderWebsocketContract::Unavailable => {}
+    }
     let mut model_visible = vec![codex_tools::create_update_plan_tool()];
     let mut dispatch_only = Vec::new();
+    let mut local_tool_names = vec!["update_plan"];
+    let mut hosted_tool_names: Vec<&str> = Vec::new();
+    let session_surface;
+    let session_capability;
     let shell_surface = match parsed.model.shell_type {
         ConfigShellToolType::UnifiedExec => {
             model_visible.push(codex_tools::create_exec_command_tool(command_options));
             model_visible.push(codex_tools::create_write_stdin_tool());
             dispatch_only.push(codex_tools::create_shell_command_tool(command_options));
+            local_tool_names.extend(["exec_command", "write_stdin"]);
+            session_surface = "official";
+            session_capability = if parsed.sessions.enabled {
+                json!({ "status": "available", "source": "official" })
+            } else {
+                json!({ "status": "disabled", "reason": "disabled_by_configuration" })
+            };
             "unified-exec"
         }
         ConfigShellToolType::Default
         | ConfigShellToolType::Local
         | ConfigShellToolType::ShellCommand => {
             model_visible.push(codex_tools::create_shell_command_tool(command_options));
+            local_tool_names.push("shell_command");
+            if parsed.sessions.enabled {
+                model_visible.push(codex_tools::create_exec_command_tool(command_options));
+                model_visible.push(codex_tools::create_write_stdin_tool());
+                local_tool_names.extend(["exec_command", "write_stdin"]);
+                session_surface = "supplemental";
+                session_capability = json!({ "status": "available", "source": "supplemental" });
+            } else {
+                session_surface = "disabled";
+                session_capability =
+                    json!({ "status": "disabled", "reason": "disabled_by_configuration" });
+            }
             "shell-command"
         }
-        ConfigShellToolType::Disabled => "disabled",
+        ConfigShellToolType::Disabled => {
+            session_surface = "unavailable";
+            session_capability =
+                json!({ "status": "unavailable", "reason": "model_shell_disabled" });
+            "disabled"
+        }
     };
     if parsed.model.apply_patch_tool_type.is_some() {
         model_visible.push(codex_tools::create_apply_patch_freeform_tool(false));
+        local_tool_names.push("apply_patch");
     }
-    if parsed.optional.view_image
+    let view_image_available = parsed.optional.view_image
         && parsed
             .model
             .input_modalities
-            .contains(&InputModality::Image)
-    {
+            .contains(&InputModality::Image);
+    if view_image_available {
         model_visible.push(codex_tools::create_view_image_tool(
             codex_tools::ViewImageToolOptions {
                 can_request_original_image_detail: parsed.model.supports_image_detail_original,
                 include_environment_id: false,
             },
         ));
+        local_tool_names.push("view_image");
     }
     let image_generation_surface = if parsed.optional.image_generation
-        && parsed.provider.namespace_tools
-        && parsed.provider.image_generation
+        && parsed.provider_contract.namespace_tools
+        && parsed.provider_contract.images_api
         && parsed
             .model
             .input_modalities
             .contains(&InputModality::Image)
     {
         model_visible.push(codex_tools::create_image_generation_tool());
+        local_tool_names.push("image_gen.imagegen");
         "standalone"
     } else {
         "disabled"
     };
 
-    let standalone_available = parsed.provider.namespace_tools
+    let standalone_available = parsed.provider_contract.namespace_tools
+        && parsed.provider_contract.search_api
         && (parsed.model.use_responses_lite || parsed.standalone_web_search.feature_enabled)
         && parsed.standalone_web_search.executor_available;
     let (web_surface, web_reason) = if parsed.web_search_mode == WebSearchMode::Disabled {
@@ -3271,8 +3351,9 @@ fn tools_resolve(params: Value) -> Result<Value, RequestFailure> {
                 invalid_params("the official standalone web search schema is invalid")
             })?,
         );
+        local_tool_names.push("web.run");
         ("standalone", "standalone_available")
-    } else if !parsed.model.use_responses_lite && parsed.provider.hosted_web_search {
+    } else if !parsed.model.use_responses_lite && parsed.provider_contract.hosted_web_search {
         let hosted = codex_tools::create_web_search_tool(codex_tools::WebSearchToolOptions {
             web_search_mode: Some(parsed.web_search_mode),
             web_search_config: None,
@@ -3280,6 +3361,7 @@ fn tools_resolve(params: Value) -> Result<Value, RequestFailure> {
         })
         .ok_or_else(|| invalid_params("tools.resolve web search mode is invalid"))?;
         model_visible.push(hosted);
+        hosted_tool_names.push("web_search");
         ("hosted", "hosted_provider_capability")
     } else {
         ("unsupported", "required_capability_unavailable")
@@ -3290,10 +3372,42 @@ fn tools_resolve(params: Value) -> Result<Value, RequestFailure> {
     Ok(json!({
         "modelTools": model_tools,
         "dispatchTools": dispatch_tools,
+        "localToolNames": local_tool_names,
+        "hostedToolNames": hosted_tool_names,
         "shellSurface": shell_surface,
+        "sessionSurface": session_surface,
         "webSurface": web_surface,
         "webReason": web_reason,
         "imageGenerationSurface": image_generation_surface,
+        "capabilities": {
+            "sessions": session_capability,
+            "applyPatch": if parsed.model.apply_patch_tool_type.is_some() {
+                json!({ "status": "available", "source": "official" })
+            } else {
+                json!({ "status": "unavailable", "reason": "model_apply_patch_disabled" })
+            },
+            "viewImage": if view_image_available {
+                json!({ "status": "available", "source": "official" })
+            } else if !parsed.optional.view_image {
+                json!({ "status": "disabled", "reason": "disabled_by_configuration" })
+            } else {
+                json!({ "status": "unavailable", "reason": "model_image_input_unavailable" })
+            },
+            "imageGeneration": if image_generation_surface == "standalone" {
+                json!({ "status": "available", "source": "provider-contract" })
+            } else if !parsed.optional.image_generation {
+                json!({ "status": "disabled", "reason": "disabled_by_configuration" })
+            } else {
+                json!({ "status": "unavailable", "reason": "image_generation_route_unavailable" })
+            },
+            "webSearch": if web_surface == "disabled" {
+                json!({ "status": "disabled", "reason": "disabled_by_configuration" })
+            } else if web_surface == "unsupported" {
+                json!({ "status": "unavailable", "reason": "web_search_route_unavailable" })
+            } else {
+                json!({ "status": "available", "source": "provider-contract" })
+            },
+        },
     }))
 }
 
@@ -3328,14 +3442,6 @@ fn models_resolve(
         "model": model,
         "shellSurface": shell_surface,
         "autoCompactTokenLimit": auto_compact_token_limit,
-        "provider": {
-            "name": "OpenAI",
-            "supportsWebsockets": true,
-            "supportsRemoteCompaction": true,
-            "namespaceTools": true,
-            "imageGeneration": true,
-            "hostedWebSearch": true,
-        },
     }))
 }
 
@@ -3357,6 +3463,7 @@ async fn responses_create(
             parsed.provider_supports_websockets,
             connection,
             websocket_connect_timeout,
+            "responses_sse",
         )),
     )
     .await??;
@@ -3369,7 +3476,8 @@ async fn responses_create(
         let Some(event) = event else {
             break;
         };
-        let event = event.map_err(|error| api::map_api_error(&error))?;
+        let event =
+            event.map_err(|error| api::map_provider_contract_error(&error, "responses_sse"))?;
         let Some(mapped) = api::map_response_event(event) else {
             continue;
         };
@@ -3396,6 +3504,7 @@ async fn start_response_stream(
     provider_supports_websockets: bool,
     connection: api::ApiConnection,
     websocket_connect_timeout: Duration,
+    contract_capability: &'static str,
 ) -> Result<codex_api::ResponseStream, BridgeError> {
     if matches!(transport_mode, ResponsesTransportMode::Auto) && provider_supports_websockets {
         let websocket = ResponsesWebsocketClient::new(
@@ -3422,7 +3531,7 @@ async fn start_response_stream(
                     None,
                 )
                 .await
-                .map_err(|error| api::map_api_error(&error));
+                .map_err(|error| api::map_provider_contract_error(&error, contract_capability));
         }
     }
 
@@ -3433,7 +3542,7 @@ async fn start_response_stream(
     )
     .stream_request(request, ResponsesOptions::default())
     .await
-    .map_err(|error| api::map_api_error(&error))
+    .map_err(|error| api::map_provider_contract_error(&error, contract_capability))
 }
 
 async fn responses_compact(
@@ -3503,7 +3612,7 @@ async fn responses_compact(
         ),
     )
     .await?
-    .map_err(|error| api::map_api_error(&error))?;
+    .map_err(|error| api::map_provider_contract_error(&error, "compact_endpoint"))?;
     Ok(json!({ "output": output }))
 }
 
@@ -3543,6 +3652,7 @@ async fn responses_compact_remote(
             provider_supports_websockets,
             connection,
             websocket_connect_timeout,
+            "remote_compaction_v2",
         )),
     )
     .await??;
@@ -3557,7 +3667,8 @@ async fn responses_compact_remote(
         let Some(event) = event else {
             break;
         };
-        let event = event.map_err(|error| api::map_api_error(&error))?;
+        let event = event
+            .map_err(|error| api::map_provider_contract_error(&error, "remote_compaction_v2"))?;
         match event {
             codex_api::ResponseEvent::OutputItemDone(item) => {
                 if matches!(item, ResponseItem::Compaction { .. }) {
@@ -3935,7 +4046,7 @@ mod tests {
 
     fn initialization() -> &'static str {
         concat!(
-            "{\"type\":\"initialize\",\"requestId\":\"init-1\",\"protocolVersion\":2,",
+            "{\"type\":\"initialize\",\"requestId\":\"init-1\",\"protocolVersion\":3,",
             "\"client\":{\"name\":\"contract-test\",\"version\":\"0.0.0\"}}\n"
         )
     }
@@ -4144,6 +4255,7 @@ mod tests {
             true,
             connection,
             websocket_connect_timeout,
+            "responses_sse",
         )
         .await
         .expect("SSE fallback should connect");
@@ -4285,12 +4397,7 @@ mod tests {
         assert_eq!(result["model"]["slug"], "unknown-fixture-model");
         assert_eq!(result["shellSurface"], "shell-command");
         assert_eq!(result["model"]["used_fallback_model_metadata"], Value::Null);
-        assert_eq!(result["provider"]["name"], "OpenAI");
-        assert_eq!(result["provider"]["supportsWebsockets"], true);
-        assert_eq!(result["provider"]["supportsRemoteCompaction"], true);
-        assert_eq!(result["provider"]["namespaceTools"], true);
-        assert_eq!(result["provider"]["imageGeneration"], true);
-        assert_eq!(result["provider"]["hostedWebSearch"], true);
+        assert!(result.get("provider").is_none());
     }
 
     #[test]
@@ -4299,8 +4406,9 @@ mod tests {
         let hosted = tools_resolve(json!({
             "model": model,
             "webSearchMode": "indexed",
-            "provider": { "hostedWebSearch": true, "namespaceTools": false, "imageGeneration": false },
+            "providerContract": complete_provider_contract(true, false, false, false),
             "standaloneWebSearch": { "featureEnabled": false, "executorAvailable": false },
+            "sessions": { "enabled": true, "executorAvailable": true },
             "shell": { "allowLoginShell": true, "execPermissionApprovalsEnabled": false },
         }))
         .expect("hosted tool surface should resolve");
@@ -4322,14 +4430,18 @@ mod tests {
         let standalone = tools_resolve(json!({
             "model": fixture_model("shell_command", true),
             "webSearchMode": "live",
-            "provider": { "hostedWebSearch": true, "namespaceTools": true, "imageGeneration": false },
+            "providerContract": complete_provider_contract(true, true, false, true),
             "standaloneWebSearch": { "featureEnabled": false, "executorAvailable": true },
+            "sessions": { "enabled": true, "executorAvailable": true },
             "shell": { "allowLoginShell": false, "execPermissionApprovalsEnabled": false },
         }))
         .expect("standalone tool surface should resolve");
         assert_eq!(standalone["modelTools"][1]["name"], "shell_command");
+        assert_eq!(standalone["modelTools"][2]["name"], "exec_command");
+        assert_eq!(standalone["modelTools"][3]["name"], "write_stdin");
+        assert_eq!(standalone["sessionSurface"], "supplemental");
         assert_eq!(standalone["webSurface"], "standalone");
-        assert_eq!(standalone["modelTools"].as_array().map(Vec::len), Some(3));
+        assert_eq!(standalone["modelTools"].as_array().map(Vec::len), Some(5));
     }
 
     #[tokio::test]
@@ -5566,8 +5678,9 @@ mod tests {
             let resolved = tools_resolve(json!({
                 "model": fixture_model(shell_type, false),
                 "webSearchMode": "disabled",
-                "provider": { "hostedWebSearch": false, "namespaceTools": false, "imageGeneration": false },
+                "providerContract": complete_provider_contract(false, false, false, false),
                 "standaloneWebSearch": { "featureEnabled": false, "executorAvailable": false },
+                "sessions": { "enabled": false, "executorAvailable": true },
                 "shell": { "allowLoginShell": true, "execPermissionApprovalsEnabled": false },
             }))
             .expect("shell matrix entry should resolve");
@@ -5591,8 +5704,9 @@ mod tests {
         let disabled = tools_resolve(json!({
             "model": fixture_model("shell_command", false),
             "webSearchMode": "disabled",
-            "provider": { "hostedWebSearch": true, "namespaceTools": true, "imageGeneration": false },
+            "providerContract": complete_provider_contract(true, true, false, true),
             "standaloneWebSearch": { "featureEnabled": true, "executorAvailable": true },
+            "sessions": { "enabled": false, "executorAvailable": true },
             "shell": { "allowLoginShell": true, "execPermissionApprovalsEnabled": false },
         }))
         .expect("disabled web surface should resolve");
@@ -5601,8 +5715,9 @@ mod tests {
         let standalone = tools_resolve(json!({
             "model": fixture_model("shell_command", true),
             "webSearchMode": "live",
-            "provider": { "hostedWebSearch": true, "namespaceTools": true, "imageGeneration": false },
+            "providerContract": complete_provider_contract(true, true, false, true),
             "standaloneWebSearch": { "featureEnabled": false, "executorAvailable": true },
+            "sessions": { "enabled": false, "executorAvailable": true },
             "shell": { "allowLoginShell": true, "execPermissionApprovalsEnabled": false },
         }))
         .expect("standalone web surface should resolve");
@@ -5611,8 +5726,9 @@ mod tests {
         let hosted = tools_resolve(json!({
             "model": fixture_model("shell_command", false),
             "webSearchMode": "indexed",
-            "provider": { "hostedWebSearch": true, "namespaceTools": false, "imageGeneration": false },
+            "providerContract": complete_provider_contract(true, false, false, false),
             "standaloneWebSearch": { "featureEnabled": false, "executorAvailable": false },
+            "sessions": { "enabled": false, "executorAvailable": true },
             "shell": { "allowLoginShell": true, "execPermissionApprovalsEnabled": false },
         }))
         .expect("hosted web surface should resolve");
@@ -5621,12 +5737,83 @@ mod tests {
         let unsupported = tools_resolve(json!({
             "model": fixture_model("shell_command", false),
             "webSearchMode": "cached",
-            "provider": { "hostedWebSearch": false, "namespaceTools": false, "imageGeneration": false },
+            "providerContract": complete_provider_contract(false, false, false, false),
             "standaloneWebSearch": { "featureEnabled": false, "executorAvailable": false },
+            "sessions": { "enabled": false, "executorAvailable": true },
             "shell": { "allowLoginShell": true, "execPermissionApprovalsEnabled": false },
         }))
         .expect("unsupported web surface should resolve");
         assert_eq!(unsupported["webSurface"], "unsupported");
+    }
+
+    #[test]
+    fn supplements_shell_command_with_managed_session_contracts() {
+        let resolved = tools_resolve(json!({
+            "model": fixture_model("shell_command", false),
+            "webSearchMode": "disabled",
+            "providerContract": complete_provider_contract(false, false, false, false),
+            "standaloneWebSearch": { "featureEnabled": false, "executorAvailable": false },
+            "sessions": { "enabled": true, "executorAvailable": true },
+            "shell": { "allowLoginShell": true, "execPermissionApprovalsEnabled": false },
+        }))
+        .expect("supplemental sessions should resolve");
+        let names = resolved["modelTools"]
+            .as_array()
+            .expect("model tools")
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            names,
+            vec![
+                "update_plan",
+                "shell_command",
+                "exec_command",
+                "write_stdin"
+            ]
+        );
+        assert_eq!(resolved["sessionSurface"], "supplemental");
+        assert_eq!(resolved["capabilities"]["sessions"]["status"], "available");
+        assert_eq!(
+            resolved["localToolNames"],
+            json!([
+                "update_plan",
+                "shell_command",
+                "exec_command",
+                "write_stdin"
+            ])
+        );
+    }
+
+    #[test]
+    fn session_resolver_fields_fail_closed() {
+        let base = json!({
+            "model": fixture_model("shell_command", false),
+            "webSearchMode": "disabled",
+            "providerContract": complete_provider_contract(false, false, false, false),
+            "standaloneWebSearch": { "featureEnabled": false, "executorAvailable": false },
+            "sessions": { "enabled": true, "executorAvailable": false },
+            "shell": { "allowLoginShell": true, "execPermissionApprovalsEnabled": false },
+        });
+        let error = tools_resolve(base).expect_err("missing session executor must fail");
+        assert!(matches!(
+            error,
+            RequestFailure::Bridge(error) if error.code == "session_executor_unavailable"
+        ));
+
+        let unknown = tools_resolve(json!({
+            "model": fixture_model("shell_command", false),
+            "webSearchMode": "disabled",
+            "providerContract": complete_provider_contract(false, false, false, false),
+            "standaloneWebSearch": { "featureEnabled": false, "executorAvailable": false },
+            "sessions": { "enabled": false, "executorAvailable": true, "future": true },
+            "shell": { "allowLoginShell": true, "execPermissionApprovalsEnabled": false },
+        }))
+        .expect_err("unknown protocol-v3 session fields must fail");
+        assert!(matches!(
+            unknown,
+            RequestFailure::Bridge(error) if error.code == "invalid_params"
+        ));
     }
 
     #[test]
@@ -7678,6 +7865,25 @@ mod tests {
         .expect("fixture model should use the official metadata schema")
     }
 
+    #[allow(clippy::fn_params_excessive_bools)]
+    fn complete_provider_contract(
+        hosted_web_search: bool,
+        namespace_tools: bool,
+        images_api: bool,
+        search_api: bool,
+    ) -> Value {
+        json!({
+            "responsesSse": true,
+            "responsesWebsocket": "official-only",
+            "remoteCompactionV2": true,
+            "compactEndpoint": true,
+            "namespaceTools": namespace_tools,
+            "imagesApi": images_api,
+            "searchApi": search_api,
+            "hostedWebSearch": hosted_web_search,
+        })
+    }
+
     async fn spawn_fixture_http_server(body: String) -> (String, tokio::task::JoinHandle<()>) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
@@ -8154,7 +8360,7 @@ mod tests {
     async fn rejects_malformed_secret_bearing_frames_with_stable_safe_messages() {
         let secret = "fixture-secret-sentinel";
         let malformed = format!(
-            "{{\"type\":\"initialize\",\"requestId\":\"init-1\",\"protocolVersion\":2,\"client\":{{\"name\":\"contract-test\",\"version\":\"0.0.0\"}},\"extra\":true,\"opaque\":\"{secret}\"}}\n"
+            "{{\"type\":\"initialize\",\"requestId\":\"init-1\",\"protocolVersion\":3,\"client\":{{\"name\":\"contract-test\",\"version\":\"0.0.0\"}},\"extra\":true,\"opaque\":\"{secret}\"}}\n"
         );
         let messages = run_server(&malformed).await;
         assert_eq!(messages.len(), 1);
@@ -8163,7 +8369,7 @@ mod tests {
         };
         assert!(request_id.is_none());
         assert_eq!(error.code, "invalid_frame");
-        assert_eq!(error.message, "bridge frame does not match protocol v2");
+        assert_eq!(error.message, "bridge frame does not match protocol v3");
         assert!(!error.message.contains(secret));
         assert!(!error.message.contains("fixture-secret-sentinel"));
         assert!(!format!("{messages:?}").contains(secret));

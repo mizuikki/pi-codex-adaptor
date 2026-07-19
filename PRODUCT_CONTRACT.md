@@ -4,7 +4,7 @@
 
 The production baseline is OpenAI Codex `0.144.3`, tag `rust-v0.144.3`, peeled source commit
 `78ad6e6bfd1d3b6a209acd3ef82172a96b25179c`, and Rust `1.95.0`. A native bridge handshake must
-report these values together with bridge protocol version `2`, its build target, build source commit,
+report these values together with bridge protocol version `3`, its build target, build source commit,
 and capabilities. A mismatch is fatal.
 
 ## Product boundary
@@ -19,7 +19,9 @@ The first stable release will provide:
 - official Responses SSE and WebSocket transport, retry behavior, replay, and compaction through the
   vendored native modules;
 - `update_plan` on every supported activation;
-- the official shell resolver and its `exec_command`/`write_stdin` or `shell_command` surface;
+- the official primary shell resolver plus native managed sessions: shell-command models retain
+  `shell_command` and receive the pinned `exec_command`/`write_stdin` contracts as a supplemental
+  surface when background sessions are enabled;
 - `apply_patch`, `view_image`, and `image_gen.imagegen` when their official capabilities resolve;
 - standalone `web.run` or hosted `web_search`, selected by provider capability;
 - Pi interactive approval before native command, patch, filesystem, image, network, or non-empty
@@ -36,7 +38,7 @@ This contract does not promise complete Codex CLI parity. P1 and P2 capabilities
 
 ## Protocol and errors
 
-Bridge protocol v2 is newline-delimited JSON with bounded frames and request IDs. It defines
+Bridge protocol v3 is newline-delimited JSON with bounded frames and request IDs. It defines
 handshake, request, stream event, cancellation, session write/resize/terminate, result, error, and
 backpressure envelopes. Unknown events are retained for safe diagnostics and never imply successful
 termination. The normative envelope contract and limits are documented in
@@ -99,13 +101,14 @@ The new-install default is:
 
 Shell and web tool surfaces are resolver outputs, not user-forced configuration. Optional image tools
 accept only `auto | off`; transport accepts `auto | sse`; compaction accepts `off` or `auto` with a
-model threshold or a positive integer below the model context window. `backgroundSessions` applies
-only to Unified Exec: when disabled, a process still running after its initial yield is terminated
-instead of being retained for `write_stdin` polling.
+model threshold or a positive integer below the model context window. `backgroundSessions` enables
+managed retention for Unified Exec and supplements shell-command models with the pinned
+`exec_command` and `write_stdin` contracts. Disabling it removes the supplemental tools and causes a
+Unified Exec process still running after its initial yield to terminate instead of being retained.
 
 ## Current implementation status
 
-The package version is `0.0.0` and has not been published. The worktree defines and tests protocol v2
+The package version is `0.0.0` and has not been published. The worktree defines and tests protocol v3
 envelopes, the baseline handshake, concurrent request correlation, cancellation, bounded event
 backpressure, and safe process shutdown. The bridge compiles and links the pinned official wire
 modules and advertises Responses SSE/WebSocket, the Compact endpoint, RemoteCompactionV2, model

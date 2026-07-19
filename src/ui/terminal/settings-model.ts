@@ -66,6 +66,7 @@ export interface SettingsModelOptions {
 	activationStatus?: string;
 	capabilities?: readonly string[];
 	disabledReasons?: Readonly<Record<string, string>>;
+	modelAutoCompactTokenLimit?: number | null;
 }
 
 const DIRTY_CLOSE_OPTIONS = ["Continue editing", "Discard changes", "Save"] as const;
@@ -258,8 +259,9 @@ export class SettingsModel {
 						"backgroundSessions",
 						"Background sessions",
 						this.#draft.tools.backgroundSessions ? "on" : "off",
-						"Keep Unified Exec sessions alive after the initial yield for write_stdin polling.",
+						"Keep managed sessions alive and expose supplemental exec/write tools when needed.",
 						"toggle",
+						this.#disabled("backgroundSessions"),
 					),
 					row(
 						"approvalPolicy",
@@ -307,6 +309,7 @@ export class SettingsModel {
 						this.#draft.codex.transport.mode,
 						"Preferred transport mode. auto selects the official default path.",
 						"enum",
+						this.#disabled("transport"),
 					),
 					row(
 						"webSearch",
@@ -314,6 +317,7 @@ export class SettingsModel {
 						this.#draft.codex.webSearch.mode,
 						"Standalone or hosted web search mode requested from the resolver.",
 						"enum",
+						this.#disabled("webSearch"),
 					),
 					row(
 						"compaction",
@@ -321,6 +325,7 @@ export class SettingsModel {
 						this.#draft.codex.compaction.mode,
 						"off disables adaptor compaction. auto uses the official compaction path.",
 						"enum",
+						this.#disabled("compaction"),
 					),
 				];
 				if (this.#draft.codex.compaction.mode === "auto") {
@@ -328,9 +333,14 @@ export class SettingsModel {
 						row(
 							"autoCompactTokenLimit",
 							"Auto compact limit",
-							String(this.#draft.codex.compaction.autoCompactTokenLimit),
+							this.#draft.codex.compaction.autoCompactTokenLimit === "model" &&
+								this.#options.modelAutoCompactTokenLimit !== undefined &&
+								this.#options.modelAutoCompactTokenLimit !== null
+								? `${this.#options.modelAutoCompactTokenLimit} (model)`
+								: String(this.#draft.codex.compaction.autoCompactTokenLimit),
 							"model uses the official model threshold. A positive integer overrides it.",
 							"number",
+							this.#disabled("autoCompactTokenLimit"),
 						),
 					);
 				}
@@ -347,16 +357,17 @@ export class SettingsModel {
 									: "inactive",
 						"Run official compaction for the current session after settings are clean.",
 						"action",
-						this.#state === "dirty"
-							? { enabled: false, reason: "Save or discard the draft before compaction." }
-							: this.#draft.codex.compaction.mode === "off"
-								? { enabled: false, reason: "Compaction is disabled." }
-								: this.#routeIsActive()
-									? undefined
-									: {
-											enabled: false,
-											reason: "Codex route is inactive for the current provider and API.",
-										},
+						this.#disabled("compactNow") ??
+							(this.#state === "dirty"
+								? { enabled: false, reason: "Save or discard the draft before compaction." }
+								: this.#draft.codex.compaction.mode === "off"
+									? { enabled: false, reason: "Compaction is disabled." }
+									: this.#routeIsActive()
+										? undefined
+										: {
+												enabled: false,
+												reason: "Codex route is inactive for the current provider and API.",
+											}),
 					),
 				);
 				return rows;

@@ -15,6 +15,8 @@ uses the same structure: context, decision, and consequences.
 | [0008](./0008-single-package-native-delivery.md) | Single npm package and release-built native sidecar delivery |
 | [0009](./0009-release-please-and-exact-tarball-publishing.md) | Release Please and exact-tarball Trusted Publishing |
 | [0010](./0010-responsive-terminal-experience.md) | Responsive settings overlay and inline tool rendering |
+| [0011](./0011-explicit-provider-dispatch.md) | Explicit provider activation and non-recursive dispatch |
+| [0012](./0012-capability-completeness-and-supplemental-sessions.md) | Effective capability snapshots and supplemental managed sessions |
 
 Accepted ADRs are changed only to correct factual errors. A decision change requires a new ADR that
 explicitly supersedes the earlier record. Baseline upgrades and product-boundary changes must remain

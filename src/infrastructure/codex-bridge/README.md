@@ -3,7 +3,7 @@
 Sidecar discovery, lifecycle, JSONL envelopes, cancellation, and binary manifest verification belong
 here. OpenAI transport details stay in Rust.
 
-`protocol.ts` is the runtime-validated TypeScript view of adaptor-owned protocol v2 envelopes. Its
+`protocol.ts` is the runtime-validated TypeScript view of adaptor-owned protocol v3 envelopes. Its
 request, event, and result payloads remain `unknown`; it does not define OpenAI wire schemas.
 
 `client.ts` owns bounded process I/O, handshake verification, request correlation, event ordering,

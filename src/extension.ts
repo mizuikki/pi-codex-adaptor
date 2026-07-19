@@ -7,6 +7,7 @@ import packageMetadata from "../package.json" with { type: "json" };
 import { CodexCompactionCoordinator, CodexCompactionStore } from "./application/compaction.ts";
 import { ConfigurationService } from "./application/configuration.ts";
 import { ProviderActivationPolicy } from "./application/provider-activation.ts";
+import { ResolveEffectiveCapabilities } from "./application/resolve-effective-capabilities.ts";
 import { BundledCodexRuntime } from "./infrastructure/codex-bridge/runtime.ts";
 import { FileConfigurationRepository } from "./infrastructure/configuration/file-config-repository.ts";
 import { FileDiagnosticsExporter } from "./infrastructure/diagnostics/file-diagnostics-exporter.ts";
@@ -32,8 +33,15 @@ export default async function piCodexAdaptor(pi: ExtensionAPI): Promise<void> {
 	});
 	const compactions = new CodexCompactionStore();
 	const compactionCoordinator = new CodexCompactionCoordinator();
+	const capabilities = new ResolveEffectiveCapabilities(runtime);
 	if (typeof pi.registerProvider === "function") {
-		const dispatchers = createCodexProviderDispatchers(runtime, service, activation, compactions);
+		const dispatchers = createCodexProviderDispatchers(
+			runtime,
+			service,
+			activation,
+			compactions,
+			capabilities,
+		);
 		pi.registerProvider("openai-codex", {
 			api: "openai-codex-responses",
 			streamSimple: dispatchers.codexResponses,
@@ -49,6 +57,7 @@ export default async function piCodexAdaptor(pi: ExtensionAPI): Promise<void> {
 		});
 		pi.on("session_shutdown", async () => {
 			compactionCoordinator.disposeAll();
+			capabilities.invalidate();
 			activation.dispose();
 			await runtime.shutdown();
 		});
@@ -57,7 +66,15 @@ export default async function piCodexAdaptor(pi: ExtensionAPI): Promise<void> {
 			typeof pi.getAllTools === "function" &&
 			typeof pi.getThinkingLevel === "function"
 		) {
-			registerCodexCompaction(pi, runtime, service, compactions, activation, compactionCoordinator);
+			registerCodexCompaction(
+				pi,
+				runtime,
+				service,
+				compactions,
+				activation,
+				compactionCoordinator,
+				capabilities,
+			);
 		}
 	}
 	if (
@@ -66,11 +83,11 @@ export default async function piCodexAdaptor(pi: ExtensionAPI): Promise<void> {
 		typeof pi.setActiveTools === "function" &&
 		typeof pi.on === "function"
 	) {
-		registerCodexTools(pi, runtime, service, activation);
+		registerCodexTools(pi, runtime, service, activation, capabilities);
 	}
 	pi.registerCommand("codex", {
 		description: "Open Codex adaptor settings",
 		handler: async (_args, ctx) =>
-			openSettingsOverlay(ctx, service, runtime, diagnostics, compactionCoordinator),
+			openSettingsOverlay(ctx, service, runtime, diagnostics, compactionCoordinator, capabilities),
 	});
 }

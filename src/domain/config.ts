@@ -76,6 +76,13 @@ export interface ConfigCapabilityContext {
 	remoteCompactionV2?: boolean;
 	/** Whether the compact endpoint is available. */
 	compactEndpoint?: boolean;
+	/** Effective route results resolved from the same snapshot used by requests and Pi tools. */
+	backgroundSessionsAvailable?: boolean;
+	viewImageAvailable?: boolean;
+	imageGenerationAvailable?: boolean;
+	webSearchAvailable?: boolean;
+	manualCompactionAvailable?: boolean;
+	transportAvailable?: boolean;
 }
 
 export type SettingAvailability =
@@ -159,6 +166,7 @@ export function evaluateConfigSettings(
 			capabilities,
 			"view_image",
 			"Unavailable: bridge does not advertise view_image",
+			context.viewImageAvailable,
 		),
 		evaluateOptionalTool(
 			"tools.optional.imageGeneration",
@@ -166,9 +174,10 @@ export function evaluateConfigSettings(
 			capabilities,
 			"image_generation",
 			"Unavailable: bridge does not advertise image_generation",
+			context.imageGenerationAvailable,
 		),
 		evaluateTransport(config, context, capabilities),
-		evaluateWebSearch(config, capabilities),
+		evaluateWebSearch(config, capabilities, context.webSearchAvailable),
 		evaluateCompaction(config, context, capabilities),
 	];
 
@@ -185,6 +194,58 @@ function collectCapabilityIssues(
 	const issues: ConfigurationIssue[] = [];
 	const capabilities = capabilitySet(context.bridgeCapabilities);
 	const compaction = config.codex.compaction;
+
+	if (config.tools.backgroundSessions && context.backgroundSessionsAvailable === false) {
+		issue(
+			issues,
+			"tools.backgroundSessions",
+			"capability_unavailable",
+			"Unavailable: the model and bridge do not provide a complete managed-session route",
+		);
+	}
+	if (config.tools.optional.viewImage === "auto" && context.viewImageAvailable === false) {
+		issue(
+			issues,
+			"tools.optional.viewImage",
+			"capability_unavailable",
+			"Unavailable: no complete view_image route exists",
+		);
+	}
+	if (
+		config.tools.optional.imageGeneration === "auto" &&
+		context.imageGenerationAvailable === false
+	) {
+		issue(
+			issues,
+			"tools.optional.imageGeneration",
+			"capability_unavailable",
+			"Unavailable: no complete image generation route exists",
+		);
+	}
+	if (config.codex.webSearch.mode !== "disabled" && context.webSearchAvailable === false) {
+		issue(
+			issues,
+			"codex.webSearch.mode",
+			"capability_unavailable",
+			"Unavailable: no complete web search route exists",
+		);
+	}
+	if (compaction.mode === "auto" && context.manualCompactionAvailable === false) {
+		issue(
+			issues,
+			"codex.compaction.mode",
+			"capability_unavailable",
+			"Unavailable: no complete compaction route exists",
+		);
+	}
+	if (context.transportAvailable === false) {
+		issue(
+			issues,
+			"codex.transport.mode",
+			"capability_unavailable",
+			"Unavailable: no complete Responses transport route exists",
+		);
+	}
 
 	if (
 		compaction.mode === "auto" &&
@@ -307,14 +368,27 @@ function evaluateBackgroundSessions(
 	config: CodexConfig,
 	context: ConfigCapabilityContext,
 ): ConfigSettingEvaluation {
-	if (context.shellSurface === undefined || context.shellSurface === "unified-exec") {
+	if (context.backgroundSessionsAvailable === false) {
+		return {
+			path: "tools.backgroundSessions",
+			availability: {
+				status: "unsupported",
+				reason: "Unavailable: no complete managed-session route exists",
+			},
+		};
+	}
+	if (
+		context.backgroundSessionsAvailable === true ||
+		context.shellSurface === undefined ||
+		context.shellSurface === "unified-exec"
+	) {
 		return {
 			path: "tools.backgroundSessions",
 			availability: config.tools.backgroundSessions
 				? { status: "enabled" }
 				: {
 						status: "disabled",
-						reason: "Disabled: Unified Exec sessions terminate after the initial yield",
+						reason: "Disabled: managed sessions terminate or remain unavailable",
 					},
 		};
 	}
@@ -322,7 +396,7 @@ function evaluateBackgroundSessions(
 		path: "tools.backgroundSessions",
 		availability: {
 			status: "unsupported",
-			reason: "Unavailable: background sessions apply only to Unified Exec",
+			reason: "Unavailable: the current model has no managed-session route",
 		},
 	};
 }
@@ -333,9 +407,16 @@ function evaluateOptionalTool(
 	capabilities: ReadonlySet<string> | undefined,
 	capability: string,
 	unsupportedReason: string,
+	effectiveAvailable?: boolean,
 ): ConfigSettingEvaluation {
 	if (value === "off") {
 		return { path, availability: { status: "disabled", reason: "Disabled by configuration" } };
+	}
+	if (effectiveAvailable === false) {
+		return {
+			path,
+			availability: { status: "unsupported", reason: "Unavailable: no complete route exists" },
+		};
 	}
 	if (capabilities !== undefined && !capabilities.has(capability)) {
 		return { path, availability: { status: "unsupported", reason: unsupportedReason } };
@@ -349,6 +430,12 @@ function evaluateTransport(
 	capabilities: ReadonlySet<string> | undefined,
 ): ConfigSettingEvaluation {
 	const path = "codex.transport.mode";
+	if (context.transportAvailable === false) {
+		return {
+			path,
+			availability: { status: "unsupported", reason: "Unavailable: no complete transport exists" },
+		};
+	}
 	if (config.codex.transport.mode === "sse") {
 		return capabilities !== undefined && !capabilities.has("responses_sse")
 			? {
@@ -397,10 +484,17 @@ function evaluateTransport(
 function evaluateWebSearch(
 	config: CodexConfig,
 	capabilities: ReadonlySet<string> | undefined,
+	effectiveAvailable?: boolean,
 ): ConfigSettingEvaluation {
 	const path = "codex.webSearch.mode";
 	if (config.codex.webSearch.mode === "disabled") {
 		return { path, availability: { status: "disabled", reason: "Disabled by configuration" } };
+	}
+	if (effectiveAvailable === false) {
+		return {
+			path,
+			availability: { status: "unsupported", reason: "Unavailable: no complete route exists" },
+		};
 	}
 	if (
 		capabilities !== undefined &&
@@ -426,6 +520,12 @@ function evaluateCompaction(
 	const path = "codex.compaction.mode";
 	if (config.codex.compaction.mode === "off") {
 		return { path, availability: { status: "disabled", reason: "Disabled by configuration" } };
+	}
+	if (context.manualCompactionAvailable === false) {
+		return {
+			path,
+			availability: { status: "unsupported", reason: "Unavailable: no complete route exists" },
+		};
 	}
 	if (
 		capabilities !== undefined &&

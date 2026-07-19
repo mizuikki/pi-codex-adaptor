@@ -130,8 +130,9 @@ describe("product vs pinned official conformance", () => {
 			const hosted = await client.request("tools.resolve", {
 				model: fixtureModel("disabled"),
 				webSearchMode: "indexed",
-				provider: { hostedWebSearch: true, namespaceTools: false, imageGeneration: false },
+				providerContract: completeProviderContract(true, false, false, false),
 				standaloneWebSearch: { featureEnabled: false, executorAvailable: false },
+				sessions: { enabled: false, executorAvailable: true },
 				shell: { allowLoginShell: false, execPermissionApprovalsEnabled: false },
 			});
 			expect(hosted.status).toBe("completed");
@@ -361,11 +362,12 @@ async function resolveTools(
 	const result = await client.request("tools.resolve", {
 		model: fixtureModel(shellType),
 		webSearchMode: standaloneWebSearch ? "indexed" : "disabled",
-		provider: { hostedWebSearch: true, namespaceTools: true, imageGeneration: true },
+		providerContract: completeProviderContract(true, true, true, true),
 		standaloneWebSearch: {
 			featureEnabled: standaloneWebSearch,
 			executorAvailable: standaloneWebSearch,
 		},
+		sessions: { enabled: shellType === "shell_command", executorAvailable: true },
 		shell: { allowLoginShell: true, execPermissionApprovalsEnabled: false },
 		optional: { viewImage: true, imageGeneration: true },
 	});
@@ -377,6 +379,24 @@ async function resolveTools(
 		throw new Error("Product tool resolution did not complete");
 	}
 	return result.result as Record<string, unknown>;
+}
+
+function completeProviderContract(
+	hostedWebSearch: boolean,
+	namespaceTools: boolean,
+	imagesApi: boolean,
+	searchApi: boolean,
+): Record<string, unknown> {
+	return {
+		responsesSse: true,
+		responsesWebsocket: "official-only",
+		remoteCompactionV2: true,
+		compactEndpoint: true,
+		namespaceTools,
+		imagesApi,
+		searchApi,
+		hostedWebSearch,
+	};
 }
 
 function collectCoreContracts(

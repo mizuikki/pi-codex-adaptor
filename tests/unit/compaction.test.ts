@@ -40,6 +40,20 @@ class FixtureRuntime implements CodexRuntime {
 			hostedWebSearch: true,
 		},
 	};
+	bridgeCapabilities = [
+		"responses_sse",
+		"responses_websocket",
+		"remote_compaction_v2",
+		"compact_endpoint",
+		"update_plan",
+		"unified_exec",
+		"shell_command",
+		"apply_patch",
+		"view_image",
+		"image_generation",
+		"standalone_web_search",
+		"hosted_web_search",
+	];
 
 	async createResponse(_options: CreateResponseOptions): Promise<CreateResponseResult> {
 		throw new Error("fixture response execution is not configured");
@@ -59,6 +73,10 @@ class FixtureRuntime implements CodexRuntime {
 		};
 	}
 
+	async readDiagnostics(): Promise<unknown> {
+		return { capabilities: this.bridgeCapabilities };
+	}
+
 	async resolveModel(modelId: string): Promise<unknown> {
 		const value = this.modelResolution as Record<string, unknown>;
 		const model = value.model as Record<string, unknown>;
@@ -76,6 +94,20 @@ class FixtureRuntime implements CodexRuntime {
 					strict: false,
 				},
 			],
+			dispatchTools: [{ type: "function", name: "shell_command" }],
+			localToolNames: ["update_plan", "exec_command", "write_stdin"],
+			hostedToolNames: ["web_search"],
+			shellSurface: "unified-exec",
+			sessionSurface: "official",
+			webSurface: "hosted",
+			imageGenerationSurface: "disabled",
+			capabilities: {
+				sessions: { status: "available", source: "official" },
+				applyPatch: { status: "unavailable", reason: "model_apply_patch_disabled" },
+				viewImage: { status: "disabled", reason: "disabled_by_configuration" },
+				imageGeneration: { status: "disabled", reason: "disabled_by_configuration" },
+				webSearch: { status: "available", source: "provider-contract" },
+			},
 		};
 	}
 
@@ -262,27 +294,17 @@ describe("official compaction integration", () => {
 		expect(runtime.compaction?.transportMode).toBe("auto");
 	});
 
-	test("selects CompactClient when the provider lacks remote compaction", async () => {
+	test("selects CompactClient when the bridge lacks RemoteCompactionV2", async () => {
 		const runtime = new FixtureRuntime();
-		runtime.modelResolution = {
-			model: { slug: "fixture-model" },
-			shellSurface: "shell-command",
-			autoCompactTokenLimit: 90_000,
-			provider: {
-				name: "fixture-third-party",
-				supportsWebsockets: false,
-				supportsRemoteCompaction: false,
-				namespaceTools: false,
-				imageGeneration: false,
-				hostedWebSearch: false,
-			},
-		};
+		runtime.bridgeCapabilities = runtime.bridgeCapabilities.filter(
+			(capability) => capability !== "remote_compaction_v2",
+		);
 		const { handlers } = register(runtime);
 
 		await handlers.get("session_before_compact")?.[0]?.(compactEvent("manual"), context());
 
 		expect(runtime.compaction?.implementation).toBe("compact_endpoint");
-		expect(runtime.compaction?.providerSupportsWebsockets).toBe(false);
+		expect(runtime.compaction?.providerSupportsWebsockets).toBe(true);
 	});
 
 	test("validates persisted detail markers before restoring them", () => {

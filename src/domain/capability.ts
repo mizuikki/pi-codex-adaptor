@@ -1,24 +1,58 @@
 import type { ShellSurface, WebSearchMode } from "./config.ts";
 
-/**
- * Official OpenAI provider capability upper bounds returned by models.resolve.
- * Callers may disable more features through configuration, but must not invent
- * capabilities the active provider does not advertise.
- */
-export interface OfficialProviderCapabilities {
-	name: string;
-	supportsWebsockets: boolean;
-	supportsRemoteCompaction: boolean;
-	namespaceTools: boolean;
-	imageGeneration: boolean;
-	hostedWebSearch: boolean;
+export const MANAGED_TOOL_NAMES = [
+	"update_plan",
+	"exec_command",
+	"write_stdin",
+	"shell_command",
+	"apply_patch",
+	"view_image",
+	"image_gen.imagegen",
+	"web.run",
+] as const;
+
+export type ManagedToolName = (typeof MANAGED_TOOL_NAMES)[number];
+export type AvailabilitySource = "official" | "supplemental" | "provider-contract";
+export type Availability =
+	| { status: "available"; source: AvailabilitySource }
+	| { status: "disabled"; reason: string }
+	| { status: "unavailable"; reason: string };
+
+export interface CompleteCodexProviderContract {
+	responsesSse: true;
+	responsesWebsocket: "official-only" | "unavailable";
+	remoteCompactionV2: true;
+	compactEndpoint: true;
+	namespaceTools: true;
+	imagesApi: true;
+	searchApi: true;
+	hostedWebSearch: true;
 }
 
 export interface ResolvedModelCapability {
 	model: Record<string, unknown>;
 	shellSurface: ShellSurface;
 	autoCompactTokenLimit: number | null;
-	provider: OfficialProviderCapabilities;
+}
+
+export interface NativeToolCapabilityEvidence {
+	sessions: Availability;
+	applyPatch: Availability;
+	viewImage: Availability;
+	imageGeneration: Availability;
+	webSearch: Availability;
+}
+
+export interface ResolvedToolCapability {
+	modelTools: readonly unknown[];
+	dispatchTools: readonly unknown[];
+	localToolNames: readonly ManagedToolName[];
+	hostedToolNames: readonly string[];
+	shellSurface: ShellSurface;
+	sessionSurface: "official" | "supplemental" | "disabled" | "unavailable";
+	webSurface: "standalone" | "hosted" | "disabled" | "unsupported";
+	imageGenerationSurface: "standalone" | "disabled";
+	capabilities: NativeToolCapabilityEvidence;
 }
 
 export type CompactionImplementation = "remote_v2" | "compact_endpoint";
@@ -27,7 +61,9 @@ export type CapabilityErrorCode =
 	| "inactive_provider"
 	| "model_metadata_unavailable"
 	| "provider_capability_unavailable"
-	| "compaction_unsupported";
+	| "compaction_unsupported"
+	| "effective_capability_invalid"
+	| "provider_contract_mismatch";
 
 export class CapabilityError extends Error {
 	readonly code: CapabilityErrorCode;
@@ -42,117 +78,144 @@ export class CapabilityError extends Error {
 }
 
 export interface ToolsResolveHostOptions {
+	providerId: string;
 	webSearchMode: WebSearchMode;
 	viewImage: boolean;
 	imageGeneration: boolean;
-	/** Host fact: bundled bridge compiles the standalone web.run executor. */
-	standaloneWebSearchExecutorAvailable: boolean;
+	backgroundSessions: boolean;
+	bridgeCapabilities: readonly string[];
 	allowLoginShell?: boolean;
 	execPermissionApprovalsEnabled?: boolean;
 }
 
-/**
- * Parse the native models.resolve payload. Missing model or provider capability
- * metadata is an explicit failure rather than a guessed default.
- */
+export function completeProviderContract(providerId: string): CompleteCodexProviderContract {
+	return {
+		responsesSse: true,
+		responsesWebsocket: providerId === "openai-codex" ? "official-only" : "unavailable",
+		remoteCompactionV2: true,
+		compactEndpoint: true,
+		namespaceTools: true,
+		imagesApi: true,
+		searchApi: true,
+		hostedWebSearch: true,
+	};
+}
+
+/** Parse credential-free model metadata resolved through the pinned native official method. */
 export function parseModelResolution(
 	value: unknown,
 	expectedModelId: string,
 ): ResolvedModelCapability {
 	const root = record(value);
 	if (root === undefined) {
-		throw new CapabilityError(
-			"model_metadata_unavailable",
-			"OpenAI did not return metadata for the requested model",
-		);
+		throw metadataError("OpenAI Codex model metadata is unavailable");
 	}
 	const model = record(root.model);
 	if (model === undefined || model.slug !== expectedModelId) {
-		throw new CapabilityError(
-			"model_metadata_unavailable",
-			"OpenAI Codex model metadata did not match the selected model",
-		);
+		throw metadataError("OpenAI Codex model metadata did not match the selected model");
 	}
-	const provider = parseProviderCapabilities(root.provider);
-	if (provider === undefined) {
-		throw new CapabilityError(
-			"provider_capability_unavailable",
-			"OpenAI Codex provider capability metadata is unavailable",
-		);
-	}
-	const shellSurface = parseShellSurface(root.shellSurface, model);
-	const autoCompactTokenLimit = parseAutoCompactTokenLimit(root.autoCompactTokenLimit);
-	return { model, shellSurface, autoCompactTokenLimit, provider };
+	return {
+		model,
+		shellSurface: parseShellSurface(root.shellSurface, model),
+		autoCompactTokenLimit: parseAutoCompactTokenLimit(root.autoCompactTokenLimit),
+	};
 }
 
-/**
- * Official RemoteCompactionV2 when the provider supports remote compaction;
- * otherwise the typed CompactClient endpoint.
- */
-export function selectCompactionImplementation(
-	provider: OfficialProviderCapabilities,
-): CompactionImplementation {
-	return provider.supportsRemoteCompaction ? "remote_v2" : "compact_endpoint";
-}
-
-/**
- * Build tools.resolve parameters from official model/provider metadata and host
- * policy inputs. Does not hard-code provider WebSocket, hosted, or namespace truth.
- */
+/** Build protocol-v3 native resolver input from product policy and verified bridge evidence. */
 export function buildToolsResolveParams(
 	resolution: ResolvedModelCapability,
 	options: ToolsResolveHostOptions,
 ): Record<string, unknown> {
-	// Official StandaloneWebSearch is under development and default-disabled.
-	// Responses Lite still takes the standalone path through model.use_responses_lite.
+	const bridge = new Set(options.bridgeCapabilities);
 	return {
 		model: resolution.model,
 		webSearchMode: options.webSearchMode,
-		provider: {
-			hostedWebSearch: resolution.provider.hostedWebSearch,
-			namespaceTools: resolution.provider.namespaceTools,
-			imageGeneration: resolution.provider.imageGeneration,
-		},
+		providerContract: completeProviderContract(options.providerId),
 		standaloneWebSearch: {
 			featureEnabled: false,
-			executorAvailable: options.standaloneWebSearchExecutorAvailable,
+			executorAvailable: bridge.has("standalone_web_search"),
+		},
+		sessions: {
+			enabled: options.backgroundSessions,
+			executorAvailable: bridge.has("unified_exec"),
 		},
 		shell: {
 			allowLoginShell: options.allowLoginShell ?? true,
 			execPermissionApprovalsEnabled: options.execPermissionApprovalsEnabled ?? false,
 		},
 		optional: {
-			viewImage: options.viewImage,
-			imageGeneration: options.imageGeneration,
+			viewImage: options.viewImage && bridge.has("view_image"),
+			imageGeneration: options.imageGeneration && bridge.has("image_generation"),
 		},
 	};
 }
 
-export function parseProviderCapabilities(
-	value: unknown,
-): OfficialProviderCapabilities | undefined {
-	const provider = record(value);
-	if (provider === undefined) return undefined;
-	if (typeof provider.name !== "string" || provider.name.length === 0) return undefined;
-	if (typeof provider.supportsWebsockets !== "boolean") return undefined;
-	if (typeof provider.supportsRemoteCompaction !== "boolean") return undefined;
-	if (typeof provider.namespaceTools !== "boolean") return undefined;
-	if (typeof provider.imageGeneration !== "boolean") return undefined;
-	if (typeof provider.hostedWebSearch !== "boolean") return undefined;
+/** Strictly parse authoritative tool names, surfaces, and effective evidence from native. */
+export function parseToolResolution(value: unknown): ResolvedToolCapability {
+	const root = requiredRecord(value, "native tools.resolve result");
+	const capabilities = requiredRecord(root.capabilities, "native capability evidence");
 	return {
-		name: provider.name,
-		supportsWebsockets: provider.supportsWebsockets,
-		supportsRemoteCompaction: provider.supportsRemoteCompaction,
-		namespaceTools: provider.namespaceTools,
-		imageGeneration: provider.imageGeneration,
-		hostedWebSearch: provider.hostedWebSearch,
+		modelTools: array(root.modelTools, "modelTools"),
+		dispatchTools: array(root.dispatchTools, "dispatchTools"),
+		localToolNames: managedToolNames(root.localToolNames),
+		hostedToolNames: stringArray(root.hostedToolNames, "hostedToolNames"),
+		shellSurface: enumValue(root.shellSurface, ["unified-exec", "shell-command", "disabled"]),
+		sessionSurface: enumValue(root.sessionSurface, [
+			"official",
+			"supplemental",
+			"disabled",
+			"unavailable",
+		]),
+		webSurface: enumValue(root.webSurface, ["standalone", "hosted", "disabled", "unsupported"]),
+		imageGenerationSurface: enumValue(root.imageGenerationSurface, ["standalone", "disabled"]),
+		capabilities: {
+			sessions: parseAvailability(capabilities.sessions),
+			applyPatch: parseAvailability(capabilities.applyPatch),
+			viewImage: parseAvailability(capabilities.viewImage),
+			imageGeneration: parseAvailability(capabilities.imageGeneration),
+			webSearch: parseAvailability(capabilities.webSearch),
+		},
 	};
 }
 
-function parseShellSurface(value: unknown, model: Record<string, unknown>): ShellSurface {
-	if (value === "unified-exec" || value === "shell-command" || value === "disabled") {
-		return value;
+export function parseAvailability(value: unknown): Availability {
+	const item = requiredRecord(value, "capability availability");
+	if (item.status === "available") {
+		return {
+			status: "available",
+			source: enumValue(item.source, ["official", "supplemental", "provider-contract"]),
+		};
 	}
+	if (item.status === "disabled" || item.status === "unavailable") {
+		if (typeof item.reason !== "string" || item.reason.length === 0) {
+			throw invalidCapability("capability availability reason is invalid");
+		}
+		return { status: item.status, reason: item.reason };
+	}
+	throw invalidCapability("capability availability status is invalid");
+}
+
+export function selectCompactionImplementation(
+	contract: CompleteCodexProviderContract,
+): CompactionImplementation {
+	return contract.remoteCompactionV2 ? "remote_v2" : "compact_endpoint";
+}
+
+function managedToolNames(value: unknown): ManagedToolName[] {
+	const names = stringArray(value, "localToolNames");
+	if (new Set(names).size !== names.length) {
+		throw invalidCapability("native local tool names contain duplicates");
+	}
+	for (const name of names) {
+		if (!(MANAGED_TOOL_NAMES as readonly string[]).includes(name)) {
+			throw invalidCapability("native local tool name is not registered by the adaptor");
+		}
+	}
+	return names as ManagedToolName[];
+}
+
+function parseShellSurface(value: unknown, model: Record<string, unknown>): ShellSurface {
+	if (value === "unified-exec" || value === "shell-command" || value === "disabled") return value;
 	const shellType = model.shell_type;
 	if (shellType === "unified_exec") return "unified-exec";
 	if (shellType === "disabled") return "disabled";
@@ -164,21 +227,45 @@ function parseShellSurface(value: unknown, model: Record<string, unknown>): Shel
 	) {
 		return "shell-command";
 	}
-	throw new CapabilityError(
-		"model_metadata_unavailable",
-		"OpenAI Codex model metadata did not include a shell surface",
-	);
+	throw metadataError("OpenAI Codex model metadata did not include a shell surface");
 }
 
 function parseAutoCompactTokenLimit(value: unknown): number | null {
-	if (value === null || value === undefined) return null;
-	if (typeof value === "number" && Number.isFinite(value) && value > 0) {
-		return Math.trunc(value);
+	if (value === null) return null;
+	if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) return value;
+	throw metadataError("OpenAI Codex model metadata did not include a valid auto-compact limit");
+}
+
+function array(value: unknown, name: string): unknown[] {
+	if (!Array.isArray(value)) throw invalidCapability(`native ${name} is invalid`);
+	return value;
+}
+
+function stringArray(value: unknown, name: string): string[] {
+	const values = array(value, name);
+	if (!values.every((item) => typeof item === "string" && item.length > 0)) {
+		throw invalidCapability(`native ${name} is invalid`);
 	}
-	throw new CapabilityError(
-		"model_metadata_unavailable",
-		"OpenAI Codex model metadata did not include a valid auto-compact limit",
-	);
+	return values as string[];
+}
+
+function enumValue<const T extends readonly string[]>(value: unknown, values: T): T[number] {
+	if (typeof value === "string" && values.includes(value)) return value as T[number];
+	throw invalidCapability("native capability enum value is invalid");
+}
+
+function requiredRecord(value: unknown, name: string): Record<string, unknown> {
+	const item = record(value);
+	if (item === undefined) throw invalidCapability(`${name} is invalid`);
+	return item;
+}
+
+function metadataError(reason: string): CapabilityError {
+	return new CapabilityError("model_metadata_unavailable", reason);
+}
+
+function invalidCapability(reason: string): CapabilityError {
+	return new CapabilityError("effective_capability_invalid", reason);
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {

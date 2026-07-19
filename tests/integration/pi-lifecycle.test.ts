@@ -41,6 +41,50 @@ async function configurationService(): Promise<ConfigurationService> {
 }
 
 describe("fake Pi + real native lifecycle", () => {
+	test("executes and polls a supplemental session on the bundled shell-command model", async () => {
+		if (process.platform === "win32") return;
+		const { runtime } = await createIntegrationRuntime();
+		const shutdownRuntime = async () => runtime.shutdown();
+		cleanups.push(shutdownRuntime);
+		const service = await configurationService();
+		const pi = createFakePi({ token: fixtureToken() });
+		registerCodexTools(pi.api, runtime, service, new ProviderActivationPolicy(service));
+		const ctx = pi.context(fixtureModel("gpt-5.6-sol"));
+		await emit(pi, "session_start", ctx);
+
+		expect(pi.activeTools).toContain("shell_command");
+		expect(pi.activeTools).toContain("exec_command");
+		expect(pi.activeTools).toContain("write_stdin");
+		const started = await pi.tools
+			.get("exec_command")
+			?.execute(
+				"exec-session",
+				{ cmd: "read line; printf 'received:%s' \"$line\"", yield_time_ms: 20 },
+				undefined,
+				undefined,
+				ctx,
+			);
+		const sessionId = (started?.details as { session_id?: unknown } | undefined)?.session_id;
+		expect(typeof sessionId).toBe("number");
+
+		const completed = await pi.tools
+			.get("write_stdin")
+			?.execute(
+				"write-session",
+				{ session_id: sessionId, chars: "fixture-input\n", yield_time_ms: 2_000 },
+				undefined,
+				undefined,
+				ctx,
+			);
+		expect(completed?.content).toEqual([
+			{ type: "text", text: expect.stringContaining("received:fixture-input") },
+		]);
+		expect((completed?.details as { exit_code?: unknown } | undefined)?.exit_code).toBe(0);
+
+		await runtime.shutdown();
+		removeCleanup(shutdownRuntime);
+	}, 60_000);
+
 	test("switches models, recomputes resolvers, updates plan, and shuts down cleanly", async () => {
 		const server = await startFakeResponsesServer([
 			fixtureModelSpec({
@@ -70,8 +114,10 @@ describe("fake Pi + real native lifecycle", () => {
 		expect(pi.activeTools).toEqual([
 			"third_party",
 			"update_plan",
-			"apply_patch",
 			"shell_command",
+			"exec_command",
+			"write_stdin",
+			"apply_patch",
 			"view_image",
 			"image_gen.imagegen",
 		]);
@@ -83,8 +129,10 @@ describe("fake Pi + real native lifecycle", () => {
 		expect(pi.activeTools).toEqual([
 			"third_party",
 			"update_plan",
-			"apply_patch",
 			"shell_command",
+			"exec_command",
+			"write_stdin",
+			"apply_patch",
 			"view_image",
 			"image_gen.imagegen",
 			"web.run",
@@ -252,7 +300,14 @@ describe("fake Pi + real native lifecycle", () => {
 		);
 
 		await emit(pi, "session_start", ctx);
-		expect(pi.activeTools).toEqual(["third_party", "update_plan", "apply_patch", "shell_command"]);
+		expect(pi.activeTools).toEqual([
+			"third_party",
+			"update_plan",
+			"shell_command",
+			"exec_command",
+			"write_stdin",
+			"apply_patch",
+		]);
 		expect(pi.activeTools).not.toContain("view_image");
 		expect(pi.activeTools).not.toContain("image_gen.imagegen");
 		expect(pi.activeTools).not.toContain("web.run");
@@ -299,7 +354,14 @@ describe("fake Pi + real native lifecycle", () => {
 			2_000,
 		);
 
-		expect(pi.activeTools).toEqual(["third_party", "update_plan", "apply_patch", "shell_command"]);
+		expect(pi.activeTools).toEqual([
+			"third_party",
+			"update_plan",
+			"shell_command",
+			"exec_command",
+			"write_stdin",
+			"apply_patch",
+		]);
 		expect(pi.status.get("codex-adaptor")).toBeUndefined();
 
 		await service.applyDraft({

@@ -18,16 +18,11 @@ import {
 import type { ConfigurationService } from "../../application/configuration.ts";
 import type { ProviderActivationPolicy } from "../../application/provider-activation.ts";
 import {
-	buildToolsResolveParams,
-	parseModelResolution,
-	selectCompactionImplementation,
-} from "../../domain/capability.ts";
+	ResolveEffectiveCapabilities,
+	withSupplementalSessionInstructions,
+} from "../../application/resolve-effective-capabilities.ts";
 import type { CompactionConfig } from "../../domain/config.ts";
-import {
-	officialToolNames,
-	responseItemsFromMessages,
-	supportsProviderWebsockets,
-} from "./codex-provider.ts";
+import { officialToolNames, responseItemsFromMessages } from "./codex-provider.ts";
 import { resolveProviderConnection } from "./provider-connection.ts";
 
 const COMPACTION_SUMMARY = "Context compacted by the OpenAI Codex Responses API.";
@@ -39,6 +34,7 @@ export function registerCodexCompaction(
 	store: CodexCompactionStore,
 	activation: ProviderActivationPolicy,
 	coordinator: CodexCompactionCoordinator = new CodexCompactionCoordinator(),
+	capabilities = new ResolveEffectiveCapabilities(runtime),
 ): void {
 	pi.on("session_start", (_event, ctx) => {
 		const sessionId = ctx.sessionManager.getSessionId();
@@ -66,6 +62,7 @@ export function registerCodexCompaction(
 			configuration,
 			activation,
 			coordinator,
+			capabilities,
 		});
 	});
 	pi.on("session_before_compact", async (event, ctx) => {
@@ -91,14 +88,19 @@ export function registerCodexCompaction(
 			throw error;
 		}
 		const config = await configuration.load();
-		const resolution = parseModelResolution(await runtime.resolveModel(model.id), model.id);
+		const capabilitySnapshot = await capabilities.resolve({
+			modelId: model.id,
+			providerId: model.provider,
+			config,
+			contextWindow: model.contextWindow,
+		});
 		coordinator.setThresholdCache(sessionId, {
 			modelId: model.id,
-			autoCompactTokenLimit: resolution.autoCompactTokenLimit,
+			autoCompactTokenLimit: capabilitySnapshot.compaction.modelThreshold,
 		});
 		const threshold = resolveCompactionThreshold(
 			config.codex.compaction,
-			resolution.autoCompactTokenLimit,
+			capabilitySnapshot.compaction.modelThreshold,
 			model.contextWindow,
 		);
 		if (
@@ -132,19 +134,7 @@ export function registerCodexCompaction(
 				coordinator.end(sessionId, "cancel");
 				return { cancel: true };
 			}
-			const toolResolution = record(
-				await runtime.resolveTools(
-					buildToolsResolveParams(resolution, {
-						webSearchMode: config.codex.webSearch.mode,
-						viewImage: config.tools.optional.viewImage === "auto",
-						imageGeneration: config.tools.optional.imageGeneration === "auto",
-						standaloneWebSearchExecutorAvailable: true,
-					}),
-				),
-			);
-			const officialTools = Array.isArray(toolResolution?.modelTools)
-				? toolResolution.modelTools
-				: [];
+			const officialTools = capabilitySnapshot.modelTools;
 			const tools = mergeTools(pi, officialTools);
 			const previous = store.get(sessionId, model.id);
 			const messages = [
@@ -165,7 +155,10 @@ export function registerCodexCompaction(
 				request: {
 					model: model.id,
 					input,
-					instructions: ctx.getSystemPrompt(),
+					instructions: withSupplementalSessionInstructions(
+						ctx.getSystemPrompt(),
+						capabilitySnapshot,
+					),
 					tools: tools.length === 0 ? null : tools,
 					parallel_tool_calls: true,
 					reasoning: reasoningFor(model, pi.getThinkingLevel()),
@@ -173,12 +166,9 @@ export function registerCodexCompaction(
 					prompt_cache_key: sessionId,
 					text: { verbosity: config.codex.verbosity },
 				},
-				implementation: selectCompactionImplementation(resolution.provider),
+				implementation: capabilitySnapshot.compaction.implementation ?? "compact_endpoint",
 				transportMode: config.codex.transport.mode,
-				providerSupportsWebsockets: supportsProviderWebsockets(
-					model,
-					resolution.provider.supportsWebsockets,
-				),
+				providerSupportsWebsockets: capabilitySnapshot.providerSupportsWebsockets,
 				signal: event.signal,
 			});
 			if (event.signal.aborted) {
@@ -216,6 +206,7 @@ async function maybeTriggerThresholdCompaction(
 		configuration: ConfigurationService;
 		activation: ProviderActivationPolicy;
 		coordinator: CodexCompactionCoordinator;
+		capabilities: ResolveEffectiveCapabilities;
 	},
 ): Promise<void> {
 	const sessionId = ctx.sessionManager.getSessionId();
@@ -244,6 +235,7 @@ async function maybeTriggerThresholdCompaction(
 		model.contextWindow,
 		compaction,
 		state,
+		config,
 	);
 	const previousTokens = state.coordinator.getPreviousTokens(sessionId);
 	const shouldTrigger = shouldTriggerAutoCompaction({
@@ -270,7 +262,7 @@ async function maybeTriggerThresholdCompaction(
 }
 
 async function resolveThresholdForModel(
-	_ctx: ExtensionContext,
+	ctx: ExtensionContext,
 	sessionId: string,
 	modelId: string,
 	contextWindow: number,
@@ -279,7 +271,9 @@ async function resolveThresholdForModel(
 		runtime: CodexRuntime;
 		activation: ProviderActivationPolicy;
 		coordinator: CodexCompactionCoordinator;
+		capabilities: ResolveEffectiveCapabilities;
 	},
+	config: Awaited<ReturnType<ConfigurationService["load"]>>,
 ): Promise<number | undefined> {
 	if (compaction.mode === "auto" && typeof compaction.autoCompactTokenLimit === "number") {
 		return resolveCompactionThreshold(compaction, null, contextWindow);
@@ -288,13 +282,24 @@ async function resolveThresholdForModel(
 	if (cached?.modelId === modelId) {
 		return resolveCompactionThreshold(compaction, cached.autoCompactTokenLimit, contextWindow);
 	}
-	const resolution = parseModelResolution(await state.runtime.resolveModel(modelId), modelId);
+	const providerId = ctx.model?.provider;
+	if (providerId === undefined) return undefined;
+	const resolution = await state.capabilities.resolve({
+		modelId,
+		providerId,
+		config,
+		contextWindow,
+	});
 	const nextCache: CompactionThresholdCache = {
 		modelId,
-		autoCompactTokenLimit: resolution.autoCompactTokenLimit,
+		autoCompactTokenLimit: resolution.compaction.modelThreshold,
 	};
 	state.coordinator.setThresholdCache(sessionId, nextCache);
-	return resolveCompactionThreshold(compaction, resolution.autoCompactTokenLimit, contextWindow);
+	return resolveCompactionThreshold(
+		compaction,
+		resolution.compaction.modelThreshold,
+		contextWindow,
+	);
 }
 
 function restoreCompaction(ctx: ExtensionContext, store: CodexCompactionStore): void {

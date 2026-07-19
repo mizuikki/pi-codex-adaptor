@@ -81,6 +81,23 @@ class InactiveOnlyRuntime implements CodexRuntime {
 		throw new Error("fixture compaction is not configured");
 	}
 
+	async readDiagnostics(): Promise<unknown> {
+		return {
+			capabilities: [
+				"responses_sse",
+				"responses_websocket",
+				"remote_compaction_v2",
+				"compact_endpoint",
+				"unified_exec",
+				"shell_command",
+				"apply_patch",
+				"view_image",
+				"image_generation",
+				"hosted_web_search",
+			],
+		};
+	}
+
 	async resolveModel(): Promise<unknown> {
 		throw new Error("fixture model resolution is not configured");
 	}
@@ -123,6 +140,23 @@ class ActiveRuntime implements CodexRuntime {
 		throw new Error("fixture compaction is not configured");
 	}
 
+	async readDiagnostics(): Promise<unknown> {
+		return {
+			capabilities: [
+				"responses_sse",
+				"responses_websocket",
+				"remote_compaction_v2",
+				"compact_endpoint",
+				"unified_exec",
+				"shell_command",
+				"apply_patch",
+				"view_image",
+				"image_generation",
+				"hosted_web_search",
+			],
+		};
+	}
+
 	async resolveModel(modelId: string): Promise<unknown> {
 		return {
 			model: { slug: modelId },
@@ -140,7 +174,23 @@ class ActiveRuntime implements CodexRuntime {
 	}
 
 	async resolveTools(): Promise<unknown> {
-		return { modelTools: [] };
+		return {
+			modelTools: [],
+			dispatchTools: [],
+			localToolNames: [],
+			hostedToolNames: [],
+			shellSurface: "unified-exec",
+			sessionSurface: "official",
+			webSurface: "hosted",
+			imageGenerationSurface: "standalone",
+			capabilities: {
+				sessions: { status: "available", source: "official" },
+				applyPatch: { status: "available", source: "official" },
+				viewImage: { status: "available", source: "official" },
+				imageGeneration: { status: "available", source: "provider-contract" },
+				webSearch: { status: "available", source: "provider-contract" },
+			},
+		};
 	}
 
 	async executeTool(): Promise<CreateResponseResult> {

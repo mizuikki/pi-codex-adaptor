@@ -39,6 +39,8 @@ export interface DiagnosticsHostContext {
 	binaryChecksum?: string;
 	/** Recent errors already classified and redacted by the host. */
 	recentErrors?: readonly unknown[];
+	/** Credential-free effective capability summary produced by the application resolver. */
+	effectiveCapabilities?: Readonly<Record<string, unknown>>;
 }
 
 export interface DiagnosticsSnapshot {
@@ -49,6 +51,7 @@ export interface DiagnosticsSnapshot {
 	pi?: { version: string };
 	runtime?: { os: string; arch: string };
 	bridge: Record<string, unknown>;
+	effectiveCapabilities?: Record<string, string | number | boolean | null | readonly string[]>;
 	recentErrors?: readonly SafeDiagnosticError[];
 	binaryChecksum?: string;
 }
@@ -131,6 +134,8 @@ export function createDiagnosticsSnapshot(
 	if (binaryChecksum !== undefined) {
 		snapshot.binaryChecksum = binaryChecksum;
 	}
+	const effectiveCapabilities = sanitizeEffectiveCapabilities(host.effectiveCapabilities);
+	if (effectiveCapabilities !== undefined) snapshot.effectiveCapabilities = effectiveCapabilities;
 
 	return snapshot;
 }
@@ -194,6 +199,8 @@ export function sanitizeSnapshot(snapshot: DiagnosticsSnapshot): DiagnosticsSnap
 
 	const binaryChecksum = sanitizeChecksum(snapshot.binaryChecksum);
 	if (binaryChecksum !== undefined) sanitized.binaryChecksum = binaryChecksum;
+	const effectiveCapabilities = sanitizeEffectiveCapabilities(snapshot.effectiveCapabilities);
+	if (effectiveCapabilities !== undefined) sanitized.effectiveCapabilities = effectiveCapabilities;
 
 	return sanitized;
 }
@@ -256,6 +263,35 @@ function sanitizeErrorMessage(value: unknown): string | undefined {
 
 function sanitizeChecksum(value: unknown): string | undefined {
 	return typeof value === "string" && SHA256_HEX.test(value) ? value : undefined;
+}
+
+function sanitizeEffectiveCapabilities(
+	value: unknown,
+): Record<string, string | number | boolean | null | readonly string[]> | undefined {
+	const source = record(value);
+	if (source === undefined) return undefined;
+	const result: Record<string, string | number | boolean | null | readonly string[]> = {};
+	for (const [key, item] of Object.entries(source)) {
+		if (!/^[A-Za-z][A-Za-z0-9]{0,63}$/.test(key)) continue;
+		if (
+			typeof item === "boolean" ||
+			item === null ||
+			(typeof item === "number" && Number.isSafeInteger(item) && item >= 0)
+		) {
+			result[key] = item;
+			continue;
+		}
+		const text = sanitizeIdentityString(item);
+		if (text !== undefined) {
+			result[key] = text;
+			continue;
+		}
+		if (Array.isArray(item)) {
+			const values = item.map(sanitizeIdentityString);
+			if (values.every((entry): entry is string => entry !== undefined)) result[key] = values;
+		}
+	}
+	return Object.keys(result).length === 0 ? undefined : result;
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {

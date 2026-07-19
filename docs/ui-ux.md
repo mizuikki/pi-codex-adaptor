@@ -13,6 +13,12 @@ Continue editing selected by default. `R` opens an explicit reset-to-defaults co
 selected by default. Unsupported capability-dependent settings include a textual reason; color is never
 the only state signal.
 
+The overlay resolves the current effective capability snapshot before rendering. Background sessions
+are editable on bundled shell-command models and report the supplemental surface in status and
+diagnostics. When auto compact limit is stored as `model`, the row displays the official resolved
+numeric threshold without replacing the stored sentinel. Save resolves and validates the candidate
+snapshot before persistence, and the same cached snapshot drives the subsequent active-tool refresh.
+
 The Tools category includes an `Approval policy` enum with `prompt` and `bypass`. Prompt is the safe
 default. Cycling from prompt to bypass opens a confirmation with Cancel focused by default. The
 confirmation states that native commands run with the user's permissions and that workspace roots do

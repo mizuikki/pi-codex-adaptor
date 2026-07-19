@@ -443,6 +443,31 @@ pub fn map_api_error(error: &ApiError) -> BridgeError {
     }
 }
 
+/// Maps an endpoint-level unsupported response to the activated provider contract member.
+/// The returned error never includes the URL, headers, response body, or request content.
+pub fn map_provider_contract_error(error: &ApiError, capability: &str) -> BridgeError {
+    let unsupported = match error {
+        ApiError::Transport(TransportError::Http { status, .. }) | ApiError::Api { status, .. } => {
+            matches!(
+                *status,
+                http::StatusCode::NOT_FOUND
+                    | http::StatusCode::METHOD_NOT_ALLOWED
+                    | http::StatusCode::NOT_IMPLEMENTED
+            )
+        }
+        _ => false,
+    };
+    if !unsupported {
+        return map_api_error(error);
+    }
+    BridgeError {
+        category: ErrorCategory::CapabilityError,
+        code: "provider_contract_mismatch".to_owned(),
+        message: format!("the selected provider does not implement {capability}"),
+        retryable: false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -472,6 +497,35 @@ mod tests {
         });
         assert_eq!(error.code, "upstream_invalid_request");
         assert!(!error.message.contains("private upstream detail"));
+    }
+
+    #[test]
+    fn endpoint_unsupported_errors_name_only_the_provider_contract_member() {
+        for capability in [
+            "responses_sse",
+            "remote_compaction_v2",
+            "compact_endpoint",
+            "images_api",
+            "search_api",
+        ] {
+            let error = map_provider_contract_error(
+                &ApiError::Transport(TransportError::Http {
+                    status: http::StatusCode::NOT_FOUND,
+                    url: Some("https://private.invalid/endpoint".to_owned()),
+                    headers: None,
+                    body: Some("private response body".to_owned()),
+                }),
+                capability,
+            );
+            assert_eq!(error.code, "provider_contract_mismatch");
+            assert_eq!(
+                error.message,
+                format!("the selected provider does not implement {capability}")
+            );
+            assert!(!error.message.contains("private.invalid"));
+            assert!(!error.message.contains("private response"));
+            assert!(!error.retryable);
+        }
     }
 
     #[test]

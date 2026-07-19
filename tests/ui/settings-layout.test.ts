@@ -9,7 +9,7 @@ function createView(): SettingsModel {
 		baseline: "0.144.3",
 		provider: "openai-codex-with-a-deliberately-long-provider-identifier",
 		model: "gpt-model-with-a-deliberately-long-model-identifier",
-		bridge: "protocol v2",
+		bridge: "protocol v3",
 		capabilities: ["responses", "compact", "unified-exec"],
 		disabledReasons: {
 			imageGeneration: "Unavailable: provider does not advertise image generation.",

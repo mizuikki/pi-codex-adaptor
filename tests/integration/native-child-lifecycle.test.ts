@@ -57,11 +57,6 @@ describe("native child integration", () => {
 		expect(model.status).toBe("completed");
 		expect(model.result).toMatchObject({
 			shellSurface: "shell-command",
-			provider: {
-				name: "OpenAI",
-				supportsWebsockets: true,
-				hostedWebSearch: true,
-			},
 		});
 
 		const events: string[] = [];

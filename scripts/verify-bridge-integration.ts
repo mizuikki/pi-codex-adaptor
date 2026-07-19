@@ -117,8 +117,9 @@ try {
 				experimental_supported_tools: [],
 			},
 			webSearchMode: "indexed",
-			provider: { hostedWebSearch: true, namespaceTools: true, imageGeneration: true },
+			providerContract: completeProviderContract(true, true, true, true),
 			standaloneWebSearch: { featureEnabled: false, executorAvailable: true },
+			sessions: { enabled: true, executorAvailable: true },
 			shell: { allowLoginShell: false, execPermissionApprovalsEnabled: false },
 			optional: { viewImage: true, imageGeneration: true },
 		});
@@ -181,6 +182,24 @@ try {
 	}
 } finally {
 	server.stop();
+}
+
+function completeProviderContract(
+	hostedWebSearch: boolean,
+	namespaceTools: boolean,
+	imagesApi: boolean,
+	searchApi: boolean,
+): Record<string, unknown> {
+	return {
+		responsesSse: true,
+		responsesWebsocket: "official-only",
+		remoteCompactionV2: true,
+		compactEndpoint: true,
+		namespaceTools,
+		imagesApi,
+		searchApi,
+		hostedWebSearch,
+	};
 }
 
 function argument(name: string): string | undefined {

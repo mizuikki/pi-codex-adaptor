@@ -8,8 +8,9 @@ import type {
 } from "../../application/codex-runtime.ts";
 import type { ConfigurationService } from "../../application/configuration.ts";
 import type { ProviderActivationPolicy } from "../../application/provider-activation.ts";
+import { ResolveEffectiveCapabilities } from "../../application/resolve-effective-capabilities.ts";
 import { UpdatePlanUseCase } from "../../application/update-plan.ts";
-import { buildToolsResolveParams, parseModelResolution } from "../../domain/capability.ts";
+import { MANAGED_TOOL_NAMES, type ManagedToolName } from "../../domain/capability.ts";
 import type { ApprovalPolicy, CodexConfig } from "../../domain/config.ts";
 import type { PlanUpdate } from "../../domain/plan.ts";
 import { resolveProviderActivation } from "../../domain/provider-activation.ts";
@@ -19,17 +20,8 @@ import { responseItemsFromMessages } from "./codex-provider.ts";
 import { OFFICIAL_CORE_TOOL_CONTRACTS, PI_CORE_TOOL_PARAMETERS } from "./generated/core-tools.ts";
 import { assertProviderActive, resolveProviderConnection } from "./provider-connection.ts";
 
-const MANAGED_TOOLS = [
-	"update_plan",
-	"exec_command",
-	"write_stdin",
-	"shell_command",
-	"apply_patch",
-	"view_image",
-	"image_gen.imagegen",
-	"web.run",
-] as const;
-type ManagedTool = (typeof MANAGED_TOOLS)[number];
+const MANAGED_TOOLS = MANAGED_TOOL_NAMES;
+type ManagedTool = ManagedToolName;
 type NativeManagedTool = Exclude<ManagedTool, "update_plan" | "image_gen.imagegen" | "web.run">;
 
 export function registerCodexTools(
@@ -38,8 +30,8 @@ export function registerCodexTools(
 	configuration: Pick<ConfigurationService, "load"> &
 		Partial<Pick<ConfigurationService, "onChange">>,
 	activation: ProviderActivationPolicy,
+	capabilities = new ResolveEffectiveCapabilities(runtime),
 ): void {
-	const hiddenDispatchTools = new Set<ManagedTool>();
 	let startupBypassWarningShown = false;
 	registerPlanTool(pi, activation);
 	registerNativeTool(pi, runtime, configuration, activation, "exec_command", "Execute command");
@@ -79,7 +71,6 @@ export function registerCodexTools(
 				ctx.ui.notify(APPROVAL_BYPASS_WARNING, "warning");
 			}
 			if (selected === undefined || !providerActive(selected, config)) {
-				hiddenDispatchTools.clear();
 				disableManagedTools(pi);
 				setStatus(ctx, undefined);
 				return;
@@ -87,79 +78,29 @@ export function registerCodexTools(
 			// Re-check after the async load so a mid-flight onChange snapshot is authoritative.
 			if (!providerActive(selected, config)) {
 				if (generation !== activationGeneration) return;
-				hiddenDispatchTools.clear();
 				disableManagedTools(pi);
 				setStatus(ctx, undefined);
 				return;
 			}
-			const resolution = parseModelResolution(await runtime.resolveModel(selected.id), selected.id);
+			const snapshot = await capabilities.resolve({
+				modelId: selected.id,
+				providerId: selected.provider,
+				config,
+				contextWindow: selected.contextWindow,
+			});
 			if (generation !== activationGeneration) return;
-			const model = resolution.model;
-			const toolResolution = record(
-				await runtime.resolveTools(
-					buildToolsResolveParams(resolution, {
-						webSearchMode: config.codex.webSearch.mode,
-						viewImage: config.tools.optional.viewImage === "auto",
-						imageGeneration: config.tools.optional.imageGeneration === "auto",
-						standaloneWebSearchExecutorAvailable: true,
-					}),
-				),
-			);
-			if (generation !== activationGeneration) return;
-			const shellSurface = toolResolution?.shellSurface ?? resolution.shellSurface;
-			const dispatchTools = Array.isArray(toolResolution?.dispatchTools)
-				? toolResolution.dispatchTools
-				: [];
-			const hiddenDispatch = new Set(
-				dispatchTools
-					.map((tool) => {
-						const value = record(tool);
-						return typeof value?.name === "string" ? value.name : undefined;
-					})
-					.filter(
-						(name): name is ManagedTool =>
-							typeof name === "string" && (MANAGED_TOOLS as readonly string[]).includes(name),
-					),
-			);
-			// Unified Exec keeps shell_command dispatch-only: registered and executable, not model-visible.
-			if (shellSurface === "unified-exec") hiddenDispatch.add("shell_command");
-			else hiddenDispatch.delete("shell_command");
-			hiddenDispatchTools.clear();
-			for (const name of hiddenDispatch) hiddenDispatchTools.add(name);
-
-			const active: ManagedTool[] = ["update_plan"];
-			if (model.apply_patch_tool_type === "freeform") active.push("apply_patch");
-			if (shellSurface === "unified-exec") active.push("exec_command", "write_stdin");
-			if (shellSurface === "shell-command") active.push("shell_command");
-			if (
-				config.tools.optional.viewImage === "auto" &&
-				Array.isArray(model.input_modalities) &&
-				model.input_modalities.includes("image")
-			) {
-				active.push("view_image");
-			}
-			if (
-				config.tools.optional.imageGeneration === "auto" &&
-				toolResolution?.imageGenerationSurface === "standalone"
-			) {
-				active.push("image_gen.imagegen");
-			}
-			if (toolResolution?.webSurface === "standalone") active.push("web.run");
-			const visible = active.filter((name) => !hiddenDispatchTools.has(name));
-			setManagedTools(pi, visible);
-			const webSurface =
-				typeof toolResolution?.webSurface === "string" ? toolResolution.webSurface : "unsupported";
+			setManagedTools(pi, snapshot.localTools);
+			const webSurface = snapshot.webSurface;
 			setStatus(
 				ctx,
 				config.ui.status
-					? `Codex 0.144.3 | ${shellSurface} | ${webSurface}${
+					? `Codex 0.144.3 | ${snapshot.shell.primary} | sessions:${snapshot.shell.sessionSurface} | web:${webSurface}${
 							config.security.approvalPolicy === "bypass" ? " | approvals:bypass" : ""
 						}`
 					: undefined,
 			);
 		} catch {
 			if (generation === activationGeneration) {
-				hiddenDispatchTools.clear();
 				disableManagedTools(pi);
 				setStatus(ctx, "Codex unavailable");
 			}
@@ -187,6 +128,7 @@ export function registerCodexTools(
 		// late save/reset/restore cannot mutate tools/status after shutdown. Matches the
 		// extension root disposing activation and shutting down the runtime on this event.
 		activationGeneration += 1;
+		capabilities.invalidate();
 		activeContext = undefined;
 		startupBypassWarningShown = false;
 		unsubscribeConfig();
