@@ -7,6 +7,10 @@ import { ConfigurationService } from "../../src/application/configuration.ts";
 import { ProviderActivationPolicy } from "../../src/application/provider-activation.ts";
 import { FileConfigurationRepository } from "../../src/infrastructure/configuration/file-config-repository.ts";
 import { createCodexStreamSimple } from "../../src/integration/pi/codex-provider.ts";
+import {
+	type CodexToolProfileCoordinator,
+	PI_CORE_AGENT_TOOL_NAMES,
+} from "../../src/integration/pi/codex-tool-profile.ts";
 import { registerCodexTools } from "../../src/integration/pi/codex-tools.ts";
 
 import { createFakePi, emit, fixtureModel, fixtureToken } from "./helpers/fake-pi.ts";
@@ -38,6 +42,20 @@ async function configurationService(): Promise<ConfigurationService> {
 	const configFile = join(directory, "pi-codex-adaptor.json");
 	const repository = new FileConfigurationRepository(configFile);
 	return new ConfigurationService(repository);
+}
+
+function healthyProfile(): CodexToolProfileCoordinator {
+	return {
+		readiness: { kind: "healthy", capabilityKey: "fixture-key" },
+		skillLoader: "shell_command",
+		enterPending: () => {},
+		installHealthy: () => true,
+		installUnavailable: () => {},
+		revalidateHealthyOwnership: () => true,
+		isHealthy: () => true,
+		restorePi: () => {},
+		dispose: () => {},
+	};
 }
 
 describe("fake Pi + real native lifecycle", () => {
@@ -170,7 +188,7 @@ describe("fake Pi + real native lifecycle", () => {
 
 		const other = pi.context(fixtureModel("gpt-5.6-sol", "other-provider", server.baseUrl));
 		await emit(pi, "model_select", other);
-		expect(pi.activeTools).toEqual(["third_party"]);
+		expect(pi.activeTools).toEqual([...PI_CORE_AGENT_TOOL_NAMES, "third_party"]);
 
 		await runtime.shutdown();
 		removeCleanup(shutdownRuntime);
@@ -191,6 +209,8 @@ describe("fake Pi + real native lifecycle", () => {
 			service,
 			new ProviderActivationPolicy(service),
 			new CodexCompactionStore(),
+			undefined,
+			healthyProfile(),
 		);
 		const stream = streamSimple(
 			fixtureModel("gpt-5.5", "openai-codex", server.baseUrl),
@@ -241,6 +261,8 @@ describe("fake Pi + real native lifecycle", () => {
 			service,
 			activation,
 			new CodexCompactionStore(),
+			undefined,
+			healthyProfile(),
 		);
 		const stream = streamSimple(
 			{
@@ -356,7 +378,9 @@ describe("fake Pi + real native lifecycle", () => {
 		// ConfigurationService notifies listeners without awaiting them; wait for the surface.
 		await waitFor(
 			() =>
-				!pi.activeTools.includes("view_image") && !pi.activeTools.includes("image_gen.imagegen"),
+				!pi.activeTools.includes("view_image") &&
+				!pi.activeTools.includes("image_gen.imagegen") &&
+				pi.activeTools.includes("apply_patch"),
 			2_000,
 		);
 
@@ -391,6 +415,7 @@ describe("fake Pi + real native lifecycle", () => {
 
 		await emit(pi, "session_shutdown", ctx);
 		const toolsAfterShutdown = [...pi.activeTools];
+		expect(toolsAfterShutdown).toEqual([...PI_CORE_AGENT_TOOL_NAMES, "third_party"]);
 		await service.resetToDefaults();
 		// Give a late activate attempt time to misbehave if the subscription leaked.
 		await new Promise((resolve) => setTimeout(resolve, 25));

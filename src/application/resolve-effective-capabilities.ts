@@ -60,7 +60,7 @@ export class ResolveEffectiveCapabilities {
 	}
 
 	resolve(input: ResolveEffectiveCapabilitiesInput): Promise<EffectiveCapabilitySnapshot> {
-		const key = stableCacheKey(input);
+		const key = capabilityCacheKey(input);
 		let pending = this.#cache.get(key);
 		if (pending === undefined) {
 			pending = this.#resolve(input).catch((error) => {
@@ -276,7 +276,8 @@ function unavailable(reason: string): Availability {
 	return { status: "unavailable", reason };
 }
 
-function stableCacheKey(input: ResolveEffectiveCapabilitiesInput): string {
+/** Stable application-owned projection shared by capability caching and Pi profile readiness. */
+export function capabilityCacheKey(input: ResolveEffectiveCapabilitiesInput): string {
 	const compaction = input.config.codex.compaction;
 	return JSON.stringify([
 		input.modelId,

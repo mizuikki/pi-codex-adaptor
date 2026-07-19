@@ -19,6 +19,10 @@ diagnostics. When auto compact limit is stored as `model`, the row displays the 
 numeric threshold without replacing the stored sentinel. Save resolves and validates the candidate
 snapshot before persistence, and the same cached snapshot drives the subsequent active-tool refresh.
 
+Provider and model selection changes switch the active tool profile and rebuild the corresponding
+prompt/tool status. Codex core isolation and reversible Pi restoration are lifecycle behavior, not a
+new user setting.
+
 The Tools category includes an `Approval policy` enum with `prompt` and `bypass`. Prompt is the safe
 default. Cycling from prompt to bypass opens a confirmation with Cancel focused by default. The
 confirmation states that native commands run with the user's permissions and that workspace roots do

@@ -18,6 +18,7 @@ import type { ConfigurationService } from "../../application/configuration.ts";
 import type { ProviderActivationPolicy } from "../../application/provider-activation.ts";
 import type { ResolveEffectiveCapabilities } from "../../application/resolve-effective-capabilities.ts";
 import { createCodexStreamSimple } from "./codex-provider.ts";
+import type { CodexToolProfileCoordinator } from "./codex-tool-profile.ts";
 
 /** Direct Pi-native `openai-responses` stream; never consults the API registry. */
 export const piNativeOpenAiResponsesStreamSimple =
@@ -33,6 +34,7 @@ export function createCodexProviderDispatchers(
 	activation: ProviderActivationPolicy,
 	compactions = new CodexCompactionStore(),
 	capabilities?: ResolveEffectiveCapabilities,
+	profile?: CodexToolProfileCoordinator,
 ): {
 	codexResponses: StreamSimpleDispatcher;
 	openAiResponses: StreamSimpleDispatcher;
@@ -43,6 +45,7 @@ export function createCodexProviderDispatchers(
 		activation,
 		compactions,
 		capabilities,
+		profile,
 	);
 	return {
 		codexResponses: createDispatcher(activation, codex, piNativeOpenAiCodexResponsesStreamSimple),

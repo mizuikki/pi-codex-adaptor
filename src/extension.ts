@@ -1,5 +1,5 @@
 import { homedir } from "node:os";
-import { dirname, resolve } from "node:path";
+import { dirname, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
@@ -12,6 +12,10 @@ import { BundledCodexRuntime } from "./infrastructure/codex-bridge/runtime.ts";
 import { FileConfigurationRepository } from "./infrastructure/configuration/file-config-repository.ts";
 import { FileDiagnosticsExporter } from "./infrastructure/diagnostics/file-diagnostics-exporter.ts";
 import { registerCodexCompaction } from "./integration/pi/codex-compaction.ts";
+import {
+	createCodexToolProfile,
+	createUnavailableCodexToolProfile,
+} from "./integration/pi/codex-tool-profile.ts";
 import { registerCodexTools } from "./integration/pi/codex-tools.ts";
 import { createCodexProviderDispatchers } from "./integration/pi/provider-dispatcher.ts";
 import { openSettingsOverlay } from "./ui/terminal/settings-overlay.ts";
@@ -26,6 +30,16 @@ export default async function piCodexAdaptor(pi: ExtensionAPI): Promise<void> {
 	await activation.refresh();
 	const diagnostics = new FileDiagnosticsExporter();
 	const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+	const extensionEntryPath = normalize(fileURLToPath(import.meta.url));
+	const hasToolProfileApi =
+		typeof pi.getActiveTools === "function" &&
+		typeof pi.getAllTools === "function" &&
+		typeof pi.setActiveTools === "function" &&
+		typeof pi.registerTool === "function" &&
+		typeof pi.on === "function";
+	const toolProfile = hasToolProfileApi
+		? createCodexToolProfile(pi, extensionEntryPath)
+		: createUnavailableCodexToolProfile();
 	const runtime = new BundledCodexRuntime({
 		packageRoot,
 		clientVersion: packageMetadata.version,
@@ -41,6 +55,7 @@ export default async function piCodexAdaptor(pi: ExtensionAPI): Promise<void> {
 			activation,
 			compactions,
 			capabilities,
+			toolProfile,
 		);
 		pi.registerProvider("openai-codex", {
 			api: "openai-codex-responses",
@@ -56,6 +71,7 @@ export default async function piCodexAdaptor(pi: ExtensionAPI): Promise<void> {
 			await activation.refresh();
 		});
 		pi.on("session_shutdown", async () => {
+			toolProfile.restorePi();
 			compactionCoordinator.disposeAll();
 			capabilities.invalidate();
 			activation.dispose();
@@ -74,16 +90,18 @@ export default async function piCodexAdaptor(pi: ExtensionAPI): Promise<void> {
 				activation,
 				compactionCoordinator,
 				capabilities,
+				toolProfile,
 			);
 		}
 	}
 	if (
 		typeof pi.registerTool === "function" &&
 		typeof pi.getActiveTools === "function" &&
+		typeof pi.getAllTools === "function" &&
 		typeof pi.setActiveTools === "function" &&
 		typeof pi.on === "function"
 	) {
-		registerCodexTools(pi, runtime, service, activation, capabilities);
+		registerCodexTools(pi, runtime, service, activation, capabilities, toolProfile);
 	}
 	pi.registerCommand("codex", {
 		description: "Open Codex adaptor settings",

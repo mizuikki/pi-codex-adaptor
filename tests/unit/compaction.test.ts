@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import type { Context, Model } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type {
 	CodexRuntime,
@@ -20,11 +21,17 @@ import type { ConfigurationService } from "../../src/application/configuration.t
 import { ProviderActivationPolicy } from "../../src/application/provider-activation.ts";
 import { createDefaultConfig } from "../../src/domain/config.ts";
 import { registerCodexCompaction } from "../../src/integration/pi/codex-compaction.ts";
+import { createCodexStreamSimple } from "../../src/integration/pi/codex-provider.ts";
+import type {
+	CodexToolProfileCoordinator,
+	CodexToolProfileReadiness,
+} from "../../src/integration/pi/codex-tool-profile.ts";
 
 type EventHandler = (event: unknown, ctx: ExtensionContext) => unknown | Promise<unknown>;
 
 class FixtureRuntime implements CodexRuntime {
 	compaction: CompactResponseOptions | undefined;
+	response: CreateResponseOptions | undefined;
 	compactCalls = 0;
 	compactImpl: ((options: CompactResponseOptions) => Promise<CreateResponseResult>) | undefined;
 	modelResolution: unknown = {
@@ -55,8 +62,12 @@ class FixtureRuntime implements CodexRuntime {
 		"hosted_web_search",
 	];
 
-	async createResponse(_options: CreateResponseOptions): Promise<CreateResponseResult> {
-		throw new Error("fixture response execution is not configured");
+	async createResponse(options: CreateResponseOptions): Promise<CreateResponseResult> {
+		this.response = options;
+		return {
+			status: "completed",
+			result: { responseId: "fixture-response", tokenUsage: {} },
+		};
 	}
 
 	async compact(options: CompactResponseOptions): Promise<CreateResponseResult> {
@@ -93,6 +104,7 @@ class FixtureRuntime implements CodexRuntime {
 					parameters: { type: "object", properties: {} },
 					strict: false,
 				},
+				{ type: "web_search", indexed_web_access: true },
 			],
 			dispatchTools: [{ type: "function", name: "shell_command" }],
 			localToolNames: ["update_plan", "exec_command", "write_stdin"],
@@ -209,25 +221,31 @@ function register(
 	config: ConfigurationService = configuration(),
 	store = new CodexCompactionStore(),
 	coordinator = new CodexCompactionCoordinator(),
+	options?: {
+		activeTools?: readonly string[];
+		allTools?: readonly unknown[];
+		profile?: CodexToolProfileCoordinator;
+	},
 ): {
 	handlers: Map<string, EventHandler[]>;
 	store: CodexCompactionStore;
 	coordinator: CodexCompactionCoordinator;
 } {
 	const handlers = new Map<string, EventHandler[]>();
+	const defaultTools = [
+		{
+			name: "third_party",
+			description: "Third-party fixture",
+			parameters: { type: "object", properties: {} },
+			sourceInfo: { path: "<synthetic>/third-party" },
+		},
+	];
 	registerCodexCompaction(
 		{
 			on: (name: string, handler: EventHandler) =>
 				handlers.set(name, [...(handlers.get(name) ?? []), handler]),
-			getActiveTools: () => ["third_party"],
-			getAllTools: () => [
-				{
-					name: "third_party",
-					description: "Third-party fixture",
-					parameters: { type: "object", properties: {} },
-					sourceInfo: { path: "fixture" },
-				},
-			],
+			getActiveTools: () => [...(options?.activeTools ?? ["third_party"])],
+			getAllTools: () => options?.allTools ?? defaultTools,
 			getThinkingLevel: () => "low",
 		} as never,
 		runtime,
@@ -235,11 +253,131 @@ function register(
 		store,
 		new ProviderActivationPolicy(config),
 		coordinator,
+		undefined,
+		options?.profile ?? healthyProfile(),
 	);
 	return { handlers, store, coordinator };
 }
 
+function unhealthyProfile(readiness: CodexToolProfileReadiness): CodexToolProfileCoordinator {
+	return {
+		readiness,
+		skillLoader: undefined,
+		enterPending: () => {},
+		installHealthy: () => false,
+		installUnavailable: () => {},
+		revalidateHealthyOwnership: () => false,
+		isHealthy: () => false,
+		restorePi: () => {},
+		dispose: () => {},
+	};
+}
+
+function healthyProfile(): CodexToolProfileCoordinator {
+	return {
+		...unhealthyProfile({ kind: "healthy", capabilityKey: "fixture-key" }),
+		isHealthy: () => true,
+	};
+}
+
 describe("official compaction integration", () => {
+	test("matches response additive filtering and keeps official tools first", async () => {
+		const runtime = new FixtureRuntime();
+		const names = [
+			"read",
+			"bash",
+			"edit",
+			"write",
+			"grep",
+			"find",
+			"ls",
+			"third_party",
+			"update_plan",
+			"view_image",
+		];
+		const allTools = names.map((name) => ({
+			name,
+			description: `fixture ${name}`,
+			parameters: { type: "object", properties: {} },
+			sourceInfo: { path: `<synthetic>/${name}` },
+		}));
+		const config = configuration();
+		const responseStream = createCodexStreamSimple(
+			runtime,
+			config,
+			new ProviderActivationPolicy(config),
+			new CodexCompactionStore(),
+			undefined,
+			healthyProfile(),
+		);
+		const responseContext = {
+			systemPrompt: "fixture system",
+			messages: [{ role: "user", content: "fixture input", timestamp: 1 }],
+			tools: allTools,
+		} as unknown as Context;
+		const responseModel = {
+			id: "fixture-model",
+			name: "Fixture",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: "https://invalid.example",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 100_000,
+			maxTokens: 10_000,
+		} as Model<string>;
+		for await (const _event of responseStream(responseModel, responseContext, {
+			apiKey: fixtureToken(),
+		})) {
+			// Drain the response to capture the constructed request.
+		}
+		const responseRequest = runtime.response?.request as { tools?: unknown } | undefined;
+
+		const { handlers } = register(runtime, config, new CodexCompactionStore(), undefined, {
+			activeTools: names,
+			allTools,
+		});
+
+		await handlers.get("session_before_compact")?.[0]?.(compactEvent("manual"), context());
+
+		const compactionRequest = runtime.compaction?.request as { tools?: unknown } | undefined;
+		expect(compactionRequest?.tools).toEqual([
+			{
+				type: "function",
+				name: "update_plan",
+				description: "Official fixture",
+				parameters: { type: "object", properties: {} },
+				strict: false,
+			},
+			{ type: "web_search", indexed_web_access: true },
+			{
+				type: "function",
+				name: "third_party",
+				description: "fixture third_party",
+				parameters: { type: "object", properties: {} },
+				strict: false,
+			},
+		]);
+		expect(compactionRequest?.tools).toEqual(responseRequest?.tools);
+	});
+
+	test("rejects a non-healthy profile before native compaction dispatch", async () => {
+		const runtime = new FixtureRuntime();
+		const { handlers } = register(
+			runtime,
+			configuration(),
+			new CodexCompactionStore(),
+			new CodexCompactionCoordinator(),
+			{ profile: unhealthyProfile({ kind: "pending", capabilityKey: "fixture-pending" }) },
+		);
+
+		await expect(
+			handlers.get("session_before_compact")?.[0]?.(compactEvent("manual"), context()),
+		).rejects.toThrow("Codex tool profile is unavailable");
+		expect(runtime.compactCalls).toBe(0);
+	});
+
 	test("retains canonical output in versioned session details", async () => {
 		const runtime = new FixtureRuntime();
 		const { handlers, store } = register(runtime);

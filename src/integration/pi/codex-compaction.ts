@@ -18,11 +18,17 @@ import {
 import type { ConfigurationService } from "../../application/configuration.ts";
 import type { ProviderActivationPolicy } from "../../application/provider-activation.ts";
 import {
+	capabilityCacheKey,
 	ResolveEffectiveCapabilities,
 	withSupplementalSessionInstructions,
 } from "../../application/resolve-effective-capabilities.ts";
 import type { CompactionConfig } from "../../domain/config.ts";
-import { officialToolNames, responseItemsFromMessages } from "./codex-provider.ts";
+import { responseItemsFromMessages } from "./codex-provider.ts";
+import {
+	type CodexToolProfileCoordinator,
+	createUnavailableCodexToolProfile,
+} from "./codex-tool-profile.ts";
+import { selectCodexToolSurface } from "./codex-tool-surface.ts";
 import { resolveProviderConnection } from "./provider-connection.ts";
 
 const COMPACTION_SUMMARY = "Context compacted by the OpenAI Codex Responses API.";
@@ -35,6 +41,7 @@ export function registerCodexCompaction(
 	activation: ProviderActivationPolicy,
 	coordinator: CodexCompactionCoordinator = new CodexCompactionCoordinator(),
 	capabilities = new ResolveEffectiveCapabilities(runtime),
+	profile: CodexToolProfileCoordinator = createUnavailableCodexToolProfile(),
 ): void {
 	pi.on("session_start", (_event, ctx) => {
 		const sessionId = ctx.sessionManager.getSessionId();
@@ -88,6 +95,16 @@ export function registerCodexCompaction(
 			throw error;
 		}
 		const config = await configuration.load();
+		const capabilityKey = capabilityCacheKey({
+			modelId: model.id,
+			providerId: model.provider,
+			config,
+			contextWindow: model.contextWindow,
+		});
+		if (!profile.isHealthy(capabilityKey)) {
+			coordinator.end(sessionId, "error");
+			throw new Error("Codex tool profile is unavailable for the selected capability");
+		}
 		const capabilitySnapshot = await capabilities.resolve({
 			modelId: model.id,
 			providerId: model.provider,
@@ -135,7 +152,7 @@ export function registerCodexCompaction(
 				return { cancel: true };
 			}
 			const officialTools = capabilitySnapshot.modelTools;
-			const tools = mergeTools(pi, officialTools);
+			const tools = selectCodexToolSurface(officialTools, pi.getActiveTools(), pi.getAllTools());
 			const previous = store.get(sessionId, model.id);
 			const messages = [
 				...event.preparation.messagesToSummarize,
@@ -327,22 +344,6 @@ function acceptCompaction(
 	const details = parseCodexCompactionDetails(event.compactionEntry.details);
 	if (details === undefined) return;
 	store.set(ctx.sessionManager.getSessionId(), event.compactionEntry.summary, details);
-}
-
-function mergeTools(pi: ExtensionAPI, officialTools: readonly unknown[]): unknown[] {
-	const officialNames = officialToolNames(officialTools);
-	const active = new Set(pi.getActiveTools());
-	const thirdParty = pi
-		.getAllTools()
-		.filter((tool) => active.has(tool.name) && !officialNames.has(tool.name))
-		.map((tool) => ({
-			type: "function",
-			name: tool.name,
-			description: tool.description,
-			parameters: tool.parameters,
-			strict: false,
-		}));
-	return [...officialTools, ...thirdParty];
 }
 
 function reasoningFor(

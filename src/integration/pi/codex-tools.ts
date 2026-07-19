@@ -8,19 +8,23 @@ import type {
 } from "../../application/codex-runtime.ts";
 import type { ConfigurationService } from "../../application/configuration.ts";
 import type { ProviderActivationPolicy } from "../../application/provider-activation.ts";
-import { ResolveEffectiveCapabilities } from "../../application/resolve-effective-capabilities.ts";
+import {
+	capabilityCacheKey,
+	ResolveEffectiveCapabilities,
+} from "../../application/resolve-effective-capabilities.ts";
 import { UpdatePlanUseCase } from "../../application/update-plan.ts";
-import { MANAGED_TOOL_NAMES, type ManagedToolName } from "../../domain/capability.ts";
+import type { ManagedToolName } from "../../domain/capability.ts";
 import type { ApprovalPolicy, CodexConfig } from "../../domain/config.ts";
 import type { PlanUpdate } from "../../domain/plan.ts";
 import { resolveProviderActivation } from "../../domain/provider-activation.ts";
 import { requestCodexApproval } from "../../ui/terminal/approval-prompt.ts";
 import { APPROVAL_BYPASS_WARNING } from "../../ui/terminal/settings-model.ts";
 import { responseItemsFromMessages } from "./codex-provider.ts";
+import { codexSkillsPrompt } from "./codex-system-prompt.ts";
+import { type CodexToolProfileCoordinator, createCodexToolProfile } from "./codex-tool-profile.ts";
 import { OFFICIAL_CORE_TOOL_CONTRACTS, PI_CORE_TOOL_PARAMETERS } from "./generated/core-tools.ts";
 import { assertProviderActive, resolveProviderConnection } from "./provider-connection.ts";
 
-const MANAGED_TOOLS = MANAGED_TOOL_NAMES;
 type ManagedTool = ManagedToolName;
 type NativeManagedTool = Exclude<ManagedTool, "update_plan" | "image_gen.imagegen" | "web.run">;
 
@@ -31,6 +35,7 @@ export function registerCodexTools(
 		Partial<Pick<ConfigurationService, "onChange">>,
 	activation: ProviderActivationPolicy,
 	capabilities = new ResolveEffectiveCapabilities(runtime),
+	profile: CodexToolProfileCoordinator = createCodexToolProfile(pi),
 ): void {
 	let startupBypassWarningShown = false;
 	registerPlanTool(pi, activation);
@@ -41,10 +46,21 @@ export function registerCodexTools(
 	registerNativeTool(pi, runtime, configuration, activation, "view_image", "View image");
 	registerImageGenerationTool(pi, runtime, configuration, activation);
 	registerStandaloneWebTool(pi, runtime, configuration, activation);
+	pi.on("before_agent_start", (event) => {
+		if (profile.readiness.kind !== "healthy") return;
+		const section = codexSkillsPrompt(
+			event.systemPromptOptions.skills,
+			profile.skillLoader,
+			event.systemPrompt,
+		);
+		return section.length === 0 ? undefined : { systemPrompt: `${event.systemPrompt}${section}` };
+	});
 
 	let activationGeneration = 0;
 	// Last session context that owns managed tools/status. Cleared on session_shutdown.
 	let activeContext: ExtensionContext | undefined;
+	let lastHealthyCapabilityKey: string | undefined;
+	let lastHealthyModelIdentity: string | undefined;
 	const providerActive = (
 		model: ExtensionContext["model"],
 		config: Pick<CodexConfig, "activation"> | undefined,
@@ -60,8 +76,35 @@ export function registerCodexTools(
 	): Promise<void> => {
 		const generation = ++activationGeneration;
 		const selected = ctx.model;
+		const activeBeforeLoad = selected !== undefined && providerActive(selected, configOverride);
+		let shouldFailClosed = activeBeforeLoad;
+		const selectedIdentity = modelProfileIdentity(selected);
+		const suppliedKey =
+			activeBeforeLoad && configOverride !== undefined && selected !== undefined
+				? capabilityCacheKey({
+						modelId: selected.id,
+						providerId: selected.provider,
+						config: configOverride,
+						contextWindow: selected.contextWindow,
+					})
+				: undefined;
+		if (!activeBeforeLoad) {
+			profile.restorePi();
+			lastHealthyCapabilityKey = undefined;
+			lastHealthyModelIdentity = undefined;
+			setStatus(ctx, undefined);
+		} else if (
+			profile.readiness.kind !== "healthy" ||
+			lastHealthyCapabilityKey === undefined ||
+			lastHealthyModelIdentity !== selectedIdentity ||
+			(suppliedKey !== undefined && !profile.isHealthy(suppliedKey))
+		) {
+			profile.enterPending(suppliedKey);
+			setStatus(ctx, undefined);
+		}
 		try {
 			const config = configOverride ?? (await configuration.load());
+			if (generation !== activationGeneration) return;
 			if (
 				startupWarning &&
 				!startupBypassWarningShown &&
@@ -71,25 +114,54 @@ export function registerCodexTools(
 				ctx.ui.notify(APPROVAL_BYPASS_WARNING, "warning");
 			}
 			if (selected === undefined || !providerActive(selected, config)) {
-				disableManagedTools(pi);
+				profile.restorePi();
+				lastHealthyCapabilityKey = undefined;
+				lastHealthyModelIdentity = undefined;
 				setStatus(ctx, undefined);
 				return;
 			}
-			// Re-check after the async load so a mid-flight onChange snapshot is authoritative.
-			if (!providerActive(selected, config)) {
-				if (generation !== activationGeneration) return;
-				disableManagedTools(pi);
-				setStatus(ctx, undefined);
-				return;
-			}
-			const snapshot = await capabilities.resolve({
+			shouldFailClosed = true;
+			const capabilityInput = {
 				modelId: selected.id,
 				providerId: selected.provider,
 				config,
 				contextWindow: selected.contextWindow,
+			};
+			const capabilityKey = capabilityCacheKey(capabilityInput);
+			if (profile.isHealthy(capabilityKey)) {
+				if (!profile.revalidateHealthyOwnership((message) => ctx.ui.notify(message, "warning"))) {
+					lastHealthyCapabilityKey = undefined;
+					lastHealthyModelIdentity = undefined;
+					setStatus(ctx, "Codex unavailable");
+					return;
+				}
+			} else {
+				profile.enterPending(capabilityKey);
+				setStatus(ctx, undefined);
+			}
+			const snapshot = await capabilities.resolve({
+				...capabilityInput,
 			});
 			if (generation !== activationGeneration) return;
-			setManagedTools(pi, snapshot.localTools);
+			if (
+				!profile.installHealthy(
+					capabilityKey,
+					snapshot.localTools,
+					snapshot.localTools.includes("exec_command")
+						? "exec_command"
+						: snapshot.localTools.includes("shell_command")
+							? "shell_command"
+							: undefined,
+					(message) => ctx.ui.notify(message, "warning"),
+				)
+			) {
+				lastHealthyCapabilityKey = undefined;
+				lastHealthyModelIdentity = undefined;
+				setStatus(ctx, "Codex unavailable");
+				return;
+			}
+			lastHealthyCapabilityKey = capabilityKey;
+			lastHealthyModelIdentity = selectedIdentity;
 			const webSurface = snapshot.webSurface;
 			setStatus(
 				ctx,
@@ -101,8 +173,16 @@ export function registerCodexTools(
 			);
 		} catch {
 			if (generation === activationGeneration) {
-				disableManagedTools(pi);
-				setStatus(ctx, "Codex unavailable");
+				if (shouldFailClosed) {
+					profile.installUnavailable();
+					lastHealthyCapabilityKey = undefined;
+					lastHealthyModelIdentity = undefined;
+				} else {
+					profile.restorePi();
+					lastHealthyCapabilityKey = undefined;
+					lastHealthyModelIdentity = undefined;
+				}
+				setStatus(ctx, shouldFailClosed ? "Codex unavailable" : undefined);
 			}
 		}
 	};
@@ -123,16 +203,25 @@ export function registerCodexTools(
 
 	pi.on("session_start", (_event, ctx) => remember(ctx, true));
 	pi.on("model_select", (_event, ctx) => remember(ctx));
-	pi.on("session_shutdown", () => {
+	pi.on("session_shutdown", (_event, ctx) => {
 		// Drop the session context, invalidate in-flight activate work, and unsubscribe so a
 		// late save/reset/restore cannot mutate tools/status after shutdown. Matches the
 		// extension root disposing activation and shutting down the runtime on this event.
 		activationGeneration += 1;
 		capabilities.invalidate();
+		profile.restorePi();
+		setStatus(ctx, undefined);
+		lastHealthyCapabilityKey = undefined;
+		lastHealthyModelIdentity = undefined;
 		activeContext = undefined;
 		startupBypassWarningShown = false;
 		unsubscribeConfig();
 	});
+}
+
+function modelProfileIdentity(model: ExtensionContext["model"]): string | undefined {
+	if (model === undefined) return undefined;
+	return JSON.stringify([model.id, model.provider, model.api, model.contextWindow ?? null]);
 }
 
 function registerStandaloneWebTool(
@@ -147,6 +236,7 @@ function registerStandaloneWebTool(
 		name: `${namespace.name}.${contract.name}`,
 		label: "Web search",
 		description: contract.description,
+		promptSnippet: "Search the web",
 		parameters: contract.parameters as TSchema,
 		renderShell: "self",
 		renderCall: (args, theme) =>
@@ -206,6 +296,7 @@ function registerImageGenerationTool(
 		name: `${namespace.name}.${contract.name}`,
 		label: "Generate image",
 		description: contract.description,
+		promptSnippet: "Generate an image",
 		parameters: contract.parameters as TSchema,
 		renderShell: "self",
 		renderCall: (args, theme) =>
@@ -246,6 +337,7 @@ function registerPlanTool(pi: ExtensionAPI, activation: ProviderActivationPolicy
 		name: contract.name,
 		label: "Update plan",
 		description: contract.description,
+		promptSnippet: "Track multi-step work with an explicit plan",
 		parameters: contract.parameters as TSchema,
 		renderShell: "self",
 		renderCall: (_args, theme) => new Text(theme.fg("toolTitle", theme.bold("update_plan")), 0, 0),
@@ -291,6 +383,16 @@ function registerNativeTool(
 		name: contract.name,
 		label,
 		description: contract.description,
+		promptSnippet:
+			name === "exec_command"
+				? "Run a command that may continue in a session"
+				: name === "write_stdin"
+					? "Send input to a running command session"
+					: name === "shell_command"
+						? "Run a bounded shell command"
+						: name === "apply_patch"
+							? "Apply a patch to files"
+							: "Inspect an image file",
 		parameters: parameters as TSchema,
 		renderShell: "self",
 		renderCall: (args, theme) => {
@@ -416,19 +518,9 @@ function detectPlanMode(ctx: ExtensionContext): "default" | "plan" {
 	return prompt.includes("[PLAN MODE ACTIVE]") ? "plan" : "default";
 }
 
-function setManagedTools(pi: ExtensionAPI, activeManaged: readonly ManagedTool[]): void {
-	const managed = new Set<string>(MANAGED_TOOLS);
-	const active = pi.getActiveTools().filter((name) => !managed.has(name));
-	pi.setActiveTools([...active, ...activeManaged]);
-}
-
 function setStatus(ctx: ExtensionContext, value: string | undefined): void {
 	const ui = ctx.ui as unknown as { setStatus?: (key: string, text: string | undefined) => void };
 	ui.setStatus?.("codex-adaptor", value);
-}
-
-function disableManagedTools(pi: ExtensionAPI): void {
-	setManagedTools(pi, []);
 }
 
 function workdirFrom(value: unknown, fallback: string): string {

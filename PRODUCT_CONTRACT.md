@@ -118,8 +118,11 @@ hidden unified-exec fallback dispatch, and supports either prompt approval or ex
 preauthorization for command, patch, filesystem, image, and network work. Separately, canonical workspace roots constrain command working
 directories, patch targets, viewed images, and referenced image-generation inputs. Unified Exec
 pipe/PTY sessions support bounded polling, prompt-approved or preauthorized non-empty stdin writes, resize,
-termination, cancellation, and shutdown cleanup. Pi activation is reversible, preserves third-party
-tools, replays opaque compaction output, and renders compact tool state inline.
+termination, cancellation, and shutdown cleanup. Pi activation is reversible, preserves additive
+external tools, and suppresses Pi core tools while the Codex provider is active. A pending or unavailable
+activated Codex profile fails closed without restoring Pi core tools; deactivation restores only the
+Pi core selection captured before activation. It replays opaque compaction output and renders compact
+tool state inline.
 `/codex` exposes settings, manual compaction, and a confirmed, redacted diagnostics export. Remaining
 release gates, including Trusted Publishing and a published prerelease, are not complete. The planned
 first prerelease version is `0.1.0-rc.0`.

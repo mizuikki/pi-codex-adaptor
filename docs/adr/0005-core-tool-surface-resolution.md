@@ -19,6 +19,12 @@ Expose `apply_patch`, `view_image`, and `image_gen.imagegen` only when their off
 resolve. Native execution uses prompt approval or explicit Pi-owned per-request preauthorization;
 workspace policy and native validation remain mandatory.
 
+The resolved official surface is authoritative within the activated Codex core tool profile. Pi's
+`read`, `bash`, `edit`, `write`, `grep`, `find`, and `ls` routes are suppressed for that profile, while
+orthogonal external tools remain additive. The Pi integration controller restores the previously
+active Pi core subset when the provider is deactivated; pending or unavailable activation does not
+fall back to those routes.
+
 ## Consequences
 
 - Tool specifications are generated from pinned official builders rather than handwritten in

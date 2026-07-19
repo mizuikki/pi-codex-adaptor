@@ -16,7 +16,11 @@ import type { ConfigurationService } from "../../src/application/configuration.t
 import { ProviderActivationPolicy } from "../../src/application/provider-activation.ts";
 import { SUPPLEMENTAL_SESSION_INSTRUCTIONS } from "../../src/application/resolve-effective-capabilities.ts";
 import { type CodexConfig, createDefaultConfig } from "../../src/domain/config.ts";
-import { createCodexStreamSimple } from "../../src/integration/pi/codex-provider.ts";
+import { createCodexStreamSimple as createCodexStreamSimpleAdapter } from "../../src/integration/pi/codex-provider.ts";
+import type {
+	CodexToolProfileCoordinator,
+	CodexToolProfileReadiness,
+} from "../../src/integration/pi/codex-tool-profile.ts";
 
 class FixtureRuntime implements CodexRuntime {
 	request: CreateResponseOptions | undefined;
@@ -273,10 +277,47 @@ function fixtureToken(): string {
 	return `header.${payload}.signature`;
 }
 
+function unhealthyProfile(readiness: CodexToolProfileReadiness): CodexToolProfileCoordinator {
+	return {
+		readiness,
+		skillLoader: undefined,
+		enterPending: () => {},
+		installHealthy: () => false,
+		installUnavailable: () => {},
+		revalidateHealthyOwnership: () => false,
+		isHealthy: () => false,
+		restorePi: () => {},
+		dispose: () => {},
+	};
+}
+
+function healthyProfile(): CodexToolProfileCoordinator {
+	return {
+		...unhealthyProfile({ kind: "healthy", capabilityKey: "fixture-key" }),
+		isHealthy: () => true,
+	};
+}
+
+function createFixtureStream(
+	runtime: FixtureRuntime,
+	configuration: ConfigurationService,
+	activation: ProviderActivationPolicy,
+	compactions = new CodexCompactionStore(),
+): ReturnType<typeof createCodexStreamSimpleAdapter> {
+	return createCodexStreamSimpleAdapter(
+		runtime,
+		configuration,
+		activation,
+		compactions,
+		undefined,
+		healthyProfile(),
+	);
+}
+
 describe("Pi Codex provider adapter", () => {
 	test("maps Pi context through the native response stream", async () => {
 		const runtime = new FixtureRuntime();
-		const streamSimple = createCodexStreamSimple(
+		const streamSimple = createFixtureStream(
 			runtime,
 			configuration(),
 			new ProviderActivationPolicy(configuration()),
@@ -392,10 +433,92 @@ describe("Pi Codex provider adapter", () => {
 		});
 	});
 
+	test("excludes every Pi core slot and inactive managed definition from the request", async () => {
+		const runtime = new FixtureRuntime();
+		const tool = (name: string) => ({
+			name,
+			description: `fixture ${name}`,
+			parameters: { type: "object", properties: {} },
+		});
+		const isolatedContext = {
+			...context,
+			tools: [
+				...[
+					"read",
+					"bash",
+					"edit",
+					"write",
+					"grep",
+					"find",
+					"ls",
+					"third_party",
+					"update_plan",
+					"view_image",
+				].map(tool),
+			],
+		} as Context;
+		const streamSimple = createFixtureStream(
+			runtime,
+			configuration(),
+			new ProviderActivationPolicy(configuration()),
+			new CodexCompactionStore(),
+		);
+
+		for await (const _event of streamSimple(model, isolatedContext, { apiKey: fixtureToken() })) {
+			// Drain the response so the request is constructed and dispatched.
+		}
+
+		const request = runtime.request?.request as Record<string, unknown>;
+		expect(request.tools).toEqual([
+			{
+				type: "function",
+				name: "update_plan",
+				description: "official fixture tool",
+				parameters: { type: "object", properties: {} },
+				strict: false,
+			},
+			{ type: "web_search", indexed_web_access: true },
+			{
+				type: "function",
+				name: "third_party",
+				description: "fixture third_party",
+				parameters: { type: "object", properties: {} },
+				strict: false,
+			},
+		]);
+	});
+
+	test("rejects every non-matching profile before native response dispatch", async () => {
+		const profiles: CodexToolProfileReadiness[] = [
+			{ kind: "pending", capabilityKey: "fixture-pending" },
+			{ kind: "unavailable", capabilityKey: "fixture-unavailable" },
+			{ kind: "inactive" },
+			{ kind: "healthy", capabilityKey: "fixture-other-key" },
+		];
+
+		for (const readiness of profiles) {
+			const runtime = new FixtureRuntime();
+			const streamSimple = createCodexStreamSimpleAdapter(
+				runtime,
+				configuration(),
+				new ProviderActivationPolicy(configuration()),
+				new CodexCompactionStore(),
+				undefined,
+				unhealthyProfile(readiness),
+			);
+			const events = [];
+			for await (const event of streamSimple(model, context, { apiKey: fixtureToken() })) {
+				events.push(event);
+			}
+			expect(events.at(-1)).toMatchObject({ type: "error", reason: "error" });
+			expect(runtime.calls).toBe(0);
+		}
+	});
+
 	test("adds supplemental session guidance exactly once", async () => {
 		const runtime = new FixtureRuntime();
 		runtime.shellSurface = "shell-command";
-		const streamSimple = createCodexStreamSimple(
+		const streamSimple = createFixtureStream(
 			runtime,
 			configuration(),
 			new ProviderActivationPolicy(configuration()),
@@ -424,7 +547,7 @@ describe("Pi Codex provider adapter", () => {
 
 	test("treats non-JWT provider credentials as API keys", async () => {
 		const runtime = new FixtureRuntime();
-		const streamSimple = createCodexStreamSimple(
+		const streamSimple = createFixtureStream(
 			runtime,
 			configuration(),
 			new ProviderActivationPolicy(configuration()),
@@ -454,7 +577,7 @@ describe("Pi Codex provider adapter", () => {
 		};
 		const activation = new ProviderActivationPolicy(configuration(config));
 		await activation.refresh();
-		const streamSimple = createCodexStreamSimple(
+		const streamSimple = createFixtureStream(
 			runtime,
 			configuration(config),
 			activation,
@@ -480,7 +603,7 @@ describe("Pi Codex provider adapter", () => {
 
 	test("rejects missing provider credentials without reflecting values", async () => {
 		const runtime = new FixtureRuntime();
-		const streamSimple = createCodexStreamSimple(
+		const streamSimple = createFixtureStream(
 			runtime,
 			configuration(),
 			new ProviderActivationPolicy(configuration()),
@@ -511,7 +634,7 @@ describe("Pi Codex provider adapter", () => {
 				{ type: "message", role: "assistant", content: [] },
 			]),
 		);
-		const streamSimple = createCodexStreamSimple(
+		const streamSimple = createFixtureStream(
 			runtime,
 			configuration(),
 			new ProviderActivationPolicy(configuration()),

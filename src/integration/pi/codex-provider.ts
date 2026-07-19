@@ -14,12 +14,20 @@ import { CodexCompactionStore } from "../../application/compaction.ts";
 import type { ConfigurationService } from "../../application/configuration.ts";
 import type { ProviderActivationPolicy } from "../../application/provider-activation.ts";
 import {
+	capabilityCacheKey,
 	type EffectiveCapabilitySnapshot,
 	ResolveEffectiveCapabilities,
 	withSupplementalSessionInstructions,
 } from "../../application/resolve-effective-capabilities.ts";
 import { CapabilityError } from "../../domain/capability.ts";
+import {
+	type CodexToolProfileCoordinator,
+	createUnavailableCodexToolProfile,
+} from "./codex-tool-profile.ts";
+import { selectCodexToolSurface } from "./codex-tool-surface.ts";
 import { createProviderConnection } from "./provider-connection.ts";
+
+export { officialToolNames } from "./codex-tool-surface.ts";
 
 export function createCodexStreamSimple(
 	runtime: CodexRuntime,
@@ -27,6 +35,7 @@ export function createCodexStreamSimple(
 	activation: ProviderActivationPolicy,
 	compactions = new CodexCompactionStore(),
 	capabilities = new ResolveEffectiveCapabilities(runtime),
+	profile: CodexToolProfileCoordinator = createUnavailableCodexToolProfile(),
 ): (
 	model: Model<string>,
 	context: Context,
@@ -41,6 +50,7 @@ export function createCodexStreamSimple(
 			compactions,
 			activation,
 			capabilities,
+			profile,
 			model,
 			context,
 			options,
@@ -56,6 +66,7 @@ async function runResponse(
 	compactions: CodexCompactionStore,
 	activation: ProviderActivationPolicy,
 	capabilities: ResolveEffectiveCapabilities,
+	profile: CodexToolProfileCoordinator,
 	model: Model<string>,
 	context: Context,
 	options: SimpleStreamOptions | undefined,
@@ -71,6 +82,18 @@ async function runResponse(
 		}
 		const connection = createProviderConnection(model, options);
 		const config = await configuration.load();
+		const capabilityKey = capabilityCacheKey({
+			modelId: model.id,
+			providerId: model.provider,
+			config,
+			contextWindow: model.contextWindow,
+		});
+		if (!profile.isHealthy(capabilityKey)) {
+			throw new CapabilityError(
+				"effective_capability_invalid",
+				"Codex tool profile is unavailable for the selected capability",
+			);
+		}
 		const snapshot = await capabilities.resolve({
 			modelId: model.id,
 			providerId: model.provider,
@@ -393,17 +416,12 @@ function buildRequest(
 	compactions: CodexCompactionStore,
 	capabilities: EffectiveCapabilitySnapshot,
 ): unknown {
-	const officialNames = officialToolNames(officialTools);
-	const piTools = context.tools
-		?.filter((tool) => !officialNames.has(tool.name))
-		.map((tool) => ({
-			type: "function",
-			name: tool.name,
-			description: tool.description,
-			parameters: tool.parameters,
-			strict: false,
-		}));
-	const tools = [...officialTools, ...(piTools ?? [])];
+	const activeDefinitions = context.tools ?? [];
+	const tools = selectCodexToolSurface(
+		officialTools,
+		activeDefinitions.map((tool) => tool.name),
+		activeDefinitions,
+	);
 	const effort =
 		options?.reasoning === undefined
 			? undefined
@@ -535,21 +553,6 @@ function toResponseItems(message: unknown): unknown[] {
 		}
 	}
 	return items;
-}
-
-export function officialToolNames(tools: readonly unknown[]): Set<string> {
-	const names = new Set<string>();
-	for (const value of tools) {
-		const tool = record(value);
-		if (typeof tool?.name !== "string") continue;
-		names.add(tool.name);
-		if (tool.type !== "namespace" || !Array.isArray(tool.tools)) continue;
-		for (const nestedValue of tool.tools) {
-			const nested = record(nestedValue);
-			if (typeof nested?.name === "string") names.add(`${tool.name}.${nested.name}`);
-		}
-	}
-	return names;
 }
 
 function userTextItem(text: string): unknown {

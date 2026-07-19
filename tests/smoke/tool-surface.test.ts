@@ -1,11 +1,13 @@
 import { describe, expect, test } from "bun:test";
 
 import piCodexAdaptor from "../../src/extension.ts";
+import { PI_CORE_AGENT_TOOL_NAMES } from "../../src/integration/pi/codex-tool-profile.ts";
 
 describe("extension tool smoke", () => {
 	test("registers core tools and preserves third-party active tools on a minimal Pi API", async () => {
 		const tools: string[] = [];
-		let active = ["third_party"];
+		let active = [...PI_CORE_AGENT_TOOL_NAMES, "third_party"];
+		let allToolsCalls = 0;
 		const events: string[] = [];
 		await piCodexAdaptor({
 			registerCommand: () => {},
@@ -17,7 +19,14 @@ describe("extension tool smoke", () => {
 			setActiveTools: (next: string[]) => {
 				active = next;
 			},
-			getAllTools: () => tools.map((name) => ({ name })),
+			getAllTools: () => {
+				allToolsCalls += 1;
+				return [
+					...PI_CORE_AGENT_TOOL_NAMES.map((name) => ({ name })),
+					{ name: "third_party" },
+					...tools.map((name) => ({ name })),
+				];
+			},
 			getThinkingLevel: () => "off",
 			on: (name: string) => {
 				events.push(name);
@@ -37,6 +46,7 @@ describe("extension tool smoke", () => {
 		expect(events).toEqual(
 			expect.arrayContaining(["session_shutdown", "session_start", "model_select"]),
 		);
-		expect(active).toEqual(["third_party"]);
+		expect(active).toEqual([...PI_CORE_AGENT_TOOL_NAMES, "third_party"]);
+		expect(allToolsCalls).toBe(0);
 	});
 });

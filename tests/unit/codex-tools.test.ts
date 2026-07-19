@@ -10,6 +10,8 @@ import type {
 import type { ConfigurationService } from "../../src/application/configuration.ts";
 import { ProviderActivationPolicy } from "../../src/application/provider-activation.ts";
 import { type CodexConfig, createDefaultConfig } from "../../src/domain/config.ts";
+import type { CodexToolProfileCoordinator } from "../../src/integration/pi/codex-tool-profile.ts";
+import { PI_CORE_AGENT_TOOL_NAMES } from "../../src/integration/pi/codex-tool-profile.ts";
 import {
 	nativeAuthorizationFor,
 	registerCodexTools,
@@ -19,6 +21,7 @@ type EventHandler = (event: unknown, ctx: ExtensionContext) => unknown | Promise
 
 class FixtureRuntime implements CodexRuntime {
 	shellSurface: "unified-exec" | "shell-command" | "disabled" = "unified-exec";
+	resolveModelError: Error | undefined;
 	execution: ExecuteToolOptions | undefined;
 	approvalDecision: string | undefined;
 	onExecute: (() => void | Promise<void>) | undefined;
@@ -51,6 +54,7 @@ class FixtureRuntime implements CodexRuntime {
 	}
 
 	async resolveModel(modelId: string): Promise<unknown> {
+		if (this.resolveModelError !== undefined) throw this.resolveModelError;
 		return {
 			model: {
 				slug: modelId,
@@ -276,6 +280,10 @@ describe("Pi core tool activation", () => {
 					handlers.set(event, [...(handlers.get(event) ?? []), handler]);
 				},
 				getActiveTools: () => active,
+				getAllTools: () => [
+					{ name: "third_party" },
+					...[...tools.keys()].map((name) => ({ name })),
+				],
 				setActiveTools: (next: string[]) => {
 					active = next;
 				},
@@ -295,6 +303,7 @@ describe("Pi core tool activation", () => {
 			"image_gen.imagegen",
 			"web.run",
 		]);
+		expect([...tools.values()].every((tool) => typeof tool.promptSnippet === "string")).toBe(true);
 		const selected = context().ctx;
 		await handlers.get("session_start")?.[0]?.({ type: "session_start" }, selected);
 		expect(active).toEqual([
@@ -310,6 +319,286 @@ describe("Pi core tool activation", () => {
 		const other = context("other-provider").ctx;
 		await handlers.get("model_select")?.[0]?.({ type: "model_select" }, other);
 		expect(active).toEqual(["third_party"]);
+	});
+
+	test("isolates before delayed configuration and stays isolated on active resolution failure", async () => {
+		const runtime = new FixtureRuntime();
+		runtime.resolveModelError = new Error("fixture capability failure");
+		const base = configuration();
+		let release: ((config: CodexConfig) => void) | undefined;
+		const delayedConfig = new Promise<CodexConfig>((resolve) => {
+			release = resolve;
+		});
+		const service = {
+			...base,
+			load: async () => delayedConfig,
+		} as TestConfigurationService;
+		const policy = new ProviderActivationPolicy(service);
+		const handlers = new Map<string, EventHandler[]>();
+		const tools = new Map<string, ToolDefinition>();
+		let active = [...PI_CORE_AGENT_TOOL_NAMES, "third_party"];
+		registerCodexTools(
+			{
+				registerTool: (tool: ToolDefinition) => tools.set(tool.name, tool),
+				on: (event: string, handler: EventHandler) => {
+					handlers.set(event, [...(handlers.get(event) ?? []), handler]);
+				},
+				getActiveTools: () => active,
+				getAllTools: () => [
+					{ name: "third_party" },
+					...PI_CORE_AGENT_TOOL_NAMES.map((name) => ({ name })),
+					...[...tools.keys()].map((name) => ({ name })),
+				],
+				setActiveTools: (next: string[]) => {
+					active = next;
+				},
+			} as never,
+			runtime,
+			service,
+			policy,
+		);
+
+		const { ctx } = context();
+		const activation = handlers.get("session_start")?.[0]?.({ type: "session_start" }, ctx);
+		await Promise.resolve();
+		expect(active).toEqual(["third_party"]);
+		release?.(base.config);
+		await activation;
+		expect(active).toEqual(["third_party"]);
+	});
+
+	test("appends healthy Codex skill guidance after Pi's assembled prompt", async () => {
+		const runtime = new FixtureRuntime();
+		const handlers = new Map<string, EventHandler[]>();
+		const profile: CodexToolProfileCoordinator = {
+			readiness: { kind: "healthy", capabilityKey: "fixture-key" },
+			skillLoader: "exec_command",
+			enterPending: () => {},
+			installHealthy: () => true,
+			installUnavailable: () => {},
+			revalidateHealthyOwnership: () => true,
+			isHealthy: () => true,
+			restorePi: () => {},
+			dispose: () => {},
+		};
+		registerCodexTools(
+			{
+				registerTool: () => {},
+				on: (event: string, handler: EventHandler) => {
+					handlers.set(event, [...(handlers.get(event) ?? []), handler]);
+				},
+				getActiveTools: () => [],
+				getAllTools: () => [],
+				setActiveTools: () => {},
+			} as never,
+			runtime,
+			configuration(),
+			new ProviderActivationPolicy(configuration()),
+			undefined,
+			profile,
+		);
+		const result = await handlers.get("before_agent_start")?.[0]?.(
+			{
+				systemPrompt:
+					"custom prompt\nappend prompt\n<project_context>fixture context</project_context>\n/skill:review-skill",
+				systemPromptOptions: {
+					skills: [
+						{
+							name: "review-skill",
+							description: "Review fixture files",
+							filePath: "<synthetic>/skills/review/SKILL.md",
+							disableModelInvocation: false,
+						},
+					],
+				},
+			} as never,
+			context().ctx,
+		);
+		const prompt = (result as { systemPrompt?: string } | undefined)?.systemPrompt;
+		expect(prompt?.startsWith("custom prompt\nappend prompt")).toBe(true);
+		expect(prompt).toContain("<project_context>fixture context</project_context>");
+		expect(prompt).toContain("/skill:review-skill");
+		expect(prompt).toContain("Use exec_command to load a matching skill file");
+		expect(prompt).toContain("<location>&lt;synthetic&gt;/skills/review/SKILL.md</location>");
+	});
+
+	test("rejects a stale active capability result after an inactive transition", async () => {
+		const runtime = new FixtureRuntime();
+		const handlers = new Map<string, EventHandler[]>();
+		const tools = new Map<string, ToolDefinition>();
+		let active = [...PI_CORE_AGENT_TOOL_NAMES, "third_party"];
+		let signalStarted: (() => void) | undefined;
+		let releaseResolution: ((value: unknown) => void) | undefined;
+		const resolutionStarted = new Promise<void>((resolve) => {
+			signalStarted = resolve;
+		});
+		const capabilities = {
+			resolve: async () => {
+				signalStarted?.();
+				return new Promise((resolve) => {
+					releaseResolution = resolve;
+				});
+			},
+			invalidate: () => {},
+		};
+		const service = configuration();
+		registerCodexTools(
+			{
+				registerTool: (tool: ToolDefinition) => tools.set(tool.name, tool),
+				on: (event: string, handler: EventHandler) => {
+					handlers.set(event, [...(handlers.get(event) ?? []), handler]);
+				},
+				getActiveTools: () => active,
+				getAllTools: () => [
+					{ name: "third_party" },
+					...PI_CORE_AGENT_TOOL_NAMES.map((name) => ({ name })),
+					...[...tools.keys()].map((name) => ({ name })),
+				],
+				setActiveTools: (next: string[]) => {
+					active = next;
+				},
+			} as never,
+			runtime,
+			service,
+			new ProviderActivationPolicy(service),
+			capabilities as never,
+		);
+
+		const activeContext = context().ctx;
+		const firstActivation = handlers.get("session_start")?.[0]?.(
+			{ type: "session_start" },
+			activeContext,
+		);
+		await resolutionStarted;
+		const inactiveContext = context("other-provider").ctx;
+		await handlers.get("model_select")?.[0]?.({ type: "model_select" }, inactiveContext);
+		expect(active).toEqual([...PI_CORE_AGENT_TOOL_NAMES, "third_party"]);
+
+		releaseResolution?.({ localTools: [] });
+		await firstActivation;
+		expect(active).toEqual([...PI_CORE_AGENT_TOOL_NAMES, "third_party"]);
+	});
+
+	test("restores an inactive profile before configuration load and rejects its stale completion", async () => {
+		const runtime = new FixtureRuntime();
+		const handlers = new Map<string, EventHandler[]>();
+		const tools = new Map<string, ToolDefinition>();
+		let active = [...PI_CORE_AGENT_TOOL_NAMES, "third_party"];
+		const base = configuration();
+		let load = (): Promise<CodexConfig> => Promise.resolve(base.config);
+		const service = {
+			...base,
+			load: () => load(),
+		} as TestConfigurationService;
+		registerCodexTools(
+			{
+				registerTool: (tool: ToolDefinition) => tools.set(tool.name, tool),
+				on: (event: string, handler: EventHandler) => {
+					handlers.set(event, [...(handlers.get(event) ?? []), handler]);
+				},
+				getActiveTools: () => active,
+				getAllTools: () => [
+					{ name: "third_party" },
+					...PI_CORE_AGENT_TOOL_NAMES.map((name) => ({ name })),
+					...[...tools.keys()].map((name) => ({ name })),
+				],
+				setActiveTools: (next: string[]) => {
+					active = next;
+				},
+			} as never,
+			runtime,
+			service,
+			new ProviderActivationPolicy(service),
+		);
+
+		const activeContext = context().ctx;
+		await handlers.get("session_start")?.[0]?.({ type: "session_start" }, activeContext);
+		expect(active).toContain("exec_command");
+
+		let releaseInactive: ((config: CodexConfig) => void) | undefined;
+		load = () =>
+			new Promise<CodexConfig>((resolve) => {
+				releaseInactive = resolve;
+			});
+		const inactiveContext = context("other-provider").ctx;
+		const inactiveTransition = handlers.get("model_select")?.[0]?.(
+			{ type: "model_select" },
+			inactiveContext,
+		);
+		expect(active).toEqual([...PI_CORE_AGENT_TOOL_NAMES, "third_party"]);
+
+		load = () => Promise.resolve(base.config);
+		await handlers.get("model_select")?.[0]?.({ type: "model_select" }, activeContext);
+		expect(active).toContain("exec_command");
+		releaseInactive?.(base.config);
+		await inactiveTransition;
+		expect(active).toContain("exec_command");
+		expect(active).not.toContain("read");
+	});
+
+	test("enters pending and clears status before loading a same-id model from another provider", async () => {
+		const runtime = new FixtureRuntime();
+		const handlers = new Map<string, EventHandler[]>();
+		const tools = new Map<string, ToolDefinition>();
+		let active = [...PI_CORE_AGENT_TOOL_NAMES, "third_party"];
+		const status = new Map<string, string | undefined>();
+		const config = {
+			...createDefaultConfig(),
+			activation: { providers: ["openai-codex", "custom-codex"] },
+		};
+		const base = configuration(config);
+		let load = (): Promise<CodexConfig> => Promise.resolve(base.config);
+		const service = {
+			...base,
+			load: () => load(),
+		} as TestConfigurationService;
+		const policy = new ProviderActivationPolicy(service);
+		await policy.refresh();
+		registerCodexTools(
+			{
+				registerTool: (tool: ToolDefinition) => tools.set(tool.name, tool),
+				on: (event: string, handler: EventHandler) => {
+					handlers.set(event, [...(handlers.get(event) ?? []), handler]);
+				},
+				getActiveTools: () => active,
+				getAllTools: () => [
+					{ name: "third_party" },
+					...PI_CORE_AGENT_TOOL_NAMES.map((name) => ({ name })),
+					...[...tools.keys()].map((name) => ({ name })),
+				],
+				setActiveTools: (next: string[]) => {
+					active = next;
+				},
+			} as never,
+			runtime,
+			service,
+			policy,
+		);
+
+		const first = context().ctx;
+		(first.ui as { setStatus?: (key: string, value: string | undefined) => void }).setStatus = (
+			key,
+			value,
+		) => status.set(key, value);
+		await handlers.get("session_start")?.[0]?.({ type: "session_start" }, first);
+		expect(status.get("codex-adaptor")).toContain("Codex 0.144.3");
+
+		let release: ((config: CodexConfig) => void) | undefined;
+		load = () =>
+			new Promise<CodexConfig>((resolve) => {
+				release = resolve;
+			});
+		const second = context("custom-codex").ctx;
+		(second.ui as { setStatus?: (key: string, value: string | undefined) => void }).setStatus = (
+			key,
+			value,
+		) => status.set(key, value);
+		const transition = handlers.get("model_select")?.[0]?.({ type: "model_select" }, second);
+		expect(active).toEqual(["third_party"]);
+		expect(status.get("codex-adaptor")).toBeUndefined();
+		release?.(base.config);
+		await transition;
+		expect(active).toContain("exec_command");
 	});
 
 	test("publishes plan state and gates native execution through Pi approval", async () => {
@@ -501,6 +790,10 @@ describe("Pi core tool activation", () => {
 					handlers.set(event, [...(handlers.get(event) ?? []), handler]);
 				},
 				getActiveTools: () => active,
+				getAllTools: () => [
+					{ name: "third_party" },
+					...[...tools.keys()].map((name) => ({ name })),
+				],
 				setActiveTools: (next: string[]) => {
 					active = next;
 				},
@@ -645,6 +938,10 @@ describe("Pi core tool activation", () => {
 					handlers.set(event, [...(handlers.get(event) ?? []), handler]);
 				},
 				getActiveTools: () => active,
+				getAllTools: () => [
+					{ name: "third_party" },
+					...[...tools.keys()].map((name) => ({ name })),
+				],
 				setActiveTools: (next: string[]) => {
 					active = next;
 				},
@@ -705,6 +1002,10 @@ describe("Pi core tool activation", () => {
 					handlers.set(event, [...(handlers.get(event) ?? []), handler]);
 				},
 				getActiveTools: () => active,
+				getAllTools: () => [
+					{ name: "third_party" },
+					...[...tools.keys()].map((name) => ({ name })),
+				],
 				setActiveTools: (next: string[]) => {
 					active = next;
 				},
@@ -742,6 +1043,10 @@ describe("Pi core tool activation", () => {
 					handlers.set(event, [...(handlers.get(event) ?? []), handler]);
 				},
 				getActiveTools: () => active,
+				getAllTools: () => [
+					{ name: "third_party" },
+					...[...tools.keys()].map((name) => ({ name })),
+				],
 				setActiveTools: (next: string[]) => {
 					active = next;
 				},
