@@ -97,7 +97,7 @@ export class ConfigurationService {
 	#notify(config: CodexConfig): void {
 		for (const listener of this.#listeners) {
 			try {
-				listener(config);
+				void Promise.resolve(listener(config)).catch(() => undefined);
 			} catch {
 				// A policy listener must not turn a successful configuration save into a failure.
 			}

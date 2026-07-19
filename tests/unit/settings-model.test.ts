@@ -60,6 +60,25 @@ describe("settings view model", () => {
 		expect(view.state).toBe("dirty");
 	});
 
+	test("reports compact now as disabled when compaction is off", () => {
+		const config = createDefaultConfig();
+		config.codex.compaction = { mode: "off" };
+		const view = new SettingsModel(config, {
+			baseline: "0.144.3",
+			provider: "openai-codex",
+			model: "fixture-model",
+			bridge: "pending",
+		});
+
+		view.setCategory("Codex");
+		const compactNow = view.rows().find((row) => row.id === "compactNow");
+		expect(compactNow).toMatchObject({
+			value: "disabled",
+			enabled: false,
+			disabledReason: "Compaction is disabled.",
+		});
+	});
+
 	test.each([120, 80, 40])("renders bounded monochrome lines at width %d", (width) => {
 		const view = new SettingsModel(createDefaultConfig(), {
 			baseline: "0.144.3",

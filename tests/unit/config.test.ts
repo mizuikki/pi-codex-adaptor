@@ -116,6 +116,54 @@ describe("versioned product configuration", () => {
 		}
 	});
 
+	test("matches transport capability validation when WebSocket support is unknown", () => {
+		const config = createDefaultConfig();
+		const draft = {
+			...config,
+			codex: {
+				...config.codex,
+				webSearch: { mode: "disabled" as const },
+				compaction: { mode: "off" as const },
+			},
+		};
+
+		expect(() => validateConfigForSave(draft, { bridgeCapabilities: [] })).toThrow(
+			expect.objectContaining({
+				issues: [
+					expect.objectContaining({
+						path: "codex.transport.mode",
+						code: "unsupported_capability",
+					}),
+				],
+			}),
+		);
+	});
+
+	test("matches provider compaction validation when advertised paths are unavailable", () => {
+		const config = createDefaultConfig();
+		const draft = {
+			...config,
+			codex: { ...config.codex, webSearch: { mode: "disabled" as const } },
+		};
+
+		expect(() =>
+			validateConfigForSave(draft, {
+				bridgeCapabilities: ["responses_sse", "compact_endpoint"],
+				remoteCompactionV2: false,
+				compactEndpoint: false,
+			}),
+		).toThrow(
+			expect.objectContaining({
+				issues: [
+					expect.objectContaining({
+						path: "codex.compaction.mode",
+						code: "unsupported_capability",
+					}),
+				],
+			}),
+		);
+	});
+
 	test("exposes explicit unsupported and disabled reasons without inventing availability", () => {
 		const config = createDefaultConfig();
 		config.tools.backgroundSessions = true;

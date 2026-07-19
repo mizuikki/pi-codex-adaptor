@@ -133,4 +133,15 @@ describe("file configuration repository", () => {
 		).rejects.toMatchObject({ code: "invalid_configuration" });
 		expect(JSON.parse(await readFile(fixture.configFile, "utf8"))).toEqual(original);
 	});
+
+	test("contains rejected asynchronous change listeners", async () => {
+		const fixture = await repository();
+		const service = new ConfigurationService(fixture.repository);
+		service.onChange(async () => {
+			throw new Error("fixture listener failure");
+		});
+
+		await expect(service.resetToDefaults()).resolves.toEqual(createDefaultConfig());
+		await new Promise<void>((resolve) => setTimeout(resolve, 0));
+	});
 });

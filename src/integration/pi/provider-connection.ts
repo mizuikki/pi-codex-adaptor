@@ -1,10 +1,12 @@
 import type { Model, SimpleStreamOptions } from "@earendil-works/pi-ai";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import {
 	type CodexProviderAuthentication,
 	type CodexProviderConnection,
 	extractAccountId,
 } from "../../application/codex-runtime.ts";
+import type { ProviderActivationPolicy } from "../../application/provider-activation.ts";
 
 const ACCOUNT_ID_HEADER = "chatgpt-account-id";
 const AUTHORIZATION_HEADER = "authorization";
@@ -74,6 +76,39 @@ export function createProviderConnection(
 			1,
 			MAX_TIMEOUT_MS,
 		),
+	});
+}
+
+export function assertProviderActive(
+	ctx: ExtensionContext,
+	activation: ProviderActivationPolicy,
+	inactiveMessage: string,
+): void {
+	if (!activation.isActive(ctx.model)) {
+		throw new Error(inactiveMessage);
+	}
+}
+
+export async function resolveProviderConnection(
+	ctx: ExtensionContext,
+	activation: ProviderActivationPolicy,
+	inactiveMessage: string,
+): Promise<CodexProviderConnection> {
+	assertProviderActive(ctx, activation, inactiveMessage);
+
+	const model = ctx.model;
+	if (model === undefined) {
+		throw new Error("Provider connection requires an active model");
+	}
+
+	const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+	if (!auth.ok) {
+		throw new Error("Provider authentication is unavailable");
+	}
+
+	return createProviderConnection(model, {
+		...(auth.apiKey === undefined ? {} : { apiKey: auth.apiKey }),
+		...(auth.headers === undefined ? {} : { headers: auth.headers }),
 	});
 }
 

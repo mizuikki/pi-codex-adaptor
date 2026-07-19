@@ -135,8 +135,8 @@ describe("fake Pi + real native lifecycle", () => {
 		const streamSimple = createCodexStreamSimple(
 			runtime,
 			service,
-			new CodexCompactionStore(),
 			new ProviderActivationPolicy(service),
+			new CodexCompactionStore(),
 		);
 		const stream = streamSimple(
 			fixtureModel("gpt-5.5", "openai-codex", server.baseUrl),
@@ -185,8 +185,8 @@ describe("fake Pi + real native lifecycle", () => {
 		const streamSimple = createCodexStreamSimple(
 			runtime,
 			service,
-			new CodexCompactionStore(),
 			activation,
+			new CodexCompactionStore(),
 		);
 		const stream = streamSimple(
 			{

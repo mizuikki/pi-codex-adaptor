@@ -1,11 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import type { TSchema } from "typebox";
-import type {
-	CodexApprovalRequest,
-	CodexProviderConnection,
-	CodexRuntime,
-} from "../../application/codex-runtime.ts";
+import type { CodexApprovalRequest, CodexRuntime } from "../../application/codex-runtime.ts";
 import type { ConfigurationService } from "../../application/configuration.ts";
 import type { ProviderActivationPolicy } from "../../application/provider-activation.ts";
 import { UpdatePlanUseCase } from "../../application/update-plan.ts";
@@ -14,7 +10,7 @@ import type { PlanUpdate } from "../../domain/plan.ts";
 import { requestCodexApproval } from "../../ui/terminal/approval-prompt.ts";
 import { responseItemsFromMessages } from "./codex-provider.ts";
 import { OFFICIAL_CORE_TOOL_CONTRACTS, PI_CORE_TOOL_PARAMETERS } from "./generated/core-tools.ts";
-import { createProviderConnection } from "./provider-connection.ts";
+import { assertProviderActive, resolveProviderConnection } from "./provider-connection.ts";
 
 const MANAGED_TOOLS = [
 	"update_plan",
@@ -153,7 +149,11 @@ function registerStandaloneWebTool(
 			),
 		renderResult: (result, options, theme) => renderToolResult(result, options, theme),
 		execute: async (_toolCallId, params, signal, _onUpdate, ctx) => {
-			const connection = await resolveProviderConnection(ctx, activation);
+			const connection = await resolveProviderConnection(
+				ctx,
+				activation,
+				"Codex tools are inactive for the selected provider and API",
+			);
 			const config = await configuration.load();
 			const conversationItems = responseItemsFromMessages(
 				ctx.sessionManager.getBranch().flatMap((entry) => {
@@ -205,7 +205,11 @@ function registerImageGenerationTool(
 				0,
 			),
 		execute: async (_toolCallId, params, signal, _onUpdate, ctx) => {
-			const connection = await resolveProviderConnection(ctx, activation);
+			const connection = await resolveProviderConnection(
+				ctx,
+				activation,
+				"Codex tools are inactive for the selected provider and API",
+			);
 			const argumentsValue = buildImageGenerationArguments(params, ctx);
 			const result = await runtime.executeTool({
 				connection,
@@ -235,7 +239,11 @@ function registerPlanTool(pi: ExtensionAPI, activation: ProviderActivationPolicy
 		renderCall: (_args, theme) => new Text(theme.fg("toolTitle", theme.bold("update_plan")), 0, 0),
 		renderResult: (result, options, theme) => renderToolResult(result, options, theme),
 		execute: async (_toolCallId, params, _signal, _onUpdate, ctx) => {
-			assertActive(ctx, activation);
+			assertProviderActive(
+				ctx,
+				activation,
+				"Codex tools are inactive for the selected provider and API",
+			);
 			let update: PlanUpdate | undefined;
 			const useCase = new UpdatePlanUseCase({
 				publish: (next) => {
@@ -291,7 +299,11 @@ function registerNativeTool(
 		},
 		renderResult: (result, options, theme) => renderToolResult(result, options, theme),
 		execute: async (_toolCallId, params, signal, onUpdate, ctx) => {
-			assertActive(ctx, activation);
+			assertProviderActive(
+				ctx,
+				activation,
+				"Codex tools are inactive for the selected provider and API",
+			);
 			const config = await configuration.load();
 			let streamedOutput = "";
 			const result = await runtime.executeTool({
@@ -332,27 +344,6 @@ function registerNativeTool(
 			};
 		},
 	});
-}
-
-async function resolveProviderConnection(
-	ctx: ExtensionContext,
-	activation: ProviderActivationPolicy,
-): Promise<CodexProviderConnection> {
-	const model = ctx.model;
-	assertActive(ctx, activation);
-	if (model === undefined) throw new Error("Codex tools require an active model");
-	const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-	if (!auth.ok) throw new Error("Provider authentication is unavailable");
-	return createProviderConnection(model, {
-		...(auth.apiKey === undefined ? {} : { apiKey: auth.apiKey }),
-		...(auth.headers === undefined ? {} : { headers: auth.headers }),
-	});
-}
-
-function assertActive(ctx: ExtensionContext, activation: ProviderActivationPolicy): void {
-	if (!activation.isActive(ctx.model)) {
-		throw new Error("Codex tools are inactive for the selected provider and API");
-	}
 }
 
 async function requestApproval(

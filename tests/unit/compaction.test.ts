@@ -117,6 +117,7 @@ function context(options?: {
 	tokens?: number;
 	compact?: ExtensionContext["compact"];
 	sessionId?: string;
+	authFailure?: boolean;
 }): ExtensionContext {
 	const tokens = options?.tokens ?? 50_000;
 	return {
@@ -133,7 +134,10 @@ function context(options?: {
 			maxTokens: 10_000,
 		},
 		modelRegistry: {
-			getApiKeyAndHeaders: async () => ({ ok: true, apiKey: fixtureToken(), headers: {} }),
+			getApiKeyAndHeaders: async () =>
+				options?.authFailure === true
+					? { ok: false, error: "fixture authentication failure" }
+					: { ok: true, apiKey: fixtureToken(), headers: {} },
 		},
 		sessionManager: {
 			getSessionId: () => options?.sessionId ?? "session-fixture",
@@ -583,6 +587,24 @@ describe("per-session compaction coordinator", () => {
 		expect(runtime.compactCalls).toBe(2);
 		expect(coordinator.isBusy("session-fixture")).toBe(true);
 		coordinator.end("session-fixture", "success");
+	});
+
+	test("clears a pending auto cycle when provider authentication fails", async () => {
+		const runtime = new FixtureRuntime();
+		const { handlers, coordinator } = register(
+			runtime,
+			configuration({ mode: "auto", autoCompactTokenLimit: 48_000 }),
+		);
+		const ctx = context({ tokens: 50_000, authFailure: true, compact: () => {} });
+
+		coordinator.setPreviousTokens("session-fixture", 40_000);
+		await handlers.get("turn_end")?.[0]?.({ type: "turn_end" }, ctx);
+		expect(coordinator.isBusy("session-fixture")).toBe(true);
+
+		await expect(
+			handlers.get("session_before_compact")?.[0]?.(compactEvent("threshold"), ctx),
+		).rejects.toThrow("Provider authentication is unavailable");
+		expect(coordinator.isBusy("session-fixture")).toBe(false);
 	});
 
 	test("clears state on cancellation and allows a subsequent retry", async () => {

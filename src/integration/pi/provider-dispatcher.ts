@@ -21,7 +21,7 @@ export function createCodexProviderDispatchers(
 	codexResponses: StreamSimpleDispatcher;
 	openAiResponses: StreamSimpleDispatcher;
 } {
-	const codex = createCodexStreamSimple(runtime, configuration, compactions, activation);
+	const codex = createCodexStreamSimple(runtime, configuration, activation, compactions);
 	return {
 		codexResponses: createDispatcher(
 			activation,

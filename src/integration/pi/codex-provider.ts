@@ -23,8 +23,8 @@ import { createProviderConnection } from "./provider-connection.ts";
 export function createCodexStreamSimple(
 	runtime: CodexRuntime,
 	configuration: ConfigurationService,
-	compactions = new CodexCompactionStore(),
 	activation: ProviderActivationPolicy,
+	compactions = new CodexCompactionStore(),
 ): (
 	model: Model<string>,
 	context: Context,

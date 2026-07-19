@@ -4,7 +4,7 @@ import type {
 	SessionBeforeCompactEvent,
 	SessionCompactEvent,
 } from "@earendil-works/pi-coding-agent";
-import type { CodexProviderConnection, CodexRuntime } from "../../application/codex-runtime.ts";
+import type { CodexRuntime } from "../../application/codex-runtime.ts";
 import {
 	CodexCompactionCoordinator,
 	type CodexCompactionStore,
@@ -24,7 +24,7 @@ import {
 } from "../../domain/capability.ts";
 import type { CompactionConfig } from "../../domain/config.ts";
 import { officialToolNames, responseItemsFromMessages } from "./codex-provider.ts";
-import { createProviderConnection } from "./provider-connection.ts";
+import { resolveProviderConnection } from "./provider-connection.ts";
 
 const COMPACTION_SUMMARY = "Context compacted by the OpenAI Codex Responses API.";
 
@@ -73,7 +73,17 @@ export function registerCodexCompaction(
 		}
 		if (!activation.isActive(model)) return { cancel: true };
 		if (event.signal.aborted) return { cancel: true };
-		const connection = await resolveProviderConnection(ctx, activation);
+		let connection: Awaited<ReturnType<typeof resolveProviderConnection>>;
+		try {
+			connection = await resolveProviderConnection(
+				ctx,
+				activation,
+				"Codex compaction is inactive for the selected provider and API",
+			);
+		} catch (error) {
+			coordinator.end(sessionId, "error");
+			throw error;
+		}
 		const config = await configuration.load();
 		const resolution = parseModelResolution(await runtime.resolveModel(model.id), model.id);
 		coordinator.setThresholdCache(sessionId, {
@@ -328,23 +338,6 @@ function reasoningFor(
 	if (!model.reasoning || thinkingLevel === "off") return null;
 	const effort = model.thinkingLevelMap?.[thinkingLevel] ?? thinkingLevel;
 	return effort === null ? null : { effort, summary: "auto", context: "all_turns" };
-}
-
-async function resolveProviderConnection(
-	ctx: ExtensionContext,
-	activation: ProviderActivationPolicy,
-): Promise<CodexProviderConnection> {
-	const model = ctx.model;
-	if (!activation.isActive(model)) {
-		throw new Error("Codex compaction is inactive for the selected provider and API");
-	}
-	if (model === undefined) throw new Error("Codex compaction requires an active model");
-	const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-	if (!auth.ok) throw new Error("Provider authentication is unavailable");
-	return createProviderConnection(model, {
-		...(auth.apiKey === undefined ? {} : { apiKey: auth.apiKey }),
-		...(auth.headers === undefined ? {} : { headers: auth.headers }),
-	});
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {

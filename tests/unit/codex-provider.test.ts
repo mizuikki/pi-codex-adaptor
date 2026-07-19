@@ -233,8 +233,8 @@ describe("Pi Codex provider adapter", () => {
 		const streamSimple = createCodexStreamSimple(
 			runtime,
 			configuration(),
-			new CodexCompactionStore(),
 			new ProviderActivationPolicy(configuration()),
+			new CodexCompactionStore(),
 		);
 		const events = [];
 
@@ -346,8 +346,8 @@ describe("Pi Codex provider adapter", () => {
 		const streamSimple = createCodexStreamSimple(
 			runtime,
 			configuration(),
-			new CodexCompactionStore(),
 			new ProviderActivationPolicy(configuration()),
+			new CodexCompactionStore(),
 		);
 		const events = [];
 		for await (const event of streamSimple(model, context, { apiKey: "opaque-fixture-api-key" })) {
@@ -376,8 +376,8 @@ describe("Pi Codex provider adapter", () => {
 		const streamSimple = createCodexStreamSimple(
 			runtime,
 			configuration(config),
-			new CodexCompactionStore(),
 			activation,
+			new CodexCompactionStore(),
 		);
 		const customModel = { ...model, provider: "custom-codex", api: "openai-responses" };
 		const events = [];
@@ -401,8 +401,8 @@ describe("Pi Codex provider adapter", () => {
 		const streamSimple = createCodexStreamSimple(
 			runtime,
 			configuration(),
-			new CodexCompactionStore(),
 			new ProviderActivationPolicy(configuration()),
+			new CodexCompactionStore(),
 		);
 		const events = [];
 		for await (const event of streamSimple(model, context, { apiKey: "" })) {
@@ -432,8 +432,8 @@ describe("Pi Codex provider adapter", () => {
 		const streamSimple = createCodexStreamSimple(
 			runtime,
 			configuration(),
-			compactions,
 			new ProviderActivationPolicy(configuration()),
+			compactions,
 		);
 		for await (const _event of streamSimple(
 			model,

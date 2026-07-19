@@ -34,12 +34,16 @@ pub fn resolve_model(slug: &str) -> ModelInfo {
 
 fn catalog() -> &'static [ModelInfo] {
     CATALOG
-        .get_or_init(
-            || match serde_json::from_str::<ModelsResponse>(BUNDLED_MODELS_JSON) {
-                Ok(response) => response.models,
-                Err(_) => Vec::new(),
-            },
-        )
+        .get_or_init(|| {
+            if let Ok(response) = serde_json::from_str::<ModelsResponse>(BUNDLED_MODELS_JSON) {
+                response.models
+            } else {
+                eprintln!(
+                    "warning: bundled Codex model metadata is invalid; using fallback metadata"
+                );
+                Vec::new()
+            }
+        })
         .as_slice()
 }
 
@@ -116,5 +120,15 @@ mod tests {
         let unknown = resolve_model("unknown-model");
         assert_eq!(unknown.slug, "unknown-model");
         assert!(unknown.used_fallback_model_metadata);
+    }
+
+    #[test]
+    fn fallback_metadata_preserves_runtime_defaults() {
+        let model = fallback("unknown-model");
+
+        assert_eq!(model.slug, "unknown-model");
+        assert!(model.used_fallback_model_metadata);
+        assert_eq!(model.context_window, Some(272_000));
+        assert_eq!(model.base_instructions, BUNDLED_PROMPT);
     }
 }

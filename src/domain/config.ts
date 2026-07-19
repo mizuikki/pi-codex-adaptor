@@ -225,9 +225,40 @@ function collectCapabilityIssues(
 	}
 
 	if (
+		compaction.mode === "auto" &&
+		context.remoteCompactionV2 === false &&
+		context.compactEndpoint === false &&
+		(capabilities === undefined ||
+			capabilities.has("remote_compaction_v2") ||
+			capabilities.has("compact_endpoint"))
+	) {
+		issue(
+			issues,
+			"codex.compaction.mode",
+			"unsupported_capability",
+			"Unavailable: provider has no official compaction path",
+		);
+	}
+
+	if (
 		config.codex.transport.mode === "auto" &&
 		context.providerSupportsWebsockets === false &&
 		capabilities !== undefined &&
+		!capabilities.has("responses_sse")
+	) {
+		issue(
+			issues,
+			"codex.transport.mode",
+			"unsupported_capability",
+			"Unavailable: neither WebSocket nor SSE transport is available",
+		);
+	}
+
+	if (
+		config.codex.transport.mode === "auto" &&
+		context.providerSupportsWebsockets !== false &&
+		capabilities !== undefined &&
+		!capabilities.has("responses_websocket") &&
 		!capabilities.has("responses_sse")
 	) {
 		issue(

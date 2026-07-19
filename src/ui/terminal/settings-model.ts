@@ -309,7 +309,13 @@ export class SettingsModel {
 					row(
 						"compactNow",
 						"Compact now",
-						this.#state === "dirty" ? "save first" : this.#routeIsActive() ? "action" : "inactive",
+						this.#state === "dirty"
+							? "save first"
+							: this.#draft.codex.compaction.mode === "off"
+								? "disabled"
+								: this.#routeIsActive()
+									? "action"
+									: "inactive",
 						"Run official compaction for the current session after settings are clean.",
 						"action",
 						this.#state === "dirty"
