@@ -221,6 +221,7 @@ function fixtureModel(shellType = "disabled"): Record<string, unknown> {
 		support_verbosity: false,
 		default_verbosity: null,
 		apply_patch_tool_type: "freeform",
+		supports_image_detail_original: true,
 		truncation_policy: { mode: "bytes", limit: 10_000 },
 		supports_parallel_tool_calls: false,
 		experimental_supported_tools: [],

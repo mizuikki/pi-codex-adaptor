@@ -1,9 +1,8 @@
 /**
  * Host-owned construction of native `tools.execute` params.
  *
- * Model tool arguments are copied only through an adaptor allowlist. The
- * test-only base URL may arrive from host runtime options and is never taken
- * from tool-call arguments, so a model cannot redirect authenticated traffic.
+ * Model tool arguments are copied only through an adaptor allowlist. Provider
+ * connections are attached separately by the runtime for network tools.
  */
 
 const TOOL_EXECUTE_ARGUMENT_KEYS = [
@@ -50,15 +49,12 @@ export interface ToolsExecuteParamsInput {
 	argumentsValue: Record<string, unknown>;
 	workdir: string;
 	workspaceRoots: readonly string[];
-	/** Loopback-only OpenAI base URL override supplied by host runtime options. */
-	testBaseUrl?: string;
 }
 
 /**
  * Build the bridge `tools.execute` params object.
  *
- * Unknown model keys, including `testBaseUrl` / `test_base_url`, are dropped.
- * Host `testBaseUrl` is attached last when present.
+ * Unknown model keys, including provider connection fields, are dropped.
  */
 export function buildToolsExecuteParams(input: ToolsExecuteParamsInput): Record<string, unknown> {
 	const params: Record<string, unknown> = {
@@ -74,9 +70,6 @@ export function buildToolsExecuteParams(input: ToolsExecuteParamsInput): Record<
 		if (value !== undefined) {
 			params[key] = value;
 		}
-	}
-	if (input.testBaseUrl !== undefined && input.testBaseUrl.length > 0) {
-		params.testBaseUrl = input.testBaseUrl;
 	}
 	return params;
 }

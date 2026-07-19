@@ -99,6 +99,11 @@
       "license": "Apache-2.0"
     },
     {
+      "name": "codex-model-metadata",
+      "source_path": "codex-rs/models-manager",
+      "license": "Apache-2.0"
+    },
+    {
       "name": "codex-tools-p0-modules",
       "source_path": "codex-rs/tools",
       "license": "Apache-2.0"

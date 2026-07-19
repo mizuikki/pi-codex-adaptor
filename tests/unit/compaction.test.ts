@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type {
-	CodexAuthentication,
 	CodexRuntime,
 	CompactResponseOptions,
 	CreateResponseOptions,
@@ -18,6 +17,7 @@ import {
 	shouldTriggerAutoCompaction,
 } from "../../src/application/compaction.ts";
 import type { ConfigurationService } from "../../src/application/configuration.ts";
+import { ProviderActivationPolicy } from "../../src/application/provider-activation.ts";
 import { createDefaultConfig } from "../../src/domain/config.ts";
 import { registerCodexCompaction } from "../../src/integration/pi/codex-compaction.ts";
 
@@ -32,7 +32,7 @@ class FixtureRuntime implements CodexRuntime {
 		shellSurface: "unified-exec",
 		autoCompactTokenLimit: 90_000,
 		provider: {
-			name: "OpenAI",
+			name: "Codex",
 			supportsWebsockets: true,
 			supportsRemoteCompaction: true,
 			namespaceTools: true,
@@ -59,7 +59,7 @@ class FixtureRuntime implements CodexRuntime {
 		};
 	}
 
-	async resolveModel(_authentication: CodexAuthentication, modelId: string): Promise<unknown> {
+	async resolveModel(modelId: string): Promise<unknown> {
 		const value = this.modelResolution as Record<string, unknown>;
 		const model = value.model as Record<string, unknown>;
 		return { ...value, model: { ...model, slug: modelId } };
@@ -96,16 +96,16 @@ function fixtureToken(): string {
 }
 
 function configuration(
-	overrides?: Partial<ReturnType<typeof createDefaultConfig>["openai"]["compaction"]>,
+	overrides?: Partial<ReturnType<typeof createDefaultConfig>["codex"]["compaction"]>,
 ): ConfigurationService {
 	const defaults = createDefaultConfig();
 	return {
 		load: async () => ({
 			...defaults,
-			openai: {
-				...defaults.openai,
+			codex: {
+				...defaults.codex,
 				compaction: {
-					...defaults.openai.compaction,
+					...defaults.codex.compaction,
 					...overrides,
 				},
 			},
@@ -117,6 +117,7 @@ function context(options?: {
 	tokens?: number;
 	compact?: ExtensionContext["compact"];
 	sessionId?: string;
+	authFailure?: boolean;
 }): ExtensionContext {
 	const tokens = options?.tokens ?? 50_000;
 	return {
@@ -132,7 +133,12 @@ function context(options?: {
 			contextWindow: 100_000,
 			maxTokens: 10_000,
 		},
-		modelRegistry: { getApiKeyForProvider: async () => fixtureToken() },
+		modelRegistry: {
+			getApiKeyAndHeaders: async () =>
+				options?.authFailure === true
+					? { ok: false, error: "fixture authentication failure" }
+					: { ok: true, apiKey: fixtureToken(), headers: {} },
+		},
 		sessionManager: {
 			getSessionId: () => options?.sessionId ?? "session-fixture",
 			getBranch: () => [],
@@ -195,6 +201,7 @@ function register(
 		runtime,
 		config,
 		store,
+		new ProviderActivationPolicy(config),
 		coordinator,
 	);
 	return { handlers, store, coordinator };
@@ -346,6 +353,49 @@ describe("official compaction integration", () => {
 				mode: "off",
 			}),
 		).toBe(false);
+	});
+
+	test("inactive providers skip Codex compaction without cancelling Pi fallback", async () => {
+		const runtime = new FixtureRuntime();
+		const { handlers, coordinator } = register(
+			runtime,
+			configuration({ mode: "auto", autoCompactTokenLimit: 48_000 }),
+		);
+		let compactCalls = 0;
+		const inactiveCtx = context({
+			tokens: 50_000,
+			compact: () => {
+				compactCalls += 1;
+			},
+		});
+		const baseModel = inactiveCtx.model;
+		expect(baseModel).toBeDefined();
+		if (baseModel === undefined) return;
+		inactiveCtx.model = {
+			...baseModel,
+			provider: "unselected-provider",
+			api: "openai-responses",
+			id: "other-model",
+		};
+
+		// Auto-threshold must not start a Codex compaction cycle for inactive providers.
+		coordinator.setPreviousTokens("session-fixture", 40_000);
+		await handlers.get("turn_end")?.[0]?.({ type: "turn_end" }, inactiveCtx);
+		expect(compactCalls).toBe(0);
+		expect(coordinator.isBusy("session-fixture")).toBe(false);
+		expect(coordinator.getPreviousTokens("session-fixture")).toBeNull();
+
+		// Manual and threshold before_compact must not cancel Pi or call the bridge.
+		for (const reason of ["manual", "threshold"] as const) {
+			const result = await handlers.get("session_before_compact")?.[0]?.(
+				compactEvent(reason, 50_000),
+				inactiveCtx,
+			);
+			expect(result).toBeUndefined();
+			expect(runtime.compactCalls).toBe(0);
+			expect(runtime.compaction).toBeUndefined();
+			expect(coordinator.isBusy("session-fixture")).toBe(false);
+		}
 	});
 
 	test("cancels off and non-crossing threshold events while keeping manual reuse", async () => {
@@ -580,6 +630,24 @@ describe("per-session compaction coordinator", () => {
 		expect(runtime.compactCalls).toBe(2);
 		expect(coordinator.isBusy("session-fixture")).toBe(true);
 		coordinator.end("session-fixture", "success");
+	});
+
+	test("clears a pending auto cycle when provider authentication fails", async () => {
+		const runtime = new FixtureRuntime();
+		const { handlers, coordinator } = register(
+			runtime,
+			configuration({ mode: "auto", autoCompactTokenLimit: 48_000 }),
+		);
+		const ctx = context({ tokens: 50_000, authFailure: true, compact: () => {} });
+
+		coordinator.setPreviousTokens("session-fixture", 40_000);
+		await handlers.get("turn_end")?.[0]?.({ type: "turn_end" }, ctx);
+		expect(coordinator.isBusy("session-fixture")).toBe(true);
+
+		await expect(
+			handlers.get("session_before_compact")?.[0]?.(compactEvent("threshold"), ctx),
+		).rejects.toThrow("Provider authentication is unavailable");
+		expect(coordinator.isBusy("session-fixture")).toBe(false);
 	});
 
 	test("clears state on cancellation and allows a subsequent retry", async () => {

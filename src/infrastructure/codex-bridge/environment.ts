@@ -1,8 +1,8 @@
 /**
  * Child-process environment policy for codex-bridge.
  *
- * Credentials must enter the bridge only through bounded stdin initialize and
- * authentication_update frames. The spawn environment is therefore narrowed to
+ * Credentials must enter the bridge only through bounded stdin request frames. The spawn
+ * environment is therefore narrowed to
  * runtime variables required for process startup, locale, temporary files,
  * proxy routing, and TLS trust roots.
  */

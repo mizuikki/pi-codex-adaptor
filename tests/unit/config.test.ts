@@ -12,7 +12,7 @@ describe("versioned product configuration", () => {
 	test("creates and parses the documented new-install default", () => {
 		const config = createDefaultConfig();
 		expect(parseConfig(config)).toEqual(config);
-		expect(config.openai.compaction).toEqual({
+		expect(config.codex.compaction).toEqual({
 			mode: "auto",
 			autoCompactTokenLimit: "model",
 		});
@@ -22,9 +22,9 @@ describe("versioned product configuration", () => {
 		const config = createDefaultConfig();
 		const parsed = parseConfig({
 			...config,
-			openai: { ...config.openai, compaction: { mode: "off" } },
+			codex: { ...config.codex, compaction: { mode: "off" } },
 		});
-		expect(parsed.openai.compaction).toEqual({ mode: "off" });
+		expect(parsed.codex.compaction).toEqual({ mode: "off" });
 	});
 
 	test("reports fixed field paths without reflecting unsupported values", () => {
@@ -32,15 +32,16 @@ describe("versioned product configuration", () => {
 		try {
 			parseConfig({
 				...config,
-				openai: { ...config.openai, serviceTier: "private-sentinel", extra: true },
+				openai: { ...config.codex, serviceTier: "private-sentinel", extra: true },
+				codex: { ...config.codex, serviceTier: "private-sentinel", extra: true },
 			});
 			expect.unreachable();
 		} catch (error) {
 			expect(error).toBeInstanceOf(ConfigurationError);
 			expect(error).toMatchObject({
 				issues: expect.arrayContaining([
-					expect.objectContaining({ path: "openai", code: "unknown_field" }),
-					expect.objectContaining({ path: "openai.serviceTier", code: "invalid_value" }),
+					expect.objectContaining({ path: "$", code: "unknown_field" }),
+					expect.objectContaining({ path: "codex.serviceTier", code: "invalid_value" }),
 				]),
 			});
 			expect((error as Error).message).not.toContain("private-sentinel");
@@ -53,8 +54,8 @@ describe("versioned product configuration", () => {
 		expect(() =>
 			parseConfig({
 				...config,
-				openai: {
-					...config.openai,
+				codex: {
+					...config.codex,
 					compaction: { mode: "auto", autoCompactTokenLimit: 0 },
 				},
 			}),
@@ -65,8 +66,8 @@ describe("versioned product configuration", () => {
 		const config = createDefaultConfig();
 		const draft = {
 			...config,
-			openai: {
-				...config.openai,
+			codex: {
+				...config.codex,
 				compaction: { mode: "auto" as const, autoCompactTokenLimit: 100_000 },
 			},
 		};
@@ -78,7 +79,7 @@ describe("versioned product configuration", () => {
 			expect(error).toMatchObject({
 				issues: [
 					expect.objectContaining({
-						path: "openai.compaction.autoCompactTokenLimit",
+						path: "codex.compaction.autoCompactTokenLimit",
 						code: "invalid_value",
 					}),
 				],
@@ -103,16 +104,64 @@ describe("versioned product configuration", () => {
 			expect(error).toMatchObject({
 				issues: expect.arrayContaining([
 					expect.objectContaining({
-						path: "openai.webSearch.mode",
+						path: "codex.webSearch.mode",
 						code: "unsupported_capability",
 					}),
 					expect.objectContaining({
-						path: "openai.compaction.mode",
+						path: "codex.compaction.mode",
 						code: "unsupported_capability",
 					}),
 				]),
 			});
 		}
+	});
+
+	test("matches transport capability validation when WebSocket support is unknown", () => {
+		const config = createDefaultConfig();
+		const draft = {
+			...config,
+			codex: {
+				...config.codex,
+				webSearch: { mode: "disabled" as const },
+				compaction: { mode: "off" as const },
+			},
+		};
+
+		expect(() => validateConfigForSave(draft, { bridgeCapabilities: [] })).toThrow(
+			expect.objectContaining({
+				issues: [
+					expect.objectContaining({
+						path: "codex.transport.mode",
+						code: "unsupported_capability",
+					}),
+				],
+			}),
+		);
+	});
+
+	test("matches provider compaction validation when advertised paths are unavailable", () => {
+		const config = createDefaultConfig();
+		const draft = {
+			...config,
+			codex: { ...config.codex, webSearch: { mode: "disabled" as const } },
+		};
+
+		expect(() =>
+			validateConfigForSave(draft, {
+				bridgeCapabilities: ["responses_sse", "compact_endpoint"],
+				remoteCompactionV2: false,
+				compactEndpoint: false,
+			}),
+		).toThrow(
+			expect.objectContaining({
+				issues: [
+					expect.objectContaining({
+						path: "codex.compaction.mode",
+						code: "unsupported_capability",
+					}),
+				],
+			}),
+		);
 	});
 
 	test("exposes explicit unsupported and disabled reasons without inventing availability", () => {
@@ -142,14 +191,14 @@ describe("versioned product configuration", () => {
 					},
 				},
 				{
-					path: "openai.transport.mode",
+					path: "codex.transport.mode",
 					availability: {
 						status: "disabled",
 						reason: "WebSocket unavailable for this provider; SSE will be used",
 					},
 				},
 				{
-					path: "openai.compaction.autoCompactTokenLimit",
+					path: "codex.compaction.autoCompactTokenLimit",
 					availability: { status: "enabled" },
 				},
 			]),
@@ -160,8 +209,8 @@ describe("versioned product configuration", () => {
 		const config = createDefaultConfig();
 		const draft = {
 			...config,
-			openai: {
-				...config.openai,
+			codex: {
+				...config.codex,
 				compaction: { mode: "auto" as const, autoCompactTokenLimit: 48_000 },
 				webSearch: { mode: "disabled" as const },
 			},
@@ -172,5 +221,29 @@ describe("versioned product configuration", () => {
 				bridgeCapabilities: ["responses_sse", "compact_endpoint"],
 			}),
 		).toEqual(draft);
+	});
+
+	test("requires an explicit non-empty unique provider activation list", () => {
+		const config = createDefaultConfig();
+		expect(() => parseConfig({ ...config, activation: { providers: [] } })).toThrow(
+			ConfigurationError,
+		);
+		expect(() =>
+			parseConfig({ ...config, activation: { providers: ["openai-codex", "openai-codex"] } }),
+		).toThrow(ConfigurationError);
+		expect(() => parseConfig({ ...config, activation: { providers: ["   "] } })).toThrow(
+			ConfigurationError,
+		);
+	});
+
+	test("rejects the removed schema version and legacy OpenAI root", () => {
+		const config = createDefaultConfig();
+		expect(() =>
+			parseConfig({
+				...config,
+				schemaVersion: 1,
+				openai: config.codex,
+			}),
+		).toThrow(ConfigurationError);
 	});
 });

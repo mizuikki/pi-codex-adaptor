@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { Context, Model } from "@earendil-works/pi-ai";
 
 import type {
-	CodexAuthentication,
+	CodexProviderConnection,
 	CodexRuntime,
 	CreateResponseOptions,
 	CreateResponseResult,
@@ -13,7 +13,8 @@ import {
 	createCodexCompactionDetails,
 } from "../../src/application/compaction.ts";
 import type { ConfigurationService } from "../../src/application/configuration.ts";
-import { createDefaultConfig } from "../../src/domain/config.ts";
+import { ProviderActivationPolicy } from "../../src/application/provider-activation.ts";
+import { type CodexConfig, createDefaultConfig } from "../../src/domain/config.ts";
 import { createCodexStreamSimple } from "../../src/integration/pi/codex-provider.ts";
 
 class FixtureRuntime implements CodexRuntime {
@@ -86,13 +87,13 @@ class FixtureRuntime implements CodexRuntime {
 		throw new Error("fixture compaction is not configured");
 	}
 
-	async resolveModel(_authentication: CodexAuthentication, modelId: string): Promise<unknown> {
+	async resolveModel(modelId: string): Promise<unknown> {
 		return {
 			model: { slug: modelId },
 			shellSurface: "unified-exec",
 			autoCompactTokenLimit: 90_000,
 			provider: {
-				name: "OpenAI",
+				name: "Codex",
 				supportsWebsockets: true,
 				supportsRemoteCompaction: true,
 				namespaceTools: true,
@@ -102,7 +103,7 @@ class FixtureRuntime implements CodexRuntime {
 		};
 	}
 
-	async resolveTools(_authentication: CodexAuthentication, params: unknown): Promise<unknown> {
+	async resolveTools(params: unknown): Promise<unknown> {
 		const root = params as Record<string, unknown>;
 		const provider = root.provider as Record<string, unknown>;
 		// Capture for assertions that tools.resolve no longer receives hard-coded host guesses only.
@@ -211,9 +212,9 @@ const context: Context = {
 	],
 };
 
-function configuration(): ConfigurationService {
+function configuration(config: CodexConfig = createDefaultConfig()): ConfigurationService {
 	return {
-		load: async () => createDefaultConfig(),
+		load: async () => config,
 	} as ConfigurationService;
 }
 
@@ -229,7 +230,12 @@ function fixtureToken(): string {
 describe("Pi Codex provider adapter", () => {
 	test("maps Pi context through the native response stream", async () => {
 		const runtime = new FixtureRuntime();
-		const streamSimple = createCodexStreamSimple(runtime, configuration());
+		const streamSimple = createCodexStreamSimple(
+			runtime,
+			configuration(),
+			new ProviderActivationPolicy(configuration()),
+			new CodexCompactionStore(),
+		);
 		const events = [];
 
 		for await (const event of streamSimple(model, context, {
@@ -285,11 +291,13 @@ describe("Pi Codex provider adapter", () => {
 				}),
 			},
 		]);
-		expect(runtime.request?.authentication).toEqual({
-			kind: "oauth_bearer",
-			token: fixtureToken(),
+		expect(runtime.request?.connection).toEqual({
+			providerId: "openai-codex",
+			baseUrl: "https://invalid.example",
+			headers: {},
+			authentication: { kind: "bearer", token: fixtureToken() },
 			accountId: "account-fixture",
-		} satisfies CodexAuthentication);
+		} satisfies CodexProviderConnection);
 		const request = runtime.request?.request as Record<string, unknown>;
 		expect(request.model).toBe("fixture-model");
 		expect(request.input).toEqual([
@@ -335,24 +343,68 @@ describe("Pi Codex provider adapter", () => {
 
 	test("treats non-JWT provider credentials as API keys", async () => {
 		const runtime = new FixtureRuntime();
-		const streamSimple = createCodexStreamSimple(runtime, configuration());
+		const streamSimple = createCodexStreamSimple(
+			runtime,
+			configuration(),
+			new ProviderActivationPolicy(configuration()),
+			new CodexCompactionStore(),
+		);
 		const events = [];
-		for await (const event of streamSimple(model, context, { apiKey: "sk-fixture-api-key" })) {
+		for await (const event of streamSimple(model, context, { apiKey: "opaque-fixture-api-key" })) {
 			events.push(event);
 		}
 
 		expect(events.at(-1)?.type).toBe("done");
 		expect(runtime.calls).toBe(1);
-		expect(runtime.request?.authentication).toEqual({
-			kind: "openai_api_key",
-			apiKey: "sk-fixture-api-key",
-		} satisfies CodexAuthentication);
-		expect(extractAccountId("sk-fixture-api-key")).toBeUndefined();
+		expect(runtime.request?.connection).toEqual({
+			providerId: "openai-codex",
+			baseUrl: "https://invalid.example",
+			headers: {},
+			authentication: { kind: "bearer", token: "opaque-fixture-api-key" },
+		} satisfies CodexProviderConnection);
+		expect(extractAccountId("opaque-fixture-api-key")).toBeUndefined();
+	});
+
+	test("runs a selected ordinary Responses provider without a ChatGPT account id", async () => {
+		const runtime = new FixtureRuntime();
+		const config = {
+			...createDefaultConfig(),
+			activation: { providers: ["custom-codex"] },
+		};
+		const activation = new ProviderActivationPolicy(configuration(config));
+		await activation.refresh();
+		const streamSimple = createCodexStreamSimple(
+			runtime,
+			configuration(config),
+			activation,
+			new CodexCompactionStore(),
+		);
+		const customModel = { ...model, provider: "custom-codex", api: "openai-responses" };
+		const events = [];
+		for await (const event of streamSimple(customModel, context, {
+			apiKey: "opaque-fixture-key",
+		})) {
+			events.push(event);
+		}
+
+		expect(events.at(-1)?.type).toBe("done");
+		expect(runtime.request?.connection).toEqual({
+			providerId: "custom-codex",
+			baseUrl: "https://invalid.example",
+			headers: {},
+			authentication: { kind: "bearer", token: "opaque-fixture-key" },
+		} satisfies CodexProviderConnection);
+		expect(runtime.request?.providerSupportsWebsockets).toBe(false);
 	});
 
 	test("rejects missing provider credentials without reflecting values", async () => {
 		const runtime = new FixtureRuntime();
-		const streamSimple = createCodexStreamSimple(runtime, configuration());
+		const streamSimple = createCodexStreamSimple(
+			runtime,
+			configuration(),
+			new ProviderActivationPolicy(configuration()),
+			new CodexCompactionStore(),
+		);
 		const events = [];
 		for await (const event of streamSimple(model, context, { apiKey: "" })) {
 			events.push(event);
@@ -363,7 +415,7 @@ describe("Pi Codex provider adapter", () => {
 		if (error?.type !== "error") throw new Error("expected error event");
 		// Provider surface keeps a safe generic message; credentials must not appear.
 		expect(error.error.errorMessage).toBe("OpenAI Codex request failed");
-		expect(JSON.stringify(error)).not.toContain("sk-");
+		expect(JSON.stringify(error)).not.toContain("opaque-fixture-api-key");
 		expect(runtime.calls).toBe(0);
 	});
 
@@ -378,7 +430,12 @@ describe("Pi Codex provider adapter", () => {
 				{ type: "message", role: "assistant", content: [] },
 			]),
 		);
-		const streamSimple = createCodexStreamSimple(runtime, configuration(), compactions);
+		const streamSimple = createCodexStreamSimple(
+			runtime,
+			configuration(),
+			new ProviderActivationPolicy(configuration()),
+			compactions,
+		);
 		for await (const _event of streamSimple(
 			model,
 			{

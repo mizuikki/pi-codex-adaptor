@@ -21,13 +21,13 @@ integrity = "sha512-WPtEx38iVyksWujOwmsxnJznRR8T/YF+lAJghMhHL1xIWdJrrvZ1iafhIsw4
 
 [vendor]
 status = "ready"
-tree_sha256 = "834ba149cf49f8df840d3dac6c612c312535f27c47c813013022776190d43178"
+tree_sha256 = "4e73a4c8efdc818b085b4abea1660b3a6d84b0fdbb6d687bda5c55dc0f07caad"
 allowlist_manifest = "native/upstream/openai-codex-files.json"
-allowlist_sha256 = "0370932d71e4a926b201df4e42bface0f0b678bc298d742431517670486aa595"
+allowlist_sha256 = "6c292d4126b377d739dbea0e0d0e7d18d1d1876d698510955ce59bc9b813463d"
 license_inventory = "native/upstream/openai-codex-licenses.json"
-license_inventory_sha256 = "97398d1c71bd22fb7444cb24c3bacc2738d22ef89d08a6f5e64616f16f2ca44f"
+license_inventory_sha256 = "6c6137dc1231bc16708c2b3401373a81e4996d82a6774b702cee20c5f4de8593"
 sbom = "native/upstream/openai-codex-sbom.json"
-sbom_sha256 = "0537af4a1414313a937ebec5380475fde634b3edcdf64dd72f88abf30187cce7"
+sbom_sha256 = "d78f9d01d242d753ac5d41e504cf10fe8a58d9f48edddbea9315b9ff463c8853"
 patches = [
   "native/patches/openai-codex/0001-deserialize-responses-requests.patch",
   "native/patches/openai-codex/0002-cast-windows-pseudoconsole-handle.patch",
@@ -42,6 +42,7 @@ selected_crates = [
   "codex-async-utils",
   "codex-client",
   "codex-core-p0-tool-specs",
+  "codex-model-metadata",
   "codex-execpolicy",
   "codex-extension-items",
   "codex-http-client",

@@ -22,16 +22,20 @@ describe("file diagnostics exporter", () => {
 		try {
 			const result = await new FileDiagnosticsExporter().export(
 				{
-					schemaVersion: 1,
-					configSchemaVersion: 1,
-					bridge: { bridgeProtocolVersion: 1 },
+					schemaVersion: 2,
+					configSchemaVersion: 2,
+					activation: {
+						providerCount: 1,
+						supportedApis: ["openai-responses", "openai-codex-responses"],
+					},
+					bridge: { bridgeProtocolVersion: 2 },
 					recentErrors: [],
 				},
 				path,
 			);
 			expect(result.path).toBe(path);
 			expect(result.sha256).toHaveLength(64);
-			expect(await readFile(path, "utf8")).toContain('"bridgeProtocolVersion": 1');
+			expect(await readFile(path, "utf8")).toContain('"bridgeProtocolVersion": 2');
 		} finally {
 			await rm(directory, { recursive: true, force: true });
 		}
@@ -44,7 +48,7 @@ describe("file diagnostics exporter", () => {
 			const snapshot = createDiagnosticsSnapshot(
 				createDefaultConfig(),
 				{
-					bridgeProtocolVersion: 1,
+					bridgeProtocolVersion: 2,
 					officialCodexVersion: "0.144.3",
 					capabilities: ["responses_sse"],
 					prompt: "private",
@@ -58,7 +62,7 @@ describe("file diagnostics exporter", () => {
 						{
 							category: "ProtocolError",
 							code: "invalid_frame",
-							message: "Bridge frame does not match protocol v1",
+							message: "Bridge frame does not match protocol v2",
 						},
 					],
 				},
@@ -80,7 +84,7 @@ describe("file diagnostics exporter", () => {
 			expect(body).toContain("ProtocolError");
 			expect(body).not.toContain("secret");
 			expect(body).not.toContain("private");
-			expect(body).not.toContain('schemaVersion": 1,\n  "tools"');
+			expect(body).not.toContain('"tools"');
 		} finally {
 			await rm(directory, { recursive: true, force: true });
 		}
@@ -93,9 +97,13 @@ describe("file diagnostics exporter", () => {
 			await expect(
 				new FileDiagnosticsExporter().export(
 					{
-						schemaVersion: 1,
-						configSchemaVersion: 1,
-						bridge: { bridgeProtocolVersion: 1 },
+						schemaVersion: 2,
+						configSchemaVersion: 2,
+						activation: {
+							providerCount: 1,
+							supportedApis: ["openai-responses", "openai-codex-responses"],
+						},
+						bridge: { bridgeProtocolVersion: 2 },
 						recentErrors: [],
 					},
 					directory,

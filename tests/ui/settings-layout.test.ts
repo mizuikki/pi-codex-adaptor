@@ -9,7 +9,7 @@ function createView(): SettingsModel {
 		baseline: "0.144.3",
 		provider: "openai-codex-with-a-deliberately-long-provider-identifier",
 		model: "gpt-model-with-a-deliberately-long-model-identifier",
-		bridge: "protocol v1",
+		bridge: "protocol v2",
 		capabilities: ["responses", "compact", "unified-exec"],
 		disabledReasons: {
 			imageGeneration: "Unavailable: provider does not advertise image generation.",
@@ -42,7 +42,7 @@ describe("settings layout snapshots", () => {
 		const text = snapshot(view, 80);
 
 		expect(view.layoutFor(80)).toBe("medium");
-		expect(text).toContain("[General]  Tools  OpenAI  Diagnostics");
+		expect(text).toContain("[General]  Tools  Codex  Diagnostics");
 		expect(text).toContain("Status bar");
 		expect(text).not.toContain("Select section");
 		expect(text.split("\n").every((line) => line.length <= 80)).toBe(true);

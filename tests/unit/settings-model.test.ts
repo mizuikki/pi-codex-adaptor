@@ -34,7 +34,7 @@ describe("settings view model", () => {
 		expect(view.setWidth(120)).toBe("wide");
 		expect(view.setWidth(80)).toBe("medium");
 		expect(view.setWidth(40)).toBe("narrow");
-		expect(SETTINGS_CATEGORIES).toEqual(["General", "Tools", "OpenAI", "Diagnostics"]);
+		expect(SETTINGS_CATEGORIES).toEqual(["General", "Tools", "Codex", "Diagnostics"]);
 	});
 
 	test("cycles enum fields without writing the configuration", () => {
@@ -43,7 +43,7 @@ describe("settings view model", () => {
 		view.moveCategory(1);
 		view.moveFocus(1);
 		view.cycleFocused();
-		expect(view.draft.openai.verbosity).toBe("medium");
+		expect(view.draft.codex.verbosity).toBe("medium");
 		expect(view.state).toBe("dirty");
 	});
 
@@ -53,11 +53,30 @@ describe("settings view model", () => {
 		view.moveCategory(1);
 		expect(view.rows().map((row) => row.id)).toContain("autoCompactTokenLimit");
 		view.setAutoCompactTokenLimit(48_000);
-		expect(view.draft.openai.compaction).toEqual({
+		expect(view.draft.codex.compaction).toEqual({
 			mode: "auto",
 			autoCompactTokenLimit: 48_000,
 		});
 		expect(view.state).toBe("dirty");
+	});
+
+	test("reports compact now as disabled when compaction is off", () => {
+		const config = createDefaultConfig();
+		config.codex.compaction = { mode: "off" };
+		const view = new SettingsModel(config, {
+			baseline: "0.144.3",
+			provider: "openai-codex",
+			model: "fixture-model",
+			bridge: "pending",
+		});
+
+		view.setCategory("Codex");
+		const compactNow = view.rows().find((row) => row.id === "compactNow");
+		expect(compactNow).toMatchObject({
+			value: "disabled",
+			enabled: false,
+			disabledReason: "Compaction is disabled.",
+		});
 	});
 
 	test.each([120, 80, 40])("renders bounded monochrome lines at width %d", (width) => {
@@ -91,5 +110,77 @@ describe("settings view model", () => {
 		expect(view.state).toBe("pristine");
 		expect(view.handleKey(" ")).toEqual({ type: "none" });
 		expect(view.lines(80)).toEqual(["Settings closed"]);
+	});
+
+	test("recomputes the activation route after successful save and restore", () => {
+		const config = createDefaultConfig();
+		const view = new SettingsModel(config, {
+			baseline: "0.144.3",
+			provider: "custom-codex",
+			model: "fixture-model",
+			bridge: "pending",
+			activationModel: { provider: "custom-codex", api: "openai-responses" },
+		});
+
+		expect(view.rows().find((row) => row.id === "route")?.value).toBe(
+			"inactive (provider not selected: custom-codex)",
+		);
+
+		view.setActivationProviders(["openai-codex", "custom-codex"]);
+		expect(view.state).toBe("dirty");
+		expect(view.rows().find((row) => row.id === "route")?.value).toBe(
+			"inactive (provider not selected: custom-codex)",
+		);
+
+		const saved = view.beginSave();
+		view.markSaved(saved);
+		expect(view.state).toBe("saved");
+		expect(view.rows().find((row) => row.id === "route")?.value).toBe(
+			"active (custom-codex / openai-responses)",
+		);
+
+		view.replaceWithSaved(createDefaultConfig());
+		expect(view.state).toBe("saved");
+		expect(view.rows().find((row) => row.id === "route")?.value).toBe(
+			"inactive (provider not selected: custom-codex)",
+		);
+	});
+
+	test("keeps the last persisted activation route when save fails", () => {
+		const config = createDefaultConfig();
+		const view = new SettingsModel(config, {
+			baseline: "0.144.3",
+			provider: "custom-codex",
+			model: "fixture-model",
+			bridge: "pending",
+			activationModel: { provider: "custom-codex", api: "openai-responses" },
+		});
+
+		const inactive = "inactive (provider not selected: custom-codex)";
+		expect(view.rows().find((row) => row.id === "route")?.value).toBe(inactive);
+
+		view.setActivationProviders(["openai-codex", "custom-codex"]);
+		view.markError("Codex settings could not be saved", "write-error");
+
+		expect(view.state).toBe("write-error");
+		expect(view.rows().find((row) => row.id === "route")?.value).toBe(inactive);
+	});
+
+	test("disables compact now when the current route is inactive", () => {
+		const view = new SettingsModel(createDefaultConfig(), {
+			baseline: "0.144.3",
+			provider: "custom-codex",
+			model: "fixture-model",
+			bridge: "pending",
+			activationModel: { provider: "custom-codex", api: "openai-responses" },
+		});
+
+		view.setCategory("Codex");
+		const compactNow = view.rows().find((row) => row.id === "compactNow");
+		expect(compactNow).toMatchObject({
+			value: "inactive",
+			enabled: false,
+			disabledReason: "Codex route is inactive for the current provider and API.",
+		});
 	});
 });

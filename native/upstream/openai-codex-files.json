@@ -579,6 +579,16 @@
       "vendor_sha256": "8c9b8af39339f8856d4568ca15ede47f321836fe0068610d7f4480624047a68b"
     },
     {
+      "path": "codex-rs/models-manager/models.json",
+      "source_sha256": "dcab00231a5178a9c84b7aef4cc06a1e1359e37ee0dd7e69d5822c4b1de723b1",
+      "vendor_sha256": "dcab00231a5178a9c84b7aef4cc06a1e1359e37ee0dd7e69d5822c4b1de723b1"
+    },
+    {
+      "path": "codex-rs/models-manager/prompt.md",
+      "source_sha256": "ac8ae107a0d72fe3476b430afb161ea4e67da2e446d778aefc44828160559807",
+      "vendor_sha256": "ac8ae107a0d72fe3476b430afb161ea4e67da2e446d778aefc44828160559807"
+    },
+    {
       "path": "codex-rs/network-proxy/BUILD.bazel",
       "source_sha256": "7eef0d0f9637daab155c1a37dbda3f26c46d4f3961df7c552d994d605ec1a00b",
       "vendor_sha256": "7eef0d0f9637daab155c1a37dbda3f26c46d4f3961df7c552d994d605ec1a00b"

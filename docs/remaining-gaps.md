@@ -35,7 +35,7 @@ equivalent to the official contract.
 ## Explicit exclusions
 
 Account usage, rate-limit windows, reset-credit operations, complete Codex CLI/app-server lifecycle,
-unverified third-party providers, and internal test-only tools are not product gaps.
+unselected provider/API routes, and internal test-only tools are not product gaps.
 
 Each P1 decision requires an ADR selecting `adopt`, `delegate-to-Pi`, or `exclude`. Adopted and
 delegated capabilities require official specs, bridge/application behavior, UI states, contract tests,

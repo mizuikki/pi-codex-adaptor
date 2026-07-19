@@ -6,9 +6,13 @@ import {
 	parseConfig,
 	type WebSearchMode,
 } from "../../domain/config.ts";
+import {
+	type ProviderActivationModel,
+	resolveProviderActivation,
+} from "../../domain/provider-activation.ts";
 import { fitLine, joinFooter, padEndVisible, statusLabel, wrapText } from "./render.ts";
 
-export const SETTINGS_CATEGORIES = ["General", "Tools", "OpenAI", "Diagnostics"] as const;
+export const SETTINGS_CATEGORIES = ["General", "Tools", "Codex", "Diagnostics"] as const;
 export type SettingsCategory = (typeof SETTINGS_CATEGORIES)[number];
 export type SettingsLayout = "wide" | "medium" | "narrow";
 export type SettingsState =
@@ -34,6 +38,7 @@ export type SettingsEffect =
 	| { type: "close" }
 	| { type: "compact" }
 	| { type: "export" }
+	| { type: "edit-providers" }
 	| { type: "edit-auto-compact" }
 	| { type: "reset-defaults" };
 
@@ -54,6 +59,9 @@ export interface SettingsModelOptions {
 	provider: string;
 	model: string;
 	bridge: string;
+	/** Current Pi model used to recompute the displayed activation route after save/reset/restore. */
+	activationModel?: ProviderActivationModel;
+	activationStatus?: string;
 	capabilities?: readonly string[];
 	disabledReasons?: Readonly<Record<string, string>>;
 }
@@ -66,6 +74,8 @@ export class SettingsModel {
 	#saved: CodexConfig;
 	#draft: CodexConfig;
 	readonly #options: SettingsModelOptions;
+	readonly #activationModel: ProviderActivationModel | undefined;
+	#activationStatus: string | undefined;
 	#categoryIndex = 0;
 	#focus = 0;
 	#region: SettingsFocusRegion = "list";
@@ -81,6 +91,12 @@ export class SettingsModel {
 		this.#saved = structuredClone(config);
 		this.#draft = structuredClone(config);
 		this.#options = options;
+		this.#activationModel = options.activationModel;
+		this.#activationStatus =
+			options.activationStatus ??
+			(options.activationModel === undefined
+				? undefined
+				: formatActivationStatus(options.activationModel, config));
 	}
 
 	get draft(): CodexConfig {
@@ -200,6 +216,20 @@ export class SettingsModel {
 					),
 					row("model", "Model", this.#options.model, "Active model id resolved by Pi.", "readonly"),
 					row(
+						"providers",
+						"Active providers",
+						this.#draft.activation.providers.join(", "),
+						"Exact Pi provider ids that opt into the Codex adaptor. Separate ids with commas.",
+						"action",
+					),
+					row(
+						"route",
+						"Current route",
+						this.#activationStatus ?? "unavailable",
+						"Whether the current provider and API use the Codex adaptor.",
+						"readonly",
+					),
+					row(
 						"status",
 						"Status bar",
 						this.#draft.ui.status ? "on" : "off",
@@ -240,50 +270,50 @@ export class SettingsModel {
 						this.#disabled("imageGeneration"),
 					),
 				];
-			case "OpenAI": {
+			case "Codex": {
 				const rows: SettingsRow[] = [
 					row(
 						"serviceTier",
 						"Service tier",
-						this.#draft.openai.serviceTier,
+						this.#draft.codex.serviceTier,
 						"OpenAI service tier preference for Responses requests.",
 						"enum",
 					),
 					row(
 						"verbosity",
 						"Verbosity",
-						this.#draft.openai.verbosity,
+						this.#draft.codex.verbosity,
 						"Text verbosity preference for Responses requests.",
 						"enum",
 					),
 					row(
 						"transport",
 						"Transport",
-						this.#draft.openai.transport.mode,
+						this.#draft.codex.transport.mode,
 						"Preferred transport mode. auto selects the official default path.",
 						"enum",
 					),
 					row(
 						"webSearch",
 						"Web search mode",
-						this.#draft.openai.webSearch.mode,
+						this.#draft.codex.webSearch.mode,
 						"Standalone or hosted web search mode requested from the resolver.",
 						"enum",
 					),
 					row(
 						"compaction",
 						"Compaction",
-						this.#draft.openai.compaction.mode,
+						this.#draft.codex.compaction.mode,
 						"off disables adaptor compaction. auto uses the official compaction path.",
 						"enum",
 					),
 				];
-				if (this.#draft.openai.compaction.mode === "auto") {
+				if (this.#draft.codex.compaction.mode === "auto") {
 					rows.push(
 						row(
 							"autoCompactTokenLimit",
 							"Auto compact limit",
-							String(this.#draft.openai.compaction.autoCompactTokenLimit),
+							String(this.#draft.codex.compaction.autoCompactTokenLimit),
 							"model uses the official model threshold. A positive integer overrides it.",
 							"number",
 						),
@@ -293,14 +323,25 @@ export class SettingsModel {
 					row(
 						"compactNow",
 						"Compact now",
-						this.#state === "dirty" ? "save first" : "action",
+						this.#state === "dirty"
+							? "save first"
+							: this.#draft.codex.compaction.mode === "off"
+								? "disabled"
+								: this.#routeIsActive()
+									? "action"
+									: "inactive",
 						"Run official compaction for the current session after settings are clean.",
 						"action",
 						this.#state === "dirty"
 							? { enabled: false, reason: "Save or discard the draft before compaction." }
-							: this.#draft.openai.compaction.mode === "off"
+							: this.#draft.codex.compaction.mode === "off"
 								? { enabled: false, reason: "Compaction is disabled." }
-								: undefined,
+								: this.#routeIsActive()
+									? undefined
+									: {
+											enabled: false,
+											reason: "Codex route is inactive for the current provider and API.",
+										},
 					),
 				);
 				return rows;
@@ -376,25 +417,25 @@ export class SettingsModel {
 				this.#draft.tools.optional.imageGeneration,
 			);
 		} else if (current.id === "serviceTier") {
-			this.#draft.openai.serviceTier = cycle(this.#draft.openai.serviceTier, [
+			this.#draft.codex.serviceTier = cycle(this.#draft.codex.serviceTier, [
 				"default",
 				"priority",
 				"flex",
 			]);
 		} else if (current.id === "verbosity") {
-			this.#draft.openai.verbosity = cycle(this.#draft.openai.verbosity, ["low", "medium", "high"]);
+			this.#draft.codex.verbosity = cycle(this.#draft.codex.verbosity, ["low", "medium", "high"]);
 		} else if (current.id === "transport") {
-			this.#draft.openai.transport.mode = cycle(this.#draft.openai.transport.mode, ["auto", "sse"]);
+			this.#draft.codex.transport.mode = cycle(this.#draft.codex.transport.mode, ["auto", "sse"]);
 		} else if (current.id === "webSearch") {
-			this.#draft.openai.webSearch.mode = cycle(this.#draft.openai.webSearch.mode, [
+			this.#draft.codex.webSearch.mode = cycle(this.#draft.codex.webSearch.mode, [
 				"disabled",
 				"cached",
 				"indexed",
 				"live",
 			] satisfies WebSearchMode[]);
 		} else if (current.id === "compaction") {
-			this.#draft.openai.compaction =
-				this.#draft.openai.compaction.mode === "off"
+			this.#draft.codex.compaction =
+				this.#draft.codex.compaction.mode === "off"
 					? { mode: "auto", autoCompactTokenLimit: "model" }
 					: { mode: "off" };
 		} else {
@@ -416,20 +457,28 @@ export class SettingsModel {
 		if (this.#disposed) return;
 		this.#saved = structuredClone(config);
 		this.#draft = structuredClone(config);
+		this.#refreshActivationStatus(config);
 		this.#state = "saved";
 		this.#message = `${statusLabel("ok")} Saved`;
 	}
 
 	markError(message: string, state: "validation-error" | "write-error"): void {
 		if (this.#disposed) return;
+		// Failed saves keep the last persisted activation route; do not reflect the unsaved draft.
 		this.#state = state;
 		this.#message = `${statusLabel("error")} ${message}`;
 	}
 
 	setAutoCompactTokenLimit(value: "model" | number): void {
 		if (this.#disposed) return;
-		if (this.#draft.openai.compaction.mode !== "auto") return;
-		this.#draft.openai.compaction.autoCompactTokenLimit = value;
+		if (this.#draft.codex.compaction.mode !== "auto") return;
+		this.#draft.codex.compaction.autoCompactTokenLimit = value;
+		this.#markDirty();
+	}
+
+	setActivationProviders(providers: readonly string[]): void {
+		if (this.#disposed) return;
+		this.#draft.activation.providers = [...providers];
 		this.#markDirty();
 	}
 
@@ -455,6 +504,7 @@ export class SettingsModel {
 		if (this.#disposed) return;
 		this.#saved = structuredClone(config);
 		this.#draft = structuredClone(config);
+		this.#refreshActivationStatus(config);
 		this.#state = "saved";
 		this.#message = `${statusLabel("ok")} Defaults restored`;
 		this.#dialog = { kind: "none" };
@@ -544,7 +594,7 @@ export class SettingsModel {
 				this.openResetDialog();
 				return { type: "none" };
 			case "c":
-				if (this.category === "OpenAI") return { type: "compact" };
+				if (this.category === "Codex") return { type: "compact" };
 				return { type: "none" };
 			case "e":
 				if (this.category === "Diagnostics") return { type: "export" };
@@ -588,7 +638,7 @@ export class SettingsModel {
 		actions.push("Space", "Enter");
 		actions.push("Ctrl+S");
 		actions.push("R reset");
-		if (this.category === "OpenAI") actions.push("C compact");
+		if (this.category === "Codex") actions.push("C compact");
 		if (this.category === "Diagnostics") actions.push("E export");
 		actions.push(layout === "narrow" ? "Esc back" : "Esc close");
 		actions.push("? help");
@@ -625,6 +675,7 @@ export class SettingsModel {
 			return { type: "none" };
 		}
 		if (current.id === "autoCompactTokenLimit") return { type: "edit-auto-compact" };
+		if (current.id === "providers") return { type: "edit-providers" };
 		if (current.id === "export") return { type: "export" };
 		if (current.id === "compactNow") return { type: "compact" };
 		if (current.id === "reset") {
@@ -632,6 +683,16 @@ export class SettingsModel {
 			return { type: "none" };
 		}
 		return { type: "none" };
+	}
+
+	#routeIsActive(): boolean {
+		return this.#activationStatus === undefined || this.#activationStatus.startsWith("active");
+	}
+
+	#refreshActivationStatus(config: Pick<CodexConfig, "activation">): void {
+		// Recompute only when the live model is known. Static activationStatus callers stay unchanged.
+		if (this.#activationModel === undefined) return;
+		this.#activationStatus = formatActivationStatus(this.#activationModel, config);
 	}
 
 	#handleDialogKey(key: string): SettingsEffect {
@@ -814,7 +875,7 @@ export class SettingsModel {
 				"Enter: activate enum, action, or narrow section",
 				"Ctrl+S: validate and save draft",
 				"R: reset draft to product defaults",
-				"C: compact now on OpenAI section",
+				"C: compact now on Codex section",
 				"E: export diagnostics on Diagnostics section",
 				"Esc: back, cancel dialog, or close",
 				"",
@@ -910,4 +971,23 @@ export function parseKey(data: string): string {
 	const key = parseTuiKey(data);
 	if (key === "escape") return "esc";
 	return (key ?? data).toLowerCase().replaceAll("+", "-");
+}
+
+/** Format the current activation route using the shared domain predicate. */
+export function formatActivationStatus(
+	model: ProviderActivationModel | undefined,
+	config: Pick<CodexConfig, "activation">,
+): string {
+	const decision = resolveProviderActivation(model, config);
+	if (decision.active) {
+		return `active (${model?.provider ?? "unknown"} / ${model?.api ?? "unknown"})`;
+	}
+	switch (decision.reason) {
+		case "no_model":
+			return "inactive (no model)";
+		case "provider_not_selected":
+			return `inactive (provider not selected: ${model?.provider ?? "unknown"})`;
+		case "unsupported_pi_api":
+			return `inactive (unsupported API: ${model?.api ?? "unknown"})`;
+	}
 }

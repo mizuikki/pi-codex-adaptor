@@ -24,17 +24,19 @@ const server = await startFakeResponsesServer([
 	fixtureModelSpec({ slug: "fixture-model", shellType: "shell_command" }),
 ]);
 
+const connection = {
+	providerId: "fixture-provider",
+	baseUrl: server.baseUrl,
+	headers: {},
+	authentication: { kind: "bearer", token },
+};
+
 try {
 	const client = await BridgeClient.connect({
 		buildTarget: target,
 		clientVersion: "integration-test",
 		allowDevelopmentBuild: expectedBuildSourceCommit === undefined,
 		...(expectedBuildSourceCommit === undefined ? {} : { expectedBuildSourceCommit }),
-		authentication: {
-			kind: "oauth_bearer",
-			token,
-			accountId: "account-fixture",
-		},
 		transport: spawnBridgeTransport(executable),
 	});
 
@@ -46,7 +48,6 @@ try {
 
 		const model = await client.request("models.resolve", {
 			modelId: "fixture-model",
-			testBaseUrl: server.baseUrl,
 		});
 		if (model.status !== "completed") {
 			throw new Error("Native model resolution against the fake Responses server failed");
@@ -70,7 +71,7 @@ try {
 				},
 				transportMode: "sse",
 				providerSupportsWebsockets: false,
-				testBaseUrl: server.baseUrl,
+				connection,
 			},
 			{
 				onEvent: (event) => {

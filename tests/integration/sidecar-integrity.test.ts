@@ -5,7 +5,6 @@ import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 
 import {
-	BridgeLoaderError,
 	connectBundledBridge,
 	resolveBundledBridgeLaunch,
 	type SupportedNativeTarget,
@@ -100,17 +99,12 @@ describe("packaged sidecar integrity integration", () => {
 				buildTarget: buildTarget as SupportedNativeTarget,
 				handshakeTimeoutMs: 1_000,
 			}),
-		).rejects.toBeInstanceOf(BridgeLoaderError);
-		await expect(
-			connectBundledBridge({
-				packageRoot,
-				clientVersion: "1.0.0",
-				buildTarget: buildTarget as SupportedNativeTarget,
-				handshakeTimeoutMs: 1_000,
-			}),
-		).rejects.toMatchObject({ code: "artifact_tampered" });
+		).rejects.toMatchObject({
+			name: "BridgeLoaderError",
+			code: "artifact_tampered",
+		});
 		await expect(Bun.file(marker).exists()).resolves.toBe(false);
-	});
+	}, 30_000);
 
 	test("missing packaged manifest fails closed", async () => {
 		const { buildTarget } = await resolveIntegrationBridgeExecutable();

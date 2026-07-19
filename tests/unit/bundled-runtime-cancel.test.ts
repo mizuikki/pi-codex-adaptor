@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 import { PassThrough } from "node:stream";
 
 import {
-	type BridgeAuthentication,
 	BridgeClient,
 	type BridgeTransport,
 } from "../../src/infrastructure/codex-bridge/client.ts";
@@ -164,14 +163,7 @@ class ScriptedTransport implements BridgeTransport {
 	}
 }
 
-const fixtureAuthentication = {
-	kind: "openai_api_key" as const,
-	apiKey: "sk-test-not-a-secret",
-};
-
-function createRuntime(
-	openBridge: (input: { authentication?: BridgeAuthentication }) => Promise<BridgeClient>,
-): BundledCodexRuntime {
+function createRuntime(openBridge: () => Promise<BridgeClient>): BundledCodexRuntime {
 	return new BundledCodexRuntime({
 		packageRoot: "/tmp/pi-codex-adaptor-test",
 		clientVersion: "0.0.0",
@@ -180,23 +172,19 @@ function createRuntime(
 	});
 }
 
-async function openScriptedBridge(
-	transport: ScriptedTransport,
-	input: { authentication?: BridgeAuthentication } = {},
-): Promise<BridgeClient> {
+async function openScriptedBridge(transport: ScriptedTransport): Promise<BridgeClient> {
 	return BridgeClient.connect({
 		buildTarget: "x86_64-unknown-linux-musl",
 		clientVersion: "0.0.0",
 		allowDevelopmentBuild: true,
 		transport,
-		...(input.authentication === undefined ? {} : { authentication: input.authentication }),
 	});
 }
 
 describe("cancellation and approval recovery", () => {
 	test("BundledCodexRuntime abort during approval does not send a late decision", async () => {
 		const transport = new ScriptedTransport();
-		const runtime = createRuntime((input) => openScriptedBridge(transport, input));
+		const runtime = createRuntime(() => openScriptedBridge(transport));
 		const controller = new AbortController();
 		let uiFinished = false;
 		let finishUi: (() => void) | undefined;
@@ -205,7 +193,6 @@ describe("cancellation and approval recovery", () => {
 		});
 
 		const pending = runtime.executeTool({
-			authentication: fixtureAuthentication,
 			tool: "shell_command",
 			argumentsValue: { command: "sleep 30" },
 			workdir: "/tmp",
@@ -246,11 +233,10 @@ describe("cancellation and approval recovery", () => {
 
 	test("BundledCodexRuntime late expired approval decision does not fail the next request", async () => {
 		const transport = new ScriptedTransport();
-		const runtime = createRuntime((input) => openScriptedBridge(transport, input));
+		const runtime = createRuntime(() => openScriptedBridge(transport));
 		const controller = new AbortController();
 
 		const pending = runtime.executeTool({
-			authentication: fixtureAuthentication,
 			tool: "shell_command",
 			argumentsValue: { command: "printf should-not-run" },
 			workdir: "/tmp",
@@ -274,12 +260,12 @@ describe("cancellation and approval recovery", () => {
 	test("BundledCodexRuntime discards a fatally failed client and reconnects without credential leakage", async () => {
 		const transports: ScriptedTransport[] = [];
 		let opens = 0;
-		const runtime = createRuntime(async (input) => {
+		const runtime = createRuntime(async () => {
 			opens += 1;
 			const transport = new ScriptedTransport();
 			transport.connections = opens;
 			transports.push(transport);
-			return openScriptedBridge(transport, input);
+			return openScriptedBridge(transport);
 		});
 
 		const first = await runtime.readDiagnostics();
@@ -293,7 +279,6 @@ describe("cancellation and approval recovery", () => {
 		expect(opens).toBe(2);
 		expect(JSON.stringify(second)).not.toContain("sk-");
 		expect(JSON.stringify(second)).not.toContain("Bearer");
-		expect(JSON.stringify(second)).not.toContain(fixtureAuthentication.apiKey);
 		await runtime.shutdown();
 	});
 });

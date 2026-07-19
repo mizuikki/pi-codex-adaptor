@@ -1,23 +1,18 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import type { TSchema } from "typebox";
-import {
-	type CodexApprovalRequest,
-	type CodexAuthentication,
-	type CodexRuntime,
-	resolveCodexAuthentication,
-} from "../../application/codex-runtime.ts";
+import type { CodexApprovalRequest, CodexRuntime } from "../../application/codex-runtime.ts";
 import type { ConfigurationService } from "../../application/configuration.ts";
+import type { ProviderActivationPolicy } from "../../application/provider-activation.ts";
 import { UpdatePlanUseCase } from "../../application/update-plan.ts";
-import {
-	buildToolsResolveParams,
-	OPENAI_CODEX_PI_PROVIDER,
-	parseModelResolution,
-} from "../../domain/capability.ts";
+import { buildToolsResolveParams, parseModelResolution } from "../../domain/capability.ts";
+import type { CodexConfig } from "../../domain/config.ts";
 import type { PlanUpdate } from "../../domain/plan.ts";
+import { resolveProviderActivation } from "../../domain/provider-activation.ts";
 import { requestCodexApproval } from "../../ui/terminal/approval-prompt.ts";
 import { responseItemsFromMessages } from "./codex-provider.ts";
 import { OFFICIAL_CORE_TOOL_CONTRACTS, PI_CORE_TOOL_PARAMETERS } from "./generated/core-tools.ts";
+import { assertProviderActive, resolveProviderConnection } from "./provider-connection.ts";
 
 const MANAGED_TOOLS = [
 	"update_plan",
@@ -35,42 +30,57 @@ type NativeManagedTool = Exclude<ManagedTool, "update_plan" | "image_gen.imagege
 export function registerCodexTools(
 	pi: ExtensionAPI,
 	runtime: CodexRuntime,
-	configuration: ConfigurationService,
+	configuration: Pick<ConfigurationService, "load"> &
+		Partial<Pick<ConfigurationService, "onChange">>,
+	activation: ProviderActivationPolicy,
 ): void {
 	const hiddenDispatchTools = new Set<ManagedTool>();
-	registerPlanTool(pi);
-	registerNativeTool(pi, runtime, configuration, "exec_command", "Execute command");
-	registerNativeTool(pi, runtime, configuration, "write_stdin", "Write to session");
-	registerNativeTool(pi, runtime, configuration, "shell_command", "Run shell command");
-	registerNativeTool(pi, runtime, configuration, "apply_patch", "Apply patch");
-	registerNativeTool(pi, runtime, configuration, "view_image", "View image");
-	registerImageGenerationTool(pi, runtime);
-	registerStandaloneWebTool(pi, runtime, configuration);
+	registerPlanTool(pi, activation);
+	registerNativeTool(pi, runtime, configuration, activation, "exec_command", "Execute command");
+	registerNativeTool(pi, runtime, configuration, activation, "write_stdin", "Write to session");
+	registerNativeTool(pi, runtime, configuration, activation, "shell_command", "Run shell command");
+	registerNativeTool(pi, runtime, configuration, activation, "apply_patch", "Apply patch");
+	registerNativeTool(pi, runtime, configuration, activation, "view_image", "View image");
+	registerImageGenerationTool(pi, runtime, activation);
+	registerStandaloneWebTool(pi, runtime, configuration, activation);
 
 	let activationGeneration = 0;
-	const activate = async (ctx: ExtensionContext): Promise<void> => {
+	// Last session context that owns managed tools/status. Cleared on session_shutdown.
+	let activeContext: ExtensionContext | undefined;
+	const providerActive = (
+		model: ExtensionContext["model"],
+		config: Pick<CodexConfig, "activation"> | undefined,
+	): boolean => {
+		if (config !== undefined) return resolveProviderActivation(model, config).active;
+		return activation.isActive(model);
+	};
+
+	const activate = async (ctx: ExtensionContext, configOverride?: CodexConfig): Promise<void> => {
 		const generation = ++activationGeneration;
 		const selected = ctx.model;
-		if (selected?.provider !== OPENAI_CODEX_PI_PROVIDER) {
+		if (selected === undefined || !providerActive(selected, configOverride)) {
 			hiddenDispatchTools.clear();
 			disableManagedTools(pi);
 			setStatus(ctx, undefined);
 			return;
 		}
 		try {
-			const authentication = await resolveAuthentication(ctx);
-			const config = await configuration.load();
-			const resolution = parseModelResolution(
-				await runtime.resolveModel(authentication, selected.id),
-				selected.id,
-			);
+			const config = configOverride ?? (await configuration.load());
+			// Re-check after the async load so a mid-flight onChange snapshot is authoritative.
+			if (!providerActive(selected, config)) {
+				if (generation !== activationGeneration) return;
+				hiddenDispatchTools.clear();
+				disableManagedTools(pi);
+				setStatus(ctx, undefined);
+				return;
+			}
+			const resolution = parseModelResolution(await runtime.resolveModel(selected.id), selected.id);
 			if (generation !== activationGeneration) return;
 			const model = resolution.model;
 			const toolResolution = record(
 				await runtime.resolveTools(
-					authentication,
 					buildToolsResolveParams(resolution, {
-						webSearchMode: config.openai.webSearch.mode,
+						webSearchMode: config.codex.webSearch.mode,
 						viewImage: config.tools.optional.viewImage === "auto",
 						imageGeneration: config.tools.optional.imageGeneration === "auto",
 						standaloneWebSearchExecutorAvailable: true,
@@ -134,14 +144,37 @@ export function registerCodexTools(
 		}
 	};
 
-	pi.on("session_start", (_event, ctx) => activate(ctx));
-	pi.on("model_select", (_event, ctx) => activate(ctx));
+	const remember = (ctx: ExtensionContext): Promise<void> => {
+		activeContext = ctx;
+		return activate(ctx);
+	};
+
+	// Settings save/reset/restore notify onChange with the validated snapshot. Recompute the
+	// current session surface immediately so optional tools and status match activation/config.
+	const unsubscribeConfig =
+		configuration.onChange?.((config) => {
+			const ctx = activeContext;
+			if (ctx === undefined) return;
+			return activate(ctx, config);
+		}) ?? (() => {});
+
+	pi.on("session_start", (_event, ctx) => remember(ctx));
+	pi.on("model_select", (_event, ctx) => remember(ctx));
+	pi.on("session_shutdown", () => {
+		// Drop the session context, invalidate in-flight activate work, and unsubscribe so a
+		// late save/reset/restore cannot mutate tools/status after shutdown. Matches the
+		// extension root disposing activation and shutting down the runtime on this event.
+		activationGeneration += 1;
+		activeContext = undefined;
+		unsubscribeConfig();
+	});
 }
 
 function registerStandaloneWebTool(
 	pi: ExtensionAPI,
 	runtime: CodexRuntime,
-	configuration: ConfigurationService,
+	configuration: Pick<ConfigurationService, "load">,
+	activation: ProviderActivationPolicy,
 ): void {
 	const namespace = OFFICIAL_CORE_TOOL_CONTRACTS.web;
 	const contract = namespace.tools[0];
@@ -159,7 +192,11 @@ function registerStandaloneWebTool(
 			),
 		renderResult: (result, options, theme) => renderToolResult(result, options, theme),
 		execute: async (_toolCallId, params, signal, _onUpdate, ctx) => {
-			const authentication = await resolveAuthentication(ctx);
+			const connection = await resolveProviderConnection(
+				ctx,
+				activation,
+				"Codex tools are inactive for the selected provider and API",
+			);
 			const config = await configuration.load();
 			const conversationItems = responseItemsFromMessages(
 				ctx.sessionManager.getBranch().flatMap((entry) => {
@@ -168,13 +205,13 @@ function registerStandaloneWebTool(
 				}),
 			);
 			const result = await runtime.executeTool({
-				authentication,
+				connection,
 				tool: "web.run",
 				argumentsValue: buildWebRunArguments(params, {
 					conversationItems,
 					model: ctx.model?.id,
 					requestSessionId: ctx.sessionManager.getSessionId(),
-					webSearchMode: config.openai.webSearch.mode,
+					webSearchMode: config.codex.webSearch.mode,
 				}),
 				workdir: ctx.cwd,
 				workspaceRoots: [ctx.cwd],
@@ -191,7 +228,11 @@ function registerStandaloneWebTool(
 	});
 }
 
-function registerImageGenerationTool(pi: ExtensionAPI, runtime: CodexRuntime): void {
+function registerImageGenerationTool(
+	pi: ExtensionAPI,
+	runtime: CodexRuntime,
+	activation: ProviderActivationPolicy,
+): void {
 	const namespace = OFFICIAL_CORE_TOOL_CONTRACTS.image_gen;
 	const contract = namespace.tools[0];
 	pi.registerTool({
@@ -207,10 +248,14 @@ function registerImageGenerationTool(pi: ExtensionAPI, runtime: CodexRuntime): v
 				0,
 			),
 		execute: async (_toolCallId, params, signal, _onUpdate, ctx) => {
-			const authentication = await resolveAuthentication(ctx);
+			const connection = await resolveProviderConnection(
+				ctx,
+				activation,
+				"Codex tools are inactive for the selected provider and API",
+			);
 			const argumentsValue = buildImageGenerationArguments(params, ctx);
 			const result = await runtime.executeTool({
-				authentication,
+				connection,
 				tool: "image_gen.imagegen",
 				argumentsValue,
 				workdir: ctx.cwd,
@@ -226,7 +271,7 @@ function registerImageGenerationTool(pi: ExtensionAPI, runtime: CodexRuntime): v
 	});
 }
 
-function registerPlanTool(pi: ExtensionAPI): void {
+function registerPlanTool(pi: ExtensionAPI, activation: ProviderActivationPolicy): void {
 	const contract = OFFICIAL_CORE_TOOL_CONTRACTS.update_plan;
 	pi.registerTool({
 		name: contract.name,
@@ -237,6 +282,11 @@ function registerPlanTool(pi: ExtensionAPI): void {
 		renderCall: (_args, theme) => new Text(theme.fg("toolTitle", theme.bold("update_plan")), 0, 0),
 		renderResult: (result, options, theme) => renderToolResult(result, options, theme),
 		execute: async (_toolCallId, params, _signal, _onUpdate, ctx) => {
+			assertProviderActive(
+				ctx,
+				activation,
+				"Codex tools are inactive for the selected provider and API",
+			);
 			let update: PlanUpdate | undefined;
 			const useCase = new UpdatePlanUseCase({
 				publish: (next) => {
@@ -256,7 +306,8 @@ function registerPlanTool(pi: ExtensionAPI): void {
 function registerNativeTool(
 	pi: ExtensionAPI,
 	runtime: CodexRuntime,
-	configuration: ConfigurationService,
+	configuration: Pick<ConfigurationService, "load">,
+	activation: ProviderActivationPolicy,
 	name: NativeManagedTool,
 	label: string,
 ): void {
@@ -291,11 +342,14 @@ function registerNativeTool(
 		},
 		renderResult: (result, options, theme) => renderToolResult(result, options, theme),
 		execute: async (_toolCallId, params, signal, onUpdate, ctx) => {
-			const authentication = await resolveAuthentication(ctx);
+			assertProviderActive(
+				ctx,
+				activation,
+				"Codex tools are inactive for the selected provider and API",
+			);
 			const config = await configuration.load();
 			let streamedOutput = "";
 			const result = await runtime.executeTool({
-				authentication,
 				tool: name,
 				argumentsValue: buildNativeToolArguments(name, params, config.tools.backgroundSessions),
 				workdir: workdirFrom(params, ctx.cwd),
@@ -333,14 +387,6 @@ function registerNativeTool(
 			};
 		},
 	});
-}
-
-async function resolveAuthentication(ctx: ExtensionContext): Promise<CodexAuthentication> {
-	const token = await ctx.modelRegistry.getApiKeyForProvider("openai-codex");
-	if (token === undefined || token.length === 0) {
-		throw new Error("OpenAI Codex authentication is required");
-	}
-	return resolveCodexAuthentication(token);
 }
 
 async function requestApproval(

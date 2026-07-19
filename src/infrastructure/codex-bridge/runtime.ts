@@ -1,16 +1,13 @@
-import {
-	type CodexAuthentication,
-	type CodexRuntime,
-	type CompactResponseOptions,
-	type CreateResponseOptions,
-	type CreateResponseResult,
-	type ExecuteToolOptions,
-	sameCodexAuthentication,
+import type {
+	CodexRuntime,
+	CompactResponseOptions,
+	CreateResponseOptions,
+	CreateResponseResult,
+	ExecuteToolOptions,
 } from "../../application/codex-runtime.ts";
 import { connectBundledBridge } from "./binary.ts";
 import {
 	type BridgeApprovalDecision,
-	type BridgeAuthentication,
 	type BridgeClient,
 	BridgeConnectionError,
 	BridgeRemoteError,
@@ -21,21 +18,18 @@ export interface BundledCodexRuntimeOptions {
 	packageRoot: string;
 	clientVersion: string;
 	allowDevelopmentBuild?: boolean;
-	/** Loopback-only OpenAI base URL override for integration tests. */
-	testBaseUrl?: string;
 	executable?: string;
 	buildTarget?: string;
 	/**
 	 * Optional bridge opener used by unit tests. Production always loads the
 	 * packaged or development sidecar through `connectBundledBridge`.
 	 */
-	openBridge?: (input: { authentication?: BridgeAuthentication }) => Promise<BridgeClient>;
+	openBridge?: () => Promise<BridgeClient>;
 }
 
 export class BundledCodexRuntime implements CodexRuntime {
 	readonly #options: BundledCodexRuntimeOptions;
 	#client: BridgeClient | undefined;
-	#authentication: CodexAuthentication | undefined;
 	#connecting: Promise<BridgeClient> | undefined;
 	readonly #models = new Map<string, unknown>();
 
@@ -44,15 +38,15 @@ export class BundledCodexRuntime implements CodexRuntime {
 	}
 
 	async createResponse(options: CreateResponseOptions): Promise<CreateResponseResult> {
-		const client = await this.#connect(options.authentication);
+		const client = await this.#connect();
 		try {
 			return await client.request(
 				"responses.create",
 				{
+					connection: options.connection,
 					request: options.request,
 					transportMode: options.transportMode,
 					providerSupportsWebsockets: options.providerSupportsWebsockets,
-					...testBaseUrlParams(this.#options.testBaseUrl),
 				},
 				{
 					...(options.signal === undefined ? {} : { signal: options.signal }),
@@ -66,16 +60,16 @@ export class BundledCodexRuntime implements CodexRuntime {
 	}
 
 	async compact(options: CompactResponseOptions): Promise<CreateResponseResult> {
-		const client = await this.#connect(options.authentication);
+		const client = await this.#connect();
 		try {
 			return await client.request(
 				"responses.compact",
 				{
+					connection: options.connection,
 					request: options.request,
 					implementation: options.implementation,
 					transportMode: options.transportMode,
 					providerSupportsWebsockets: options.providerSupportsWebsockets,
-					...testBaseUrlParams(this.#options.testBaseUrl),
 				},
 				options.signal === undefined ? {} : { signal: options.signal },
 			);
@@ -99,16 +93,13 @@ export class BundledCodexRuntime implements CodexRuntime {
 		}
 	}
 
-	async resolveModel(authentication: CodexAuthentication, modelId: string): Promise<unknown> {
+	async resolveModel(modelId: string): Promise<unknown> {
 		const cached = this.#models.get(modelId);
-		if (cached !== undefined && sameCodexAuthentication(this.#authentication, authentication)) {
-			return cached;
-		}
-		const client = await this.#connect(authentication);
+		if (cached !== undefined) return cached;
+		const client = await this.#connect();
 		try {
 			const result = await client.request("models.resolve", {
 				modelId,
-				...testBaseUrlParams(this.#options.testBaseUrl),
 			});
 			if (result.status !== "completed") {
 				throw new Error("Native model metadata resolution did not complete");
@@ -121,8 +112,8 @@ export class BundledCodexRuntime implements CodexRuntime {
 		}
 	}
 
-	async resolveTools(authentication: CodexAuthentication, params: unknown): Promise<unknown> {
-		const client = await this.#connect(authentication);
+	async resolveTools(params: unknown): Promise<unknown> {
+		const client = await this.#connect();
 		try {
 			const result = await client.request("tools.resolve", params);
 			if (result.status !== "completed") {
@@ -136,27 +127,24 @@ export class BundledCodexRuntime implements CodexRuntime {
 	}
 
 	async executeTool(options: ExecuteToolOptions): Promise<CreateResponseResult> {
-		const client = await this.#connect(options.authentication);
+		const client = await this.#connect();
 		try {
-			return await client.request(
-				"tools.execute",
-				buildToolsExecuteParams({
-					tool: options.tool,
-					argumentsValue: options.argumentsValue,
-					workdir: options.workdir,
-					workspaceRoots: options.workspaceRoots,
-					...(this.#options.testBaseUrl === undefined
-						? {}
-						: { testBaseUrl: this.#options.testBaseUrl }),
-				}),
-				{
-					...(options.signal === undefined ? {} : { signal: options.signal }),
-					...(options.onEvent === undefined ? {} : { onEvent: options.onEvent }),
-					onApprovalRequest: async (approval) => {
-						await this.#handleApprovalRequest(client, options, approval);
-					},
+			const params = buildToolsExecuteParams({
+				tool: options.tool,
+				argumentsValue: options.argumentsValue,
+				workdir: options.workdir,
+				workspaceRoots: options.workspaceRoots,
+			});
+			if (isNetworkTool(options.tool) && options.connection !== undefined) {
+				params.connection = options.connection;
+			}
+			return await client.request("tools.execute", params, {
+				...(options.signal === undefined ? {} : { signal: options.signal }),
+				...(options.onEvent === undefined ? {} : { onEvent: options.onEvent }),
+				onApprovalRequest: async (approval) => {
+					await this.#handleApprovalRequest(client, options, approval);
 				},
-			);
+			});
 		} catch (error) {
 			this.#discardClientIfFatal(client, error);
 			throw error;
@@ -217,51 +205,28 @@ export class BundledCodexRuntime implements CodexRuntime {
 		}
 	}
 
-	async #connect(authentication?: CodexAuthentication): Promise<BridgeClient> {
+	async #connect(): Promise<BridgeClient> {
 		if (this.#client !== undefined && !this.#client.isReady) {
 			// Fatally failed clients are discarded so the next request reconnects.
-			// Authentication is retained only in memory for the next handshake and is
-			// never written into logs or error messages.
 			this.#forgetClient();
 		}
 		if (this.#client !== undefined) {
-			if (
-				authentication !== undefined &&
-				!sameCodexAuthentication(this.#authentication, authentication)
-			) {
-				await this.#client.updateAuthentication(toBridgeAuthentication(authentication));
-				this.#authentication = authentication;
-				this.#models.clear();
-			}
 			return this.#client;
 		}
 		if (this.#connecting !== undefined) {
 			const client = await this.#connecting;
 			if (!client.isReady) {
 				this.#forgetClient();
-				return this.#connect(authentication);
-			}
-			if (
-				authentication !== undefined &&
-				!sameCodexAuthentication(this.#authentication, authentication)
-			) {
-				await client.updateAuthentication(toBridgeAuthentication(authentication));
-				this.#authentication = authentication;
-				this.#models.clear();
+				return this.#connect();
 			}
 			return client;
 		}
-		const bridgeAuthentication =
-			authentication === undefined ? undefined : toBridgeAuthentication(authentication);
 		this.#connecting =
 			this.#options.openBridge !== undefined
-				? this.#options.openBridge({
-						...(bridgeAuthentication === undefined ? {} : { authentication: bridgeAuthentication }),
-					})
+				? this.#options.openBridge()
 				: connectBundledBridge({
 						packageRoot: this.#options.packageRoot,
 						clientVersion: this.#options.clientVersion,
-						...(bridgeAuthentication === undefined ? {} : { authentication: bridgeAuthentication }),
 						...(this.#options.allowDevelopmentBuild === undefined
 							? {}
 							: { allowDevelopmentBuild: this.#options.allowDevelopmentBuild }),
@@ -274,7 +239,6 @@ export class BundledCodexRuntime implements CodexRuntime {
 					});
 		try {
 			this.#client = await this.#connecting;
-			this.#authentication = authentication;
 			return this.#client;
 		} finally {
 			this.#connecting = undefined;
@@ -294,31 +258,13 @@ export class BundledCodexRuntime implements CodexRuntime {
 
 	#forgetClient(): void {
 		this.#client = undefined;
-		this.#authentication = undefined;
 		this.#connecting = undefined;
 		this.#models.clear();
 	}
 }
 
-export function toBridgeAuthentication(authentication: CodexAuthentication): BridgeAuthentication {
-	if (authentication.kind === "oauth_bearer") {
-		return {
-			kind: "oauth_bearer",
-			token: authentication.token,
-			accountId: authentication.accountId,
-		};
-	}
-	return {
-		kind: "openai_api_key",
-		apiKey: authentication.apiKey,
-	};
-}
-
-function testBaseUrlParams(testBaseUrl: string | undefined): { testBaseUrl?: string } {
-	if (testBaseUrl === undefined || testBaseUrl.length === 0) {
-		return {};
-	}
-	return { testBaseUrl };
+function isNetworkTool(tool: string): boolean {
+	return tool === "web.run" || tool === "image_gen.imagegen";
 }
 
 function isSignalAborted(signal: AbortSignal | undefined): boolean {

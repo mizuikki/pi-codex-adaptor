@@ -3,11 +3,11 @@ import { describe, expect, test } from "bun:test";
 import piCodexAdaptor from "../../src/extension.ts";
 
 describe("extension tool smoke", () => {
-	test("registers core tools and preserves third-party active tools on a minimal Pi API", () => {
+	test("registers core tools and preserves third-party active tools on a minimal Pi API", async () => {
 		const tools: string[] = [];
 		let active = ["third_party"];
 		const events: string[] = [];
-		piCodexAdaptor({
+		await piCodexAdaptor({
 			registerCommand: () => {},
 			registerProvider: () => {},
 			registerTool: (tool: { name: string }) => {

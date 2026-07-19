@@ -1,4 +1,5 @@
 import type { CodexConfig } from "../domain/config.ts";
+import { CODEX_PI_APIS } from "../domain/provider-activation.ts";
 
 export interface DiagnosticExport {
 	path: string;
@@ -41,8 +42,9 @@ export interface DiagnosticsHostContext {
 }
 
 export interface DiagnosticsSnapshot {
-	schemaVersion: 1;
-	configSchemaVersion: 1;
+	schemaVersion: 2;
+	configSchemaVersion: 2;
+	activation: { providerCount: number; supportedApis: readonly string[] };
 	adaptor?: { version: string };
 	pi?: { version: string };
 	runtime?: { os: string; arch: string };
@@ -97,8 +99,12 @@ export function createDiagnosticsSnapshot(
 	}
 
 	const snapshot: DiagnosticsSnapshot = {
-		schemaVersion: 1,
+		schemaVersion: 2,
 		configSchemaVersion: config.schemaVersion,
+		activation: {
+			providerCount: config.activation.providers.length,
+			supportedApis: [...CODEX_PI_APIS],
+		},
 		bridge,
 		recentErrors: sanitizeRecentErrors(host.recentErrors ?? source?.recentErrors),
 	};
@@ -162,8 +168,16 @@ export function sanitizeSnapshot(snapshot: DiagnosticsSnapshot): DiagnosticsSnap
 	}
 
 	const sanitized: DiagnosticsSnapshot = {
-		schemaVersion: 1,
-		configSchemaVersion: 1,
+		schemaVersion: 2,
+		configSchemaVersion: 2,
+		activation: {
+			providerCount:
+				Number.isSafeInteger(snapshot.activation?.providerCount) &&
+				snapshot.activation.providerCount >= 0
+					? snapshot.activation.providerCount
+					: 0,
+			supportedApis: [...CODEX_PI_APIS],
+		},
 		bridge,
 		recentErrors: sanitizeRecentErrors(snapshot.recentErrors),
 	};

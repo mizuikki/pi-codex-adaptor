@@ -7,6 +7,7 @@ import {
 	createDiagnosticsSnapshot,
 	type DiagnosticsExporter,
 	type DiagnosticsSnapshot,
+	exportDiagnosticsConfirmed,
 } from "../../application/diagnostics.ts";
 import { type CodexConfig, ConfigurationError } from "../../domain/config.ts";
 import { type SettingsEffect, SettingsModel } from "./settings-model.ts";
@@ -47,6 +48,10 @@ export async function openSettingsOverlay(
 			typeof snapshot.bridge.bridgeProtocolVersion === "number"
 				? `protocol v${snapshot.bridge.bridgeProtocolVersion}`
 				: "unavailable",
+		// Keep the live model so save/reset/restore can recompute the activation route.
+		...(ctx.model === undefined
+			? {}
+			: { activationModel: { provider: ctx.model.provider, api: ctx.model.api } }),
 		...(capabilities === undefined ? {} : { capabilities }),
 	});
 	await ctx.ui.custom(
@@ -139,6 +144,9 @@ export class SettingsOverlay {
 			case "edit-auto-compact":
 				await this.#editAutoCompactTokenLimit();
 				return;
+			case "edit-providers":
+				await this.#editProviders();
+				return;
 			case "reset-defaults":
 				await this.#resetDefaults();
 				return;
@@ -182,11 +190,19 @@ export class SettingsOverlay {
 
 	async #compact(): Promise<void> {
 		await this.#runTask(async (signal) => {
+			const compactRow = this.#model.rows().find((row) => row.id === "compactNow");
+			if (compactRow?.enabled === false) {
+				this.#ctx.ui.notify(
+					compactRow.disabledReason ?? "Codex compaction is unavailable",
+					"warning",
+				);
+				return;
+			}
 			if (this.#model.state === "dirty") {
 				this.#ctx.ui.notify("Save or discard Codex settings before compaction", "warning");
 				return;
 			}
-			if (this.#model.draft.openai.compaction.mode === "off") {
+			if (this.#model.draft.codex.compaction.mode === "off") {
 				this.#ctx.ui.notify("OpenAI Codex compaction is disabled", "warning");
 				return;
 			}
@@ -236,6 +252,27 @@ export class SettingsOverlay {
 		});
 	}
 
+	async #editProviders(): Promise<void> {
+		await this.#runTask(async (signal) => {
+			const current = this.#model.draft.activation.providers.join(", ");
+			const value = await this.#ctx.ui.input("Active Pi provider ids", current);
+			if (this.#disposed || signal.aborted || value === undefined) return;
+			const providers = value.split(",").map((provider) => provider.trim());
+			if (
+				providers.length === 0 ||
+				providers.some((provider) => provider.length === 0) ||
+				new Set(providers).size !== providers.length
+			) {
+				this.#model.markError(
+					"Active providers must be unique, non-empty Pi provider ids",
+					"validation-error",
+				);
+				return;
+			}
+			this.#model.setActivationProviders(providers);
+		});
+	}
+
 	async #exportDiagnostics(): Promise<void> {
 		await this.#runTask(async (signal) => {
 			if (this.#exporter === undefined) {
@@ -255,7 +292,12 @@ export class SettingsOverlay {
 				return;
 			}
 			try {
-				const result = await this.#exporter.export(this.#diagnostics, path.trim());
+				const result = await exportDiagnosticsConfirmed(
+					this.#exporter,
+					this.#diagnostics,
+					path.trim(),
+					{ confirmed: true },
+				);
 				if (this.#disposed || signal.aborted) return;
 				this.#ctx.ui.notify(`Diagnostics exported: ${result.path} (${result.sha256})`, "info");
 			} catch {

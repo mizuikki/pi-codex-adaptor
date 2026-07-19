@@ -17,7 +17,6 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use bridge_protocol::ApprovalDecision;
 use bridge_protocol::ApprovalOperation;
 use bridge_protocol::ApprovalRequest;
-use bridge_protocol::Authentication;
 use bridge_protocol::BRIDGE_PROTOCOL_VERSION;
 use bridge_protocol::BackpressureState;
 use bridge_protocol::BridgeCapability;
@@ -30,6 +29,7 @@ use bridge_protocol::MAX_PENDING_EVENTS;
 use bridge_protocol::OFFICIAL_CODEX_TAG;
 use bridge_protocol::OFFICIAL_CODEX_VERSION;
 use bridge_protocol::OFFICIAL_SOURCE_COMMIT;
+use bridge_protocol::ProviderConnection;
 use bridge_protocol::RequestMethod;
 use bridge_protocol::ServerMessage;
 use bridge_protocol::TerminalStatus;
@@ -47,7 +47,6 @@ use codex_api::ImageGenerationRequest;
 use codex_api::ImageQuality;
 use codex_api::ImageUrl;
 use codex_api::ImagesClient;
-use codex_api::ModelsClient;
 use codex_api::Reasoning;
 use codex_api::ResponsesApiRequest;
 use codex_api::ResponsesClient;
@@ -95,7 +94,6 @@ const INPUT_CHANNEL_CAPACITY: usize = 32;
 const OUTPUT_CHANNEL_CAPACITY: usize = 64;
 const MAX_REQUEST_ID_BYTES: usize = 256;
 const MAX_REQUEST_IDS_PER_CONNECTION: usize = 65_536;
-const MAX_CREDENTIAL_BYTES: usize = 1024 * 1024;
 const MAX_SESSION_OUTPUT_BYTES: usize = codex_utils_pty::DEFAULT_OUTPUT_BYTES_CAP;
 const DEFAULT_MAX_OUTPUT_TOKENS: usize = 10_000;
 const MAX_IMAGE_SOURCE_BYTES: u64 = 64 * 1024 * 1024;
@@ -442,11 +440,10 @@ struct DiagnosticsParams {}
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ResponsesCreateParams {
+    connection: ProviderConnection,
     request: ResponsesApiRequest,
     transport_mode: ResponsesTransportMode,
     provider_supports_websockets: bool,
-    #[serde(default)]
-    test_base_url: Option<String>,
 }
 
 #[derive(Clone, Copy, Default, Deserialize)]
@@ -460,6 +457,7 @@ enum ResponsesTransportMode {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ResponsesCompactParams {
+    connection: ProviderConnection,
     request: OwnedCompactionInput,
     #[serde(default)]
     implementation: CompactionImplementation,
@@ -469,8 +467,6 @@ struct ResponsesCompactParams {
     provider_supports_websockets: bool,
     #[serde(default = "default_compaction_timeout_ms")]
     request_timeout_ms: u64,
-    #[serde(default)]
-    test_base_url: Option<String>,
 }
 
 #[derive(Clone, Copy, Default, Deserialize)]
@@ -500,8 +496,6 @@ struct OwnedCompactionInput {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ModelsResolveParams {
     model_id: String,
-    #[serde(default)]
-    test_base_url: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -549,6 +543,8 @@ struct OptionalToolCapabilities {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ToolExecuteParams {
     tool: String,
+    #[serde(default)]
+    connection: Option<ProviderConnection>,
     command: Option<String>,
     cmd: Option<String>,
     #[serde(default)]
@@ -582,8 +578,6 @@ struct ToolExecuteParams {
     num_last_images_to_include: Option<usize>,
     #[serde(alias = "recent_image_urls")]
     recent_image_urls: Option<Vec<String>>,
-    #[serde(default)]
-    test_base_url: Option<String>,
     commands: Option<Value>,
     #[serde(default, alias = "conversation_items")]
     conversation_items: Vec<ResponseItem>,
@@ -613,7 +607,6 @@ enum ConnectionControl {
 
 struct ConnectionState {
     initialized: bool,
-    authentication: Option<Arc<Authentication>>,
     seen_request_ids: HashSet<String>,
     active: HashMap<String, ActiveRequest>,
     requests: JoinSet<String>,
@@ -631,7 +624,6 @@ struct RequestTask {
     flow: Arc<FlowController>,
     output: mpsc::Sender<ServerMessage>,
     identity: Arc<BuildIdentity>,
-    authentication: Option<Arc<Authentication>>,
     approvals: Arc<Mutex<HashMap<String, oneshot::Sender<ApprovalDecision>>>>,
     sessions: Arc<NativeSessions>,
 }
@@ -639,7 +631,6 @@ struct RequestTask {
 struct DispatchContext<'a> {
     request_id: &'a str,
     identity: &'a BuildIdentity,
-    authentication: Option<Arc<Authentication>>,
     flow: &'a FlowController,
     cancellation: &'a CancellationToken,
     output: &'a mpsc::Sender<ServerMessage>,
@@ -651,7 +642,6 @@ impl ConnectionState {
     fn new(output: mpsc::Sender<ServerMessage>, identity: BuildIdentity) -> Self {
         Self {
             initialized: false,
-            authentication: None,
             seen_request_ids: HashSet::new(),
             active: HashMap::new(),
             requests: JoinSet::new(),
@@ -686,7 +676,6 @@ impl ConnectionState {
         let ClientMessage::Initialize {
             request_id,
             protocol_version,
-            authentication,
             ..
         } = message
         else {
@@ -695,7 +684,7 @@ impl ConnectionState {
                 protocol_error(
                     None,
                     "initialization_required",
-                    "the first client frame must initialize protocol v1".to_owned(),
+                    "the first client frame must initialize protocol v2".to_owned(),
                 ),
             )
             .await?;
@@ -720,16 +709,6 @@ impl ConnectionState {
             .await?;
             return Ok(ConnectionControl::Stop(None));
         }
-        if !authentication.as_ref().is_none_or(authentication_is_valid) {
-            send(
-                &self.output,
-                authentication_error(request_id, "invalid_authentication"),
-            )
-            .await?;
-            return Ok(ConnectionControl::Stop(None));
-        }
-
-        self.authentication = authentication.map(Arc::new);
         self.initialized = true;
         send(
             &self.output,
@@ -749,13 +728,6 @@ impl ConnectionState {
         match message {
             ClientMessage::Initialize { request_id, .. } => {
                 self.reject_reinitialization(request_id).await?;
-            }
-            ClientMessage::AuthenticationUpdate {
-                request_id,
-                authentication,
-            } => {
-                self.update_authentication(request_id, authentication)
-                    .await?;
             }
             ClientMessage::Request {
                 request_id,
@@ -817,25 +789,6 @@ impl ConnectionState {
         send(&self.output, message).await
     }
 
-    async fn update_authentication(
-        &mut self,
-        request_id: String,
-        authentication: Authentication,
-    ) -> io::Result<()> {
-        if !self.claim(&request_id).await? {
-            return Ok(());
-        }
-        if !authentication_is_valid(&authentication) {
-            return send(
-                &self.output,
-                authentication_error(request_id, "invalid_authentication"),
-            )
-            .await;
-        }
-        self.authentication = Some(Arc::new(authentication));
-        self.complete(request_id, json!({})).await
-    }
-
     #[allow(clippy::large_futures)]
     async fn start_request(
         &mut self,
@@ -857,7 +810,6 @@ impl ConnectionState {
         );
         let task_output = self.output.clone();
         let task_identity = Arc::clone(&self.identity);
-        let task_authentication = self.authentication.clone();
         let task_flow = Arc::clone(&flow);
         let task_approvals = Arc::clone(&self.approvals);
         let task_sessions = Arc::clone(&self.sessions);
@@ -870,7 +822,6 @@ impl ConnectionState {
                 flow: task_flow,
                 output: task_output,
                 identity: task_identity,
-                authentication: task_authentication,
                 approvals: task_approvals,
                 sessions: task_sessions,
             })
@@ -1252,7 +1203,6 @@ async fn run_request(task: RequestTask) -> String {
         flow,
         output,
         identity,
-        authentication,
         approvals,
         sessions,
     } = task;
@@ -1265,7 +1215,6 @@ async fn run_request(task: RequestTask) -> String {
         DispatchContext {
             request_id: &request_id,
             identity: &identity,
-            authentication,
             flow: &flow,
             cancellation: &cancellation,
             output: &output,
@@ -1365,7 +1314,6 @@ async fn dispatch(
     let DispatchContext {
         request_id,
         identity,
-        authentication,
         flow,
         cancellation,
         output,
@@ -1392,22 +1340,19 @@ async fn dispatch(
                 "capabilities": compiled_capabilities(),
             })))
         }
-        RequestMethod::ResponsesCreate => {
-            responses_create(params, authentication, flow, cancellation)
-                .await
-                .map(RequestSuccess::completed)
+        RequestMethod::ResponsesCreate => responses_create(params, flow, cancellation)
+            .await
+            .map(RequestSuccess::completed),
+        RequestMethod::ResponsesCompact => responses_compact(params, cancellation)
+            .await
+            .map(RequestSuccess::completed),
+        RequestMethod::ModelsResolve => {
+            models_resolve(params, cancellation).map(RequestSuccess::completed)
         }
-        RequestMethod::ResponsesCompact => responses_compact(params, authentication, cancellation)
-            .await
-            .map(RequestSuccess::completed),
-        RequestMethod::ModelsResolve => models_resolve(params, authentication, cancellation)
-            .await
-            .map(RequestSuccess::completed),
         RequestMethod::ToolsExecute => {
             tools_execute(
                 request_id,
                 params,
-                authentication,
                 flow,
                 cancellation,
                 output,
@@ -1446,7 +1391,6 @@ impl RequestSuccess {
 async fn tools_execute(
     request_id: &str,
     params: Value,
-    authentication: Option<Arc<Authentication>>,
     flow: &FlowController,
     cancellation: &CancellationToken,
     output: &mpsc::Sender<ServerMessage>,
@@ -1474,26 +1418,10 @@ async fn tools_execute(
         return apply_patch(request_id, params, output, approvals, cancellation).await;
     }
     if params.tool == "image_gen.imagegen" {
-        return image_generation(
-            request_id,
-            params,
-            authentication,
-            output,
-            approvals,
-            cancellation,
-        )
-        .await;
+        return image_generation(request_id, params, output, approvals, cancellation).await;
     }
     if params.tool == "web.run" {
-        return standalone_web_search(
-            request_id,
-            params,
-            authentication,
-            output,
-            approvals,
-            cancellation,
-        )
-        .await;
+        return standalone_web_search(request_id, params, output, approvals, cancellation).await;
     }
     if params.tool != "shell_command" && params.tool != "exec_command" {
         return Err(BridgeError {
@@ -1868,7 +1796,6 @@ async fn apply_patch(
 async fn image_generation(
     request_id: &str,
     params: ToolExecuteParams,
-    authentication: Option<Arc<Authentication>>,
     output: &mpsc::Sender<ServerMessage>,
     approvals: &Arc<Mutex<HashMap<String, oneshot::Sender<ApprovalDecision>>>>,
     cancellation: &CancellationToken,
@@ -2025,9 +1952,11 @@ async fn image_generation(
     .await?;
     ensure_not_cancelled(cancellation)?;
 
-    let authentication = require_authentication(authentication)?;
-    let base_url_override = sanitize_test_base_url(params.test_base_url)?;
-    let connection = api::connect(authentication.as_ref(), base_url_override)?;
+    let connection = params
+        .connection
+        .as_ref()
+        .ok_or_else(|| invalid_params("image_gen.imagegen requires a provider connection"))?;
+    let connection = api::connect(connection)?;
     let client = ImagesClient::new(
         connection.transport,
         connection.provider,
@@ -2105,7 +2034,6 @@ async fn image_generation(
 async fn standalone_web_search(
     request_id: &str,
     params: ToolExecuteParams,
-    authentication: Option<Arc<Authentication>>,
     output: &mpsc::Sender<ServerMessage>,
     approvals: &Arc<Mutex<HashMap<String, oneshot::Sender<ApprovalDecision>>>>,
     cancellation: &CancellationToken,
@@ -2163,9 +2091,11 @@ async fn standalone_web_search(
         }),
         max_output_tokens: Some(10_000),
     };
-    let authentication = require_authentication(authentication)?;
-    let base_url_override = sanitize_test_base_url(params.test_base_url)?;
-    let connection = api::connect(authentication.as_ref(), base_url_override)?;
+    let connection = params
+        .connection
+        .as_ref()
+        .ok_or_else(|| invalid_params("web.run requires a provider connection"))?;
+    let connection = api::connect(connection)?;
     let client = SearchClient::new(
         connection.transport,
         connection.provider,
@@ -3264,62 +3194,16 @@ fn serialize_tool_specs(specs: &[ToolSpec]) -> Result<Vec<Value>, BridgeError> {
     })
 }
 
-fn official_openai_provider_capabilities(provider: &codex_api::Provider) -> Value {
-    let supports_remote_compaction = provider.name == "OpenAI"
-        || codex_api::is_azure_responses_provider(&provider.name, Some(&provider.base_url));
-    // Matches official ModelProviderInfo::create_openai_provider and
-    // ProviderCapabilities::default for the OpenAI first-party provider.
-    json!({
-        "name": provider.name,
-        "supportsWebsockets": provider.name == "OpenAI",
-        "supportsRemoteCompaction": supports_remote_compaction,
-        "namespaceTools": true,
-        "imageGeneration": true,
-        "hostedWebSearch": true,
-    })
-}
-
-async fn models_resolve(
+fn models_resolve(
     params: Value,
-    authentication: Option<Arc<Authentication>>,
-    cancellation: &CancellationToken,
+    _cancellation: &CancellationToken,
 ) -> Result<Value, RequestFailure> {
     let parsed = serde_json::from_value::<ModelsResolveParams>(params)
         .map_err(|_| invalid_params("models.resolve parameters are invalid"))?;
     if parsed.model_id.is_empty() || parsed.model_id.len() > 256 {
         return Err(invalid_params("models.resolve modelId is invalid").into());
     }
-    let authentication = require_authentication(authentication)?;
-    let base_url_override = sanitize_test_base_url(parsed.test_base_url)?;
-    let connection = api::connect(authentication.as_ref(), base_url_override)?;
-    let provider = official_openai_provider_capabilities(&connection.provider);
-    let request_url = ModelsClient::<codex_api::ReqwestTransport>::request_url(
-        &connection.provider,
-        env!("CARGO_PKG_VERSION"),
-    );
-    let client = ModelsClient::new(
-        connection.transport,
-        connection.provider,
-        connection.authentication,
-    );
-    let (models, etag) = await_with_cancellation(
-        cancellation,
-        client.list_models(request_url, HeaderMap::default()),
-    )
-    .await?
-    .map_err(|error| api::map_api_error(&error))?;
-    let Some(model) = models
-        .into_iter()
-        .find(|model| model.slug == parsed.model_id)
-    else {
-        return Err(BridgeError {
-            category: ErrorCategory::CapabilityError,
-            code: "model_metadata_unavailable".to_owned(),
-            message: "OpenAI did not return metadata for the requested model".to_owned(),
-            retryable: false,
-        }
-        .into());
-    };
+    let model = crate::models::resolve_model(&parsed.model_id);
     let shell_surface = match model.shell_type {
         ConfigShellToolType::UnifiedExec => "unified-exec",
         ConfigShellToolType::Default
@@ -3330,25 +3214,29 @@ async fn models_resolve(
     let auto_compact_token_limit = model.auto_compact_token_limit();
     Ok(json!({
         "model": model,
-        "etag": etag,
         "shellSurface": shell_surface,
         "autoCompactTokenLimit": auto_compact_token_limit,
-        "provider": provider,
+        "provider": {
+            "name": "OpenAI",
+            "supportsWebsockets": true,
+            "supportsRemoteCompaction": true,
+            "namespaceTools": true,
+            "imageGeneration": true,
+            "hostedWebSearch": true,
+        },
     }))
 }
 
 async fn responses_create(
     params: Value,
-    authentication: Option<Arc<Authentication>>,
     flow: &FlowController,
     cancellation: &CancellationToken,
 ) -> Result<Value, RequestFailure> {
     let mut parsed = serde_json::from_value::<ResponsesCreateParams>(params)
         .map_err(|_| invalid_params("responses.create parameters are invalid"))?;
     parsed.request.stream = true;
-    let authentication = require_authentication(authentication)?;
-    let base_url_override = sanitize_test_base_url(parsed.test_base_url)?;
-    let connection = api::connect(authentication.as_ref(), base_url_override)?;
+    let connection = api::connect(&parsed.connection)?;
+    let websocket_connect_timeout = connection.websocket_connect_timeout;
     let mut response = await_with_cancellation(
         cancellation,
         Box::pin(start_response_stream(
@@ -3356,6 +3244,7 @@ async fn responses_create(
             parsed.transport_mode,
             parsed.provider_supports_websockets,
             connection,
+            websocket_connect_timeout,
         )),
     )
     .await??;
@@ -3394,6 +3283,7 @@ async fn start_response_stream(
     transport_mode: ResponsesTransportMode,
     provider_supports_websockets: bool,
     connection: api::ApiConnection,
+    websocket_connect_timeout: Duration,
 ) -> Result<codex_api::ResponseStream, BridgeError> {
     if matches!(transport_mode, ResponsesTransportMode::Auto) && provider_supports_websockets {
         let websocket = ResponsesWebsocketClient::new(
@@ -3401,15 +3291,17 @@ async fn start_response_stream(
             Arc::clone(&connection.authentication),
         );
         let factory = HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault);
-        if let Ok(websocket) = websocket
-            .connect(
+        if let Ok(Ok(websocket)) = tokio::time::timeout(
+            websocket_connect_timeout,
+            websocket.connect(
                 &factory,
                 HeaderMap::default(),
                 HeaderMap::default(),
                 None,
                 None,
-            )
-            .await
+            ),
+        )
+        .await
         {
             return websocket
                 .stream_request(
@@ -3434,7 +3326,6 @@ async fn start_response_stream(
 
 async fn responses_compact(
     params: Value,
-    authentication: Option<Arc<Authentication>>,
     cancellation: &CancellationToken,
 ) -> Result<Value, RequestFailure> {
     let parsed = serde_json::from_value::<ResponsesCompactParams>(params)
@@ -3446,9 +3337,7 @@ async fn responses_compact(
         .into());
     }
     let implementation = parsed.implementation;
-    let authentication = require_authentication(authentication)?;
-    let base_url_override = sanitize_test_base_url(parsed.test_base_url)?;
-    let connection = api::connect(authentication.as_ref(), base_url_override)?;
+    let connection = api::connect(&parsed.connection)?;
     ensure_not_cancelled(cancellation)?;
     if matches!(implementation, CompactionImplementation::RemoteV2) {
         let timeout = Duration::from_millis(parsed.request_timeout_ms);
@@ -3533,6 +3422,7 @@ async fn responses_compact_remote(
         text: request.text,
         client_metadata: None,
     };
+    let websocket_connect_timeout = connection.websocket_connect_timeout;
     let mut stream = await_with_cancellation(
         cancellation,
         Box::pin(start_response_stream(
@@ -3540,6 +3430,7 @@ async fn responses_compact_remote(
             transport_mode,
             provider_supports_websockets,
             connection,
+            websocket_connect_timeout,
         )),
     )
     .await??;
@@ -3601,17 +3492,6 @@ async fn responses_compact_remote(
     }))
 }
 
-fn require_authentication(
-    authentication: Option<Arc<Authentication>>,
-) -> Result<Arc<Authentication>, BridgeError> {
-    authentication.ok_or_else(|| BridgeError {
-        category: ErrorCategory::AuthenticationError,
-        code: "authentication_required".to_owned(),
-        message: "OpenAI authentication is required for this operation".to_owned(),
-        retryable: false,
-    })
-}
-
 fn compaction_timeout() -> BridgeError {
     BridgeError {
         category: ErrorCategory::NativeToolError,
@@ -3619,39 +3499,6 @@ fn compaction_timeout() -> BridgeError {
         message: "the compaction request timed out".to_owned(),
         retryable: true,
     }
-}
-
-fn sanitize_test_base_url(value: Option<String>) -> Result<Option<String>, BridgeError> {
-    let Some(url) = value else {
-        return Ok(None);
-    };
-    if is_loopback_http_base_url(&url) {
-        Ok(Some(url))
-    } else {
-        Err(invalid_params(
-            "testBaseUrl must be an HTTP loopback base URL",
-        ))
-    }
-}
-
-fn is_loopback_http_base_url(value: &str) -> bool {
-    if value.contains('@') || value.len() > 512 || !value.is_ascii() {
-        return false;
-    }
-    let lower = value.to_ascii_lowercase();
-    for prefix in ["http://127.0.0.1", "http://localhost", "http://[::1]"] {
-        if lower == prefix {
-            return true;
-        }
-        if let Some(rest) = lower.strip_prefix(prefix) {
-            return rest.is_empty()
-                || rest.starts_with(':')
-                || rest.starts_with('/')
-                || rest.starts_with('?')
-                || rest.starts_with('#');
-        }
-    }
-    false
 }
 
 fn invalid_params(message: &str) -> BridgeError {
@@ -3836,33 +3683,6 @@ fn protocol_error(request_id: Option<String>, code: &str, message: String) -> Se
     }
 }
 
-fn authentication_is_valid(authentication: &Authentication) -> bool {
-    let credential = match authentication {
-        Authentication::OauthBearer { token, account_id } => {
-            if account_id.is_empty() || account_id.len() > 256 {
-                return false;
-            }
-            token
-        }
-        Authentication::OpenaiApiKey { api_key } => api_key,
-    };
-    !credential.is_empty()
-        && credential.len() <= MAX_CREDENTIAL_BYTES
-        && api::authentication_headers_are_valid(authentication)
-}
-
-fn authentication_error(request_id: String, code: &str) -> ServerMessage {
-    ServerMessage::Error {
-        request_id: Some(request_id),
-        error: BridgeError {
-            category: ErrorCategory::AuthenticationError,
-            code: code.to_owned(),
-            message: "bridge authentication is invalid".to_owned(),
-            retryable: false,
-        },
-    }
-}
-
 fn invalid_request_id() -> ServerMessage {
     protocol_error(
         None,
@@ -3994,7 +3814,7 @@ mod tests {
 
     fn initialization() -> &'static str {
         concat!(
-            "{\"type\":\"initialize\",\"requestId\":\"init-1\",\"protocolVersion\":1,",
+            "{\"type\":\"initialize\",\"requestId\":\"init-1\",\"protocolVersion\":2,",
             "\"client\":{\"name\":\"contract-test\",\"version\":\"0.0.0\"}}\n"
         )
     }
@@ -4029,7 +3849,7 @@ mod tests {
     #[tokio::test]
     async fn rejects_a_protocol_version_mismatch_as_fatal() {
         let messages = run_server(concat!(
-            "{\"type\":\"initialize\",\"requestId\":\"init-1\",\"protocolVersion\":2,",
+            "{\"type\":\"initialize\",\"requestId\":\"init-1\",\"protocolVersion\":1,",
             "\"client\":{\"name\":\"contract-test\",\"version\":\"0.0.0\"}}\n",
             "{\"type\":\"shutdown\",\"requestId\":\"shutdown-1\"}\n"
         ))
@@ -4044,7 +3864,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn responses_require_in_memory_authentication() {
+    async fn responses_require_request_scoped_connection() {
         let (output, _messages) = mpsc::channel(1);
         let flow = FlowController::new("request-1".to_owned(), output);
         let error = responses_create(
@@ -4053,16 +3873,15 @@ mod tests {
                 "transportMode": "sse",
                 "providerSupportsWebsockets": false,
             }),
-            None,
             &flow,
             &CancellationToken::new(),
         )
         .await
-        .expect_err("missing authentication should fail");
+        .expect_err("missing connection should fail");
 
         assert!(matches!(
             error,
-            RequestFailure::Bridge(error) if error.code == "authentication_required"
+            RequestFailure::Bridge(error) if error.code == "invalid_params"
         ));
     }
 
@@ -4089,9 +3908,8 @@ mod tests {
                     "request": fixture_response_request(),
                     "transportMode": "sse",
                     "providerSupportsWebsockets": false,
-                    "testBaseUrl": base_url,
+                    "connection": fixture_connection(base_url),
                 }),
-                Some(fixture_authentication()),
                 &request_flow,
                 &request_cancellation,
             )
@@ -4134,14 +3952,20 @@ mod tests {
     #[tokio::test]
     async fn falls_back_from_official_websocket_connect_to_sse() {
         let (base_url, server) = spawn_websocket_fallback_server().await;
-        let connection = api::connect(fixture_authentication().as_ref(), Some(base_url))
+        let connection = api::connect(&fixture_connection(base_url))
             .expect("fixture API connection should build");
         let request = serde_json::from_value(fixture_response_request())
             .expect("fixture response request should be typed");
-        let mut response =
-            start_response_stream(request, ResponsesTransportMode::Auto, true, connection)
-                .await
-                .expect("SSE fallback should connect");
+        let websocket_connect_timeout = connection.websocket_connect_timeout;
+        let mut response = start_response_stream(
+            request,
+            ResponsesTransportMode::Auto,
+            true,
+            connection,
+            websocket_connect_timeout,
+        )
+        .await
+        .expect("SSE fallback should connect");
 
         let mut completed = false;
         while let Some(event) = response.rx_event.recv().await {
@@ -4177,9 +4001,8 @@ mod tests {
                     "text": null
                 },
                 "requestTimeoutMs": 1_000,
-                "testBaseUrl": base_url,
+                "connection": fixture_connection(base_url),
             }),
-            Some(fixture_authentication()),
             &CancellationToken::new(),
         )
         .await
@@ -4224,9 +4047,8 @@ mod tests {
                     "text": null
                 },
                 "requestTimeoutMs": 1_000,
-                "testBaseUrl": base_url,
+                "connection": fixture_connection(base_url),
             }),
-            Some(fixture_authentication()),
             &CancellationToken::new(),
         )
         .await
@@ -4258,9 +4080,8 @@ mod tests {
                     "text": null
                 },
                 "requestTimeoutMs": 25,
-                "testBaseUrl": base_url,
+                "connection": fixture_connection(base_url),
             }),
-            Some(fixture_authentication()),
             &CancellationToken::new(),
         )
         .await
@@ -4272,56 +4093,23 @@ mod tests {
         server.abort();
     }
 
-    #[tokio::test]
-    async fn resolves_exact_official_model_metadata_without_name_guessing() {
-        let body = json!({
-            "models": [{
-                "slug": "fixture-model",
-                "display_name": "Fixture model",
-                "description": null,
-                "default_reasoning_level": null,
-                "supported_reasoning_levels": [],
-                "shell_type": "unified_exec",
-                "visibility": "list",
-                "supported_in_api": true,
-                "priority": 1,
-                "availability_nux": null,
-                "upgrade": null,
-                "base_instructions": "",
-                "supports_reasoning_summaries": false,
-                "support_verbosity": false,
-                "default_verbosity": null,
-                "apply_patch_tool_type": null,
-                "truncation_policy": { "mode": "bytes", "limit": 10_000 },
-                "supports_parallel_tool_calls": false,
-                "context_window": 100_000,
-                "auto_compact_token_limit": 95_000,
-                "experimental_supported_tools": [],
-            }]
-        })
-        .to_string();
-        let (base_url, server) = spawn_fixture_http_server(body).await;
+    #[test]
+    fn resolves_pinned_model_metadata_without_network_or_authentication() {
         let result = models_resolve(
-            json!({
-                "modelId": "fixture-model",
-                "testBaseUrl": base_url,
-            }),
-            Some(fixture_authentication()),
+            json!({ "modelId": "unknown-fixture-model" }),
             &CancellationToken::new(),
         )
-        .await
         .expect("model metadata should resolve");
 
-        assert_eq!(result["model"]["slug"], "fixture-model");
-        assert_eq!(result["shellSurface"], "unified-exec");
-        assert_eq!(result["autoCompactTokenLimit"], 90_000);
+        assert_eq!(result["model"]["slug"], "unknown-fixture-model");
+        assert_eq!(result["shellSurface"], "shell-command");
+        assert_eq!(result["model"]["used_fallback_model_metadata"], Value::Null);
         assert_eq!(result["provider"]["name"], "OpenAI");
         assert_eq!(result["provider"]["supportsWebsockets"], true);
         assert_eq!(result["provider"]["supportsRemoteCompaction"], true);
         assert_eq!(result["provider"]["namespaceTools"], true);
         assert_eq!(result["provider"]["imageGeneration"], true);
         assert_eq!(result["provider"]["hostedWebSearch"], true);
-        server.await.expect("fixture server should join");
     }
 
     #[test]
@@ -4386,7 +4174,6 @@ mod tests {
                     "workspaceRoots": [workspace.to_string_lossy()],
                     "timeoutMs": 10_000,
                 }),
-                None,
                 &task_flow,
                 &task_cancellation,
                 &task_flow.output,
@@ -4449,7 +4236,6 @@ mod tests {
                 "yield_time_ms": 250,
                 "login": false,
             }),
-            None,
             &flow,
             &cancellation,
             &flow.output,
@@ -4505,7 +4291,6 @@ mod tests {
                             "yield_time_ms": 1_000,
                             "login": false,
                         }),
-                        None,
                         &task_flow,
                         &task_cancellation,
                         &task_flow.output,
@@ -4571,7 +4356,6 @@ mod tests {
                     "workdir": task_workspace,
                     "workspaceRoots": [task_workspace_root],
                 }),
-                None,
                 &task_flow,
                 &task_cancellation,
                 &task_flow.output,
@@ -4642,7 +4426,6 @@ mod tests {
                     "tty": false,
                     "yield_time_ms": 250,
                 }),
-                None,
                 &task_flow,
                 &task_cancellation,
                 &task_flow.output,
@@ -4677,7 +4460,6 @@ mod tests {
                     "chars": "fixture\n",
                     "yield_time_ms": process_test_timeout_ms(),
                 }),
-                None,
                 &write_flow,
                 &write_cancellation,
                 &write_flow.output,
@@ -4747,7 +4529,6 @@ mod tests {
                     "detail": "original",
                     "workspaceRoots": [task_workspace],
                 }),
-                None,
                 &task_flow,
                 &task_cancellation,
                 &task_flow.output,
@@ -4815,9 +4596,8 @@ mod tests {
                     "prompt": "fixture image",
                     "workdir": task_workspace,
                     "workspaceRoots": [task_workspace],
-                    "testBaseUrl": base_url,
+                    "connection": fixture_connection(base_url),
                 }),
-                Some(fixture_authentication()),
                 &task_flow,
                 &task_cancellation,
                 &task_flow.output,
@@ -4880,9 +4660,8 @@ mod tests {
                     "webSearchMode": "indexed",
                     "workdir": task_workspace,
                     "workspaceRoots": [task_workspace],
-                    "testBaseUrl": base_url,
+                    "connection": fixture_connection(base_url),
                 }),
-                Some(fixture_authentication()),
                 &task_flow,
                 &task_cancellation,
                 &task_flow.output,
@@ -5153,7 +4932,6 @@ mod tests {
                 "workspaceRoots": [workspace],
                 "timeoutMs": 1_000,
             }),
-            None,
             &flow,
             &cancellation,
             &flow.output,
@@ -5204,7 +4982,6 @@ mod tests {
                             "workspaceRoots": [workspace],
                             "timeoutMs": 1_000,
                         }),
-                        None,
                         &task_flow,
                         &task_cancellation,
                         &task_flow.output,
@@ -5264,7 +5041,6 @@ mod tests {
                     "max_output_tokens": 2,
                     "login": false,
                 }),
-                None,
                 &task_flow,
                 &task_cancellation,
                 &task_flow.output,
@@ -5320,7 +5096,6 @@ mod tests {
                     "timeoutMs": 60_000,
                     "login": false,
                 }),
-                None,
                 &task_flow,
                 &task_cancellation,
                 &task_flow.output,
@@ -5390,7 +5165,6 @@ mod tests {
                     "workdir": task_workspace,
                     "workspaceRoots": [task_workspace_root],
                 }),
-                None,
                 &task_flow,
                 &task_cancellation,
                 &task_flow.output,
@@ -5459,7 +5233,6 @@ mod tests {
                     "workdir": task_workspace,
                     "workspaceRoots": [task_workspace_root],
                 }),
-                None,
                 &task_flow,
                 &task_cancellation,
                 &task_flow.output,
@@ -5667,9 +5440,8 @@ mod tests {
                         "prompt": "fixture image",
                         "workdir": task_workspace,
                         "workspaceRoots": [task_workspace],
-                        "testBaseUrl": base_url,
+                        "connection": fixture_connection(base_url),
                     }),
-                    Some(fixture_authentication()),
                     &task_flow,
                     &task_cancellation,
                     &task_flow.output,
@@ -5756,9 +5528,8 @@ mod tests {
                     "referencedImagePaths": [task_image],
                     "workdir": task_workspace,
                     "workspaceRoots": [task_workspace],
-                    "testBaseUrl": base_url,
+                    "connection": fixture_connection(base_url),
                 }),
-                Some(fixture_authentication()),
                 &task_flow,
                 &task_cancellation,
                 &task_flow.output,
@@ -5855,7 +5626,6 @@ mod tests {
                     "timeoutMs": 1_000,
                     "login": false,
                 }),
-                None,
                 &task_flow,
                 &task_cancellation,
                 &task_flow.output,
@@ -5912,7 +5682,6 @@ mod tests {
                     "detail": "original",
                     "workspaceRoots": [task_workspace],
                 }),
-                None,
                 &task_flow,
                 &task_cancellation,
                 &task_flow.output,
@@ -5974,7 +5743,6 @@ mod tests {
                     "yield_time_ms": 250,
                     "login": false,
                 }),
-                None,
                 &task_flow,
                 &task_cancellation,
                 &task_flow.output,
@@ -5999,7 +5767,6 @@ mod tests {
                 "chars": "",
                 "yield_time_ms": 50,
             }),
-            None,
             &flow,
             &cancellation,
             &flow.output,
@@ -6069,7 +5836,6 @@ mod tests {
                         "yield_time_ms": 250,
                         "login": false,
                     }),
-                    None,
                     &task_flow,
                     &task_cancellation,
                     &task_flow.output,
@@ -6102,7 +5868,6 @@ mod tests {
                         "chars": format!("{task_secret}\n"),
                         "yield_time_ms": 5_000,
                     }),
-                    None,
                     &write_flow,
                     &write_cancellation,
                     &write_flow.output,
@@ -6206,7 +5971,6 @@ mod tests {
                     "yield_time_ms": 250,
                     "login": false,
                 }),
-                None,
                 &task_flow,
                 &task_cancellation,
                 &task_flow.output,
@@ -6238,7 +6002,6 @@ mod tests {
                     "chars": "",
                     "yield_time_ms": 30_000,
                 }),
-                None,
                 &poll_flow,
                 &poll_token,
                 &poll_flow.output,
@@ -6301,7 +6064,6 @@ mod tests {
                     "yield_time_ms": 250,
                     "login": false,
                 }),
-                None,
                 &task_flow,
                 &task_cancellation,
                 &task_flow.output,
@@ -6442,7 +6204,6 @@ mod tests {
                         "yield_time_ms": 250,
                         "login": false,
                     }),
-                    None,
                     &task_flow,
                     &task_cancellation,
                     &task_flow.output,
@@ -6565,7 +6326,6 @@ mod tests {
                     "yield_time_ms": 250,
                     "login": false,
                 }),
-                None,
                 &task_flow,
                 &task_cancellation,
                 &task_flow.output,
@@ -6728,7 +6488,6 @@ mod tests {
                     "workdir": task_workdir,
                     "workspaceRoots": [task_workdir],
                 }),
-                None,
                 &task_flow,
                 &task_cancellation,
                 &task_flow.output,
@@ -6816,7 +6575,6 @@ mod tests {
                     "workdir": workspace,
                     "workspaceRoots": [workspace],
                 }),
-                None,
                 &flow,
                 &cancellation,
                 &flow.output,
@@ -6839,10 +6597,19 @@ mod tests {
         let _ = tokio::fs::remove_dir_all(outside).await;
     }
 
-    fn fixture_authentication() -> Arc<Authentication> {
-        Arc::new(Authentication::OpenaiApiKey {
-            api_key: "not-a-credential".to_owned(),
-        })
+    fn fixture_connection(base_url: String) -> ProviderConnection {
+        ProviderConnection {
+            provider_id: "fixture-provider".to_owned(),
+            base_url,
+            headers: std::collections::BTreeMap::new(),
+            authentication: bridge_protocol::ProviderAuthentication::Bearer {
+                token: "not-a-credential".to_owned(),
+            },
+            account_id: None,
+            max_retries: Some(0),
+            timeout_ms: Some(10_000),
+            websocket_connect_timeout_ms: Some(10_000),
+        }
     }
 
     fn fixture_response_request() -> Value {
@@ -7053,7 +6820,6 @@ mod tests {
                     "workspaceRoots": [workspace.to_string_lossy()],
                     "timeoutMs": 10_000,
                 }),
-                None,
                 &task_flow,
                 &task_cancellation,
                 &task_flow.output,
@@ -7110,7 +6876,6 @@ mod tests {
                     "workspaceRoots": [workspace.to_string_lossy()],
                     "timeoutMs": 10_000,
                 }),
-                None,
                 &task_flow,
                 &task_cancellation,
                 &task_flow.output,
@@ -7359,9 +7124,9 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_malformed_secret_bearing_frames_with_stable_safe_messages() {
-        let secret = "sk-super-secret-credential-value";
+        let secret = "fixture-secret-sentinel";
         let malformed = format!(
-            "{{\"type\":\"initialize\",\"requestId\":\"init-1\",\"protocolVersion\":1,\"client\":{{\"name\":\"contract-test\",\"version\":\"0.0.0\"}},\"authentication\":{{\"kind\":\"openai_api_key\",\"apiKey\":\"{secret}\"}},\"extra\":true}}\n"
+            "{{\"type\":\"initialize\",\"requestId\":\"init-1\",\"protocolVersion\":2,\"client\":{{\"name\":\"contract-test\",\"version\":\"0.0.0\"}},\"extra\":true,\"opaque\":\"{secret}\"}}\n"
         );
         let messages = run_server(&malformed).await;
         assert_eq!(messages.len(), 1);
@@ -7370,9 +7135,9 @@ mod tests {
         };
         assert!(request_id.is_none());
         assert_eq!(error.code, "invalid_frame");
-        assert_eq!(error.message, "bridge frame does not match protocol v1");
+        assert_eq!(error.message, "bridge frame does not match protocol v2");
         assert!(!error.message.contains(secret));
-        assert!(!error.message.contains("openai_api_key"));
+        assert!(!error.message.contains("fixture-secret-sentinel"));
         assert!(!format!("{messages:?}").contains(secret));
     }
 

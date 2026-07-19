@@ -2,14 +2,14 @@ import { describe, expect, test } from "bun:test";
 import type { ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 
 import type {
-	CodexAuthentication,
 	CodexRuntime,
 	CreateResponseOptions,
 	CreateResponseResult,
 	ExecuteToolOptions,
 } from "../../src/application/codex-runtime.ts";
 import type { ConfigurationService } from "../../src/application/configuration.ts";
-import { createDefaultConfig } from "../../src/domain/config.ts";
+import { ProviderActivationPolicy } from "../../src/application/provider-activation.ts";
+import { type CodexConfig, createDefaultConfig } from "../../src/domain/config.ts";
 import { registerCodexTools } from "../../src/integration/pi/codex-tools.ts";
 
 type EventHandler = (event: unknown, ctx: ExtensionContext) => unknown | Promise<unknown>;
@@ -27,7 +27,7 @@ class FixtureRuntime implements CodexRuntime {
 		throw new Error("fixture compaction is not configured");
 	}
 
-	async resolveModel(_authentication: CodexAuthentication, modelId: string): Promise<unknown> {
+	async resolveModel(modelId: string): Promise<unknown> {
 		return {
 			model: {
 				slug: modelId,
@@ -38,7 +38,7 @@ class FixtureRuntime implements CodexRuntime {
 			shellSurface: this.shellSurface,
 			autoCompactTokenLimit: 90_000,
 			provider: {
-				name: "OpenAI",
+				name: "Codex",
 				supportsWebsockets: true,
 				supportsRemoteCompaction: true,
 				namespaceTools: true,
@@ -48,7 +48,7 @@ class FixtureRuntime implements CodexRuntime {
 		};
 	}
 
-	async resolveTools(_authentication: CodexAuthentication, params: unknown): Promise<unknown> {
+	async resolveTools(params: unknown): Promise<unknown> {
 		const root = params as Record<string, unknown>;
 		const provider = root.provider as Record<string, unknown>;
 		const standalone = root.standaloneWebSearch as Record<string, unknown>;
@@ -78,7 +78,17 @@ class FixtureRuntime implements CodexRuntime {
 
 	async executeTool(options: ExecuteToolOptions): Promise<CreateResponseResult> {
 		this.execution = options;
-		if (options.tool === "view_image" || options.tool === "image_gen.imagegen") {
+		if (options.tool === "view_image") {
+			const detail = options.argumentsValue.detail === "original" ? "original" : "high";
+			return {
+				status: "completed",
+				result: {
+					image_url: "data:image/png;base64,ZmFrZS1pbWFnZQ==",
+					detail,
+				},
+			};
+		}
+		if (options.tool === "image_gen.imagegen") {
 			return {
 				status: "completed",
 				result: {
@@ -110,8 +120,29 @@ function fixtureToken(): string {
 	return `header.${payload}.signature`;
 }
 
-function configuration(): ConfigurationService {
-	return { load: async () => createDefaultConfig() } as ConfigurationService;
+type TestConfigurationService = ConfigurationService & {
+	config: CodexConfig;
+	publish(config: CodexConfig): Promise<void>;
+};
+
+function configuration(initial = createDefaultConfig()): TestConfigurationService {
+	let current = initial;
+	const listeners = new Set<(config: CodexConfig) => void | Promise<void>>();
+	const service: TestConfigurationService = {
+		get config() {
+			return current;
+		},
+		load: async () => current,
+		onChange: (listener: (config: CodexConfig) => void | Promise<void>) => {
+			listeners.add(listener);
+			return () => listeners.delete(listener);
+		},
+		async publish(config: CodexConfig) {
+			current = config;
+			await Promise.all([...listeners].map((listener) => Promise.resolve(listener(config))));
+		},
+	} as unknown as TestConfigurationService;
+	return service;
 }
 
 function context(provider = "openai-codex"): {
@@ -124,7 +155,7 @@ function context(provider = "openai-codex"): {
 			model: {
 				id: "fixture-model",
 				provider,
-				api: "fixture-api",
+				api: "openai-codex-responses",
 				name: "Fixture",
 				baseUrl: "https://invalid.example",
 				reasoning: true,
@@ -137,7 +168,7 @@ function context(provider = "openai-codex"): {
 			hasUI: false,
 			mode: "print",
 			modelRegistry: {
-				getApiKeyForProvider: async () => fixtureToken(),
+				getApiKeyAndHeaders: async () => ({ ok: true, apiKey: fixtureToken(), headers: {} }),
 			},
 			ui: {
 				setWidget: (key: string, value: string[] | undefined) => widgets.set(key, value),
@@ -174,6 +205,7 @@ describe("Pi core tool activation", () => {
 			} as never,
 			runtime,
 			configuration(),
+			new ProviderActivationPolicy(configuration()),
 		);
 
 		expect([...tools.keys()]).toEqual([
@@ -215,6 +247,7 @@ describe("Pi core tool activation", () => {
 			} as never,
 			runtime,
 			configuration(),
+			new ProviderActivationPolicy(configuration()),
 		);
 		const { ctx, widgets } = context();
 		const plan = await tools
@@ -240,7 +273,6 @@ describe("Pi core tool activation", () => {
 				ctx,
 			);
 		expect(runtime.execution).toEqual({
-			authentication: expect.any(Object),
 			tool: "exec_command",
 			workdir: "/workspace",
 			workspaceRoots: ["/workspace"],
@@ -259,15 +291,26 @@ describe("Pi core tool activation", () => {
 			.get("view_image")
 			?.execute(
 				"image-call",
-				{ path: "/workspace/fixture.png" } as never,
+				{ path: "/workspace/fixture.png", detail: "original" } as never,
 				undefined,
 				undefined,
 				ctx,
 			);
+		expect(tools.get("view_image")?.parameters).toMatchObject({
+			additionalProperties: false,
+			properties: {
+				detail: { type: "string", enum: ["high", "original"] },
+			},
+			required: ["path"],
+		});
+		expect(runtime.execution).toMatchObject({
+			tool: "view_image",
+			argumentsValue: { path: "/workspace/fixture.png", detail: "original" },
+		});
 		expect(image?.content).toEqual([
 			{ type: "image", mimeType: "image/png", data: "ZmFrZS1pbWFnZQ==" },
 		]);
-		expect(image?.details).toEqual({ status: "completed", detail: "high" });
+		expect(image?.details).toEqual({ status: "completed", detail: "original" });
 
 		const generated = await tools
 			.get("image_gen.imagegen")
@@ -302,6 +345,7 @@ describe("Pi core tool activation", () => {
 			} as never,
 			runtime,
 			configuration(),
+			new ProviderActivationPolicy(configuration()),
 		);
 		const { ctx } = context();
 		(ctx.sessionManager as { getEntries: () => unknown[] }).getEntries = () => [
@@ -339,6 +383,7 @@ describe("Pi core tool activation", () => {
 			} as never,
 			runtime,
 			configuration(),
+			new ProviderActivationPolicy(configuration()),
 		);
 		await handlers.get("session_start")?.[0]?.({ type: "session_start" }, context().ctx);
 		expect(active).toContain("exec_command");
@@ -375,6 +420,7 @@ describe("Pi core tool activation", () => {
 			} as never,
 			runtime,
 			configuration(),
+			new ProviderActivationPolicy(configuration()),
 		);
 		const { ctx } = context();
 		(ctx as { hasUI: boolean }).hasUI = true;
@@ -398,7 +444,7 @@ describe("Pi core tool activation", () => {
 		expect(runtime.approvalDecision).toBe("decline");
 	});
 
-	test("strips model-injected testBaseUrl and unknown execution fields", async () => {
+	test("strips model-injected provider connection and unknown execution fields", async () => {
 		const runtime = new FixtureRuntime();
 		const tools = new Map<string, ToolDefinition>();
 		registerCodexTools(
@@ -410,6 +456,7 @@ describe("Pi core tool activation", () => {
 			} as never,
 			runtime,
 			configuration(),
+			new ProviderActivationPolicy(configuration()),
 		);
 		const { ctx } = context();
 		await tools.get("exec_command")?.execute(
@@ -418,8 +465,11 @@ describe("Pi core tool activation", () => {
 				cmd: "printf fixture",
 				shell: "/bin/bash",
 				workdir: "/workspace",
-				testBaseUrl: "http://127.0.0.1:9/v1",
-				test_base_url: "http://127.0.0.1:9/v1",
+				connection: {
+					providerId: "model-injected",
+					baseUrl: "http://127.0.0.1:9/v1",
+					authentication: { kind: "bearer", token: "model-injected" },
+				},
 				env: { AUTHORIZATION: "Bearer model-injected" },
 				authorization: "Bearer model-injected",
 			} as never,
@@ -432,8 +482,7 @@ describe("Pi core tool activation", () => {
 			shell: "/bin/bash",
 			allow_background_sessions: true,
 		});
-		expect(runtime.execution?.argumentsValue).not.toHaveProperty("testBaseUrl");
-		expect(runtime.execution?.argumentsValue).not.toHaveProperty("test_base_url");
+		expect(runtime.execution?.argumentsValue).not.toHaveProperty("connection");
 		expect(runtime.execution?.argumentsValue).not.toHaveProperty("env");
 		expect(runtime.execution?.argumentsValue).not.toHaveProperty("authorization");
 		expect(JSON.stringify(runtime.execution?.argumentsValue)).not.toContain("Authorization");
@@ -443,7 +492,11 @@ describe("Pi core tool activation", () => {
 			"imagegen-call",
 			{
 				prompt: "fixture image",
-				testBaseUrl: "http://127.0.0.1:9/v1",
+				connection: {
+					providerId: "model-injected",
+					baseUrl: "http://127.0.0.1:9/v1",
+					authentication: { kind: "bearer", token: "model-injected" },
+				},
 				extra: "drop-me",
 			} as never,
 			undefined,
@@ -451,6 +504,152 @@ describe("Pi core tool activation", () => {
 			ctx,
 		);
 		expect(runtime.execution?.argumentsValue).toEqual({ prompt: "fixture image" });
-		expect(runtime.execution?.argumentsValue).not.toHaveProperty("testBaseUrl");
+		expect(runtime.execution?.argumentsValue).not.toHaveProperty("connection");
+	});
+
+	test("recomputes managed tools immediately after configuration save", async () => {
+		const runtime = new FixtureRuntime();
+		const handlers = new Map<string, EventHandler[]>();
+		const tools = new Map<string, ToolDefinition>();
+		let active = ["third_party"];
+		const status = new Map<string, string | undefined>();
+		const service = configuration();
+		registerCodexTools(
+			{
+				registerTool: (tool: ToolDefinition) => tools.set(tool.name, tool),
+				on: (event: string, handler: EventHandler) => {
+					handlers.set(event, [...(handlers.get(event) ?? []), handler]);
+				},
+				getActiveTools: () => active,
+				setActiveTools: (next: string[]) => {
+					active = next;
+				},
+			} as never,
+			runtime,
+			service,
+			new ProviderActivationPolicy(service),
+		);
+
+		const { ctx } = context();
+		(ctx.ui as { setStatus?: (key: string, text: string | undefined) => void }).setStatus = (
+			key,
+			text,
+		) => status.set(key, text);
+
+		await handlers.get("session_start")?.[0]?.({ type: "session_start" }, ctx);
+		expect(active).toContain("view_image");
+		expect(active).toContain("image_gen.imagegen");
+		expect(status.get("codex-adaptor")).toContain("unified-exec");
+
+		// Successful settings save/reset/restore publishes the validated snapshot via onChange.
+		await service.publish({
+			...service.config,
+			tools: {
+				...service.config.tools,
+				optional: { viewImage: "off", imageGeneration: "off" },
+			},
+			codex: {
+				...service.config.codex,
+				webSearch: { mode: "disabled" },
+			},
+			ui: { status: false },
+		});
+
+		expect(active).toEqual([
+			"third_party",
+			"update_plan",
+			"apply_patch",
+			"exec_command",
+			"write_stdin",
+		]);
+		expect(active).not.toContain("view_image");
+		expect(active).not.toContain("image_gen.imagegen");
+		expect(status.get("codex-adaptor")).toBeUndefined();
+	});
+
+	test("disables managed tools when activation providers no longer include the model", async () => {
+		const runtime = new FixtureRuntime();
+		const handlers = new Map<string, EventHandler[]>();
+		const tools = new Map<string, ToolDefinition>();
+		let active = ["third_party"];
+		const service = configuration();
+		const policy = new ProviderActivationPolicy(service);
+		registerCodexTools(
+			{
+				registerTool: (tool: ToolDefinition) => tools.set(tool.name, tool),
+				on: (event: string, handler: EventHandler) => {
+					handlers.set(event, [...(handlers.get(event) ?? []), handler]);
+				},
+				getActiveTools: () => active,
+				setActiveTools: (next: string[]) => {
+					active = next;
+				},
+			} as never,
+			runtime,
+			service,
+			policy,
+		);
+
+		const { ctx } = context();
+		await handlers.get("session_start")?.[0]?.({ type: "session_start" }, ctx);
+		expect(active).toContain("update_plan");
+		expect(policy.isActive(ctx.model)).toBe(true);
+
+		await service.publish({
+			...service.config,
+			activation: { providers: ["custom-codex"] },
+		});
+
+		expect(policy.isActive(ctx.model)).toBe(false);
+		expect(active).toEqual(["third_party"]);
+	});
+
+	test("ignores configuration callbacks after session_shutdown", async () => {
+		const runtime = new FixtureRuntime();
+		const handlers = new Map<string, EventHandler[]>();
+		const tools = new Map<string, ToolDefinition>();
+		let active = ["third_party"];
+		const status = new Map<string, string | undefined>();
+		const service = configuration();
+		registerCodexTools(
+			{
+				registerTool: (tool: ToolDefinition) => tools.set(tool.name, tool),
+				on: (event: string, handler: EventHandler) => {
+					handlers.set(event, [...(handlers.get(event) ?? []), handler]);
+				},
+				getActiveTools: () => active,
+				setActiveTools: (next: string[]) => {
+					active = next;
+				},
+			} as never,
+			runtime,
+			service,
+			new ProviderActivationPolicy(service),
+		);
+
+		const { ctx } = context();
+		(ctx.ui as { setStatus?: (key: string, text: string | undefined) => void }).setStatus = (
+			key,
+			text,
+		) => status.set(key, text);
+
+		await handlers.get("session_start")?.[0]?.({ type: "session_start" }, ctx);
+		expect(active).toContain("view_image");
+
+		await handlers.get("session_shutdown")?.[0]?.({ type: "session_shutdown" }, ctx);
+		const toolsAfterShutdown = [...active];
+		const statusAfterShutdown = status.get("codex-adaptor");
+
+		await service.publish({
+			...service.config,
+			tools: {
+				...service.config.tools,
+				optional: { viewImage: "off", imageGeneration: "off" },
+			},
+			ui: { status: false },
+		});
+
+		expect(active).toEqual(toolsAfterShutdown);
+		expect(status.get("codex-adaptor")).toBe(statusAfterShutdown);
 	});
 });

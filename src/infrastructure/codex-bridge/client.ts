@@ -13,9 +13,6 @@ import {
 	verifyHandshake,
 } from "./protocol.ts";
 
-export type BridgeAuthentication = NonNullable<
-	Extract<ClientMessage, { type: "initialize" }>["authentication"]
->;
 export type BridgeRequestMethod = Extract<ClientMessage, { type: "request" }>["method"];
 export type BridgeTerminalStatus = Extract<ServerMessage, { type: "result" }>["status"];
 export type BridgeApprovalRequest = Extract<
@@ -54,7 +51,6 @@ export interface BridgeTransport {
 export interface BridgeClientOptions {
 	buildTarget: string;
 	clientVersion: string;
-	authentication?: BridgeAuthentication;
 	allowDevelopmentBuild?: boolean;
 	expectedBuildSourceCommit?: string;
 	handshakeTimeoutMs?: number;
@@ -194,26 +190,6 @@ export class BridgeClient {
 		}
 	}
 
-	async updateAuthentication(
-		authentication: BridgeAuthentication,
-		options: BridgeControlRequestOptions = {},
-	): Promise<void> {
-		const result = await this.#controlRequest(
-			(requestId) => ({
-				type: "authentication_update",
-				requestId,
-				authentication,
-			}),
-			options,
-		);
-		if (result.status !== "completed") {
-			throw new BridgeConnectionError(
-				"protocol_failure",
-				"Bridge authentication update did not complete",
-			);
-		}
-	}
-
 	async decideApproval(
 		approvalId: string,
 		decision: BridgeApprovalDecision,
@@ -325,16 +301,11 @@ export class BridgeClient {
 		}, timeoutMs);
 
 		try {
-			const authentication =
-				this.#options.authentication === undefined
-					? {}
-					: { authentication: this.#options.authentication };
 			await this.#write({
 				type: "initialize",
 				requestId,
 				protocolVersion: BRIDGE_PROTOCOL_VERSION,
 				client: { name: "pi-codex-adaptor", version: this.#options.clientVersion },
-				...authentication,
 			});
 			await handshake;
 			this.#ready = true;

@@ -3,7 +3,7 @@ import { createReadStream } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
-import { type BridgeAuthentication, BridgeClient, spawnBridgeTransport } from "./client.ts";
+import { BridgeClient, spawnBridgeTransport } from "./client.ts";
 import {
 	nativeTargetFor,
 	SUPPORTED_NATIVE_TARGETS,
@@ -42,7 +42,6 @@ export interface VerifiedPackagedBridgeArtifact {
 export interface ConnectBundledBridgeOptions {
 	packageRoot: string;
 	clientVersion: string;
-	authentication?: BridgeAuthentication;
 	allowDevelopmentBuild?: boolean;
 	expectedBuildSourceCommit?: string;
 	handshakeTimeoutMs?: number;
@@ -147,7 +146,6 @@ export async function connectBundledBridge(
 		buildTarget: target,
 		clientVersion: options.clientVersion,
 		transport: spawnBridgeTransport(resolved.executable),
-		...(options.authentication === undefined ? {} : { authentication: options.authentication }),
 		...(options.allowDevelopmentBuild === undefined
 			? {}
 			: { allowDevelopmentBuild: options.allowDevelopmentBuild }),

@@ -4,8 +4,9 @@ Pi packages execute with the user's full permissions. This project therefore tre
 provenance, explicit authorization, and diagnostic redaction as product requirements.
 
 - TypeScript builds `tools.execute` params from an adaptor-owned allowlist. Model tool arguments are
-  never spread into the bridge request, and the test-only `testBaseUrl` override may only come from
-  host runtime options so injected base URLs cannot receive Authorization headers.
+  never spread into the bridge request. Provider connections are attached only to Responses,
+  Search, and image-generation requests; shell, PTY, patch, plan, and local image operations stay
+  credential-free.
 - Official shell tool schemas still expose the `shell` parameter, but native execution host-resolves
   only real supported shells from fixed system installation directories, rejects
   workspace-relative or attacker-created executables such as `./bash` or `/tmp/bash`, rejects
@@ -31,7 +32,11 @@ provenance, explicit authorization, and diagnostic redaction as product requirem
   process CWD, then enforces workspace-root containment before approval and file reads.
 - Approval details prefer workspace-relative paths when a representation under a supplied root is
   sufficient, while retaining inspectable command and file summaries.
-- Credentials are delivered through bounded stdin protocol frames, never argv or persisted config.
+- Credentials are delivered through bounded stdin request frames, never argv or persisted config.
+- Provider connection timeouts are bounded. Finite `timeoutMs` and `websocketConnectTimeoutMs`
+  values are limited to 24 hours. The only exception is Pi's disabled HTTP idle-timeout sentinel
+  `2147483647` on `timeoutMs`, which is an explicit unbounded stream-idle mapping rather than an
+  open-ended numeric range. Arbitrary values above the 24-hour bound remain rejected.
 - Prompts, messages, credentials, complete headers, absolute user paths, account data, and opaque
   compaction items are excluded from logs and default diagnostics.
 - Responses transport is implemented only by pinned official native modules. TypeScript does not add
@@ -70,7 +75,7 @@ checks for the release layout.
 locale, temporary directories, proxy settings, and TLS trust roots are preserved. Proxy URLs that
 contain userinfo credentials are rejected before spawn without exposing their values. Other
 credential-bearing variables are removed so OAuth and API credentials can arrive only through
-bounded stdin `initialize` and `authentication_update` frames.
+bounded stdin request-scoped provider connections.
 
 ## Log redaction
 

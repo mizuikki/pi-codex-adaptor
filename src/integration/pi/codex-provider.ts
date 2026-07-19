@@ -9,19 +9,21 @@ import {
 	type ToolCall,
 } from "@earendil-works/pi-ai";
 
-import { type CodexRuntime, resolveCodexAuthentication } from "../../application/codex-runtime.ts";
+import type { CodexRuntime } from "../../application/codex-runtime.ts";
 import { CodexCompactionStore } from "../../application/compaction.ts";
 import type { ConfigurationService } from "../../application/configuration.ts";
+import type { ProviderActivationPolicy } from "../../application/provider-activation.ts";
 import {
 	buildToolsResolveParams,
 	CapabilityError,
 	parseModelResolution,
-	requireOpenAiCodexProvider,
 } from "../../domain/capability.ts";
+import { createProviderConnection } from "./provider-connection.ts";
 
 export function createCodexStreamSimple(
 	runtime: CodexRuntime,
 	configuration: ConfigurationService,
+	activation: ProviderActivationPolicy,
 	compactions = new CodexCompactionStore(),
 ): (
 	model: Model<string>,
@@ -30,7 +32,16 @@ export function createCodexStreamSimple(
 ) => AssistantMessageEventStream {
 	return (model, context, options) => {
 		const stream = createAssistantMessageEventStream();
-		void runResponse(stream, runtime, configuration, compactions, model, context, options);
+		void runResponse(
+			stream,
+			runtime,
+			configuration,
+			compactions,
+			activation,
+			model,
+			context,
+			options,
+		);
 		return stream;
 	};
 }
@@ -40,6 +51,7 @@ async function runResponse(
 	runtime: CodexRuntime,
 	configuration: ConfigurationService,
 	compactions: CodexCompactionStore,
+	activation: ProviderActivationPolicy,
 	model: Model<string>,
 	context: Context,
 	options: SimpleStreamOptions | undefined,
@@ -47,22 +59,19 @@ async function runResponse(
 	const output = createOutput(model);
 	stream.push({ type: "start", partial: output });
 	try {
-		const token = options?.apiKey;
-		if (token === undefined || token.length === 0) {
-			throw new Error("OpenAI Codex authentication is required");
+		if (!activation.isActive(model)) {
+			throw new CapabilityError(
+				"inactive_provider",
+				"Codex dispatch is inactive for the selected provider and API",
+			);
 		}
+		const connection = createProviderConnection(model, options);
 		const config = await configuration.load();
-		const authentication = resolveCodexAuthentication(token);
-		requireOpenAiCodexProvider(model.provider);
-		const resolution = parseModelResolution(
-			await runtime.resolveModel(authentication, model.id),
-			model.id,
-		);
+		const resolution = parseModelResolution(await runtime.resolveModel(model.id), model.id);
 		const toolResolution = record(
 			await runtime.resolveTools(
-				authentication,
 				buildToolsResolveParams(resolution, {
-					webSearchMode: config.openai.webSearch.mode,
+					webSearchMode: config.codex.webSearch.mode,
 					viewImage: config.tools.optional.viewImage === "auto",
 					imageGeneration: config.tools.optional.imageGeneration === "auto",
 					standaloneWebSearchExecutorAvailable: true,
@@ -76,7 +85,7 @@ async function runResponse(
 			model,
 			context,
 			options,
-			config.openai,
+			config.codex,
 			officialTools,
 			compactions,
 		);
@@ -84,10 +93,13 @@ async function runResponse(
 		if (replacement !== undefined) request = replacement;
 		const state = new ResponseState(output, stream, model);
 		const result = await runtime.createResponse({
-			authentication,
+			connection,
 			request,
-			transportMode: config.openai.transport.mode,
-			providerSupportsWebsockets: resolution.provider.supportsWebsockets,
+			transportMode: config.codex.transport.mode,
+			providerSupportsWebsockets: supportsProviderWebsockets(
+				model,
+				resolution.provider.supportsWebsockets,
+			),
 			...(options?.signal === undefined ? {} : { signal: options.signal }),
 			onEvent: (event) => state.accept(event),
 		});
@@ -111,6 +123,15 @@ async function runResponse(
 		stream.push({ type: "error", reason: output.stopReason, error: output });
 		stream.end();
 	}
+}
+
+export function supportsProviderWebsockets(
+	model: Pick<Model<string>, "provider">,
+	metadataSupportsWebsockets: boolean,
+): boolean {
+	// Custom Pi providers may reuse official model metadata while exposing only SSE.
+	// The native bridge can use WebSocket transport only for the official provider.
+	return model.provider === "openai-codex" && metadataSupportsWebsockets;
 }
 
 class ResponseState {

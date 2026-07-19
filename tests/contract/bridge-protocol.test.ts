@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { Compile } from "typebox/compile";
 
 import {
 	BRIDGE_PROTOCOL_VERSION,
@@ -9,16 +10,17 @@ import {
 	decodeServerFrame,
 	encodeClientMessage,
 	MAX_FRAME_BYTES,
+	ProviderConnectionSchema,
 	ServerFrameDecoder,
 	verifyHandshake,
 } from "../../src/infrastructure/codex-bridge/protocol.ts";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 
-describe("bridge protocol v1", () => {
+describe("bridge protocol v2", () => {
 	test("decodes every native server contract frame", async () => {
 		const fixture = await readFile(
-			resolve(repositoryRoot, "fixtures/bridge-protocol/server-v1.jsonl"),
+			resolve(repositoryRoot, "fixtures/bridge-protocol/server-v2.jsonl"),
 			"utf8",
 		);
 		const messages = fixture.trimEnd().split("\n").map(decodeServerFrame);
@@ -86,7 +88,7 @@ describe("bridge protocol v1", () => {
 
 	test("decodes arbitrarily chunked process output", async () => {
 		const fixture = await readFile(
-			resolve(repositoryRoot, "fixtures/bridge-protocol/server-v1.jsonl"),
+			resolve(repositoryRoot, "fixtures/bridge-protocol/server-v2.jsonl"),
 		);
 		const decoder = new ServerFrameDecoder();
 		const messages = [];
@@ -108,7 +110,7 @@ describe("bridge protocol v1", () => {
 
 	test("advertises approval decisions in decline, cancel, allow_once order", async () => {
 		const fixture = await readFile(
-			resolve(repositoryRoot, "fixtures/bridge-protocol/server-v1.jsonl"),
+			resolve(repositoryRoot, "fixtures/bridge-protocol/server-v2.jsonl"),
 			"utf8",
 		);
 		const approval = fixture
@@ -125,7 +127,7 @@ describe("bridge protocol v1", () => {
 	});
 
 	test("rejects secret-bearing malformed frames without echoing contents", () => {
-		const secret = "sk-super-secret-credential-value";
+		const secret = "fixture-secret-sentinel";
 
 		try {
 			decodeServerFrame(
@@ -136,14 +138,14 @@ describe("bridge protocol v1", () => {
 			expect(error).toBeInstanceOf(BridgeProtocolError);
 			expect(String(error)).not.toContain(secret);
 			expect((error as BridgeProtocolError).message).toBe(
-				"Bridge frame does not match protocol v1",
+				"Bridge frame does not match protocol v2",
 			);
 		}
 	});
 
 	test("verifies every immutable handshake field", async () => {
 		const fixture = await readFile(
-			resolve(repositoryRoot, "fixtures/bridge-protocol/server-v1.jsonl"),
+			resolve(repositoryRoot, "fixtures/bridge-protocol/server-v2.jsonl"),
 			"utf8",
 		);
 		const message = decodeServerFrame(fixture.split("\n")[0] ?? "");
@@ -182,5 +184,24 @@ describe("bridge protocol v1", () => {
 		});
 		expect(new TextDecoder().decode(nonEmpty)).toContain('"data":"sample input"');
 		expect(new TextDecoder().decode(empty)).toContain('"data":""');
+	});
+
+	test("provider connection timeoutMs accepts finite bounds and Pi's disabled sentinel", () => {
+		const validator = Compile(ProviderConnectionSchema);
+		const base = {
+			providerId: "fixture-provider",
+			baseUrl: "https://example.invalid/v1",
+			headers: {},
+			authentication: { kind: "none" as const },
+		};
+
+		expect(validator.Check({ ...base, timeoutMs: 1 })).toBe(true);
+		expect(validator.Check({ ...base, timeoutMs: 86_400_000 })).toBe(true);
+		expect(validator.Check({ ...base, timeoutMs: 2_147_483_647 })).toBe(true);
+		expect(validator.Check({ ...base, timeoutMs: 0 })).toBe(false);
+		expect(validator.Check({ ...base, timeoutMs: 86_400_001 })).toBe(false);
+		expect(validator.Check({ ...base, timeoutMs: 2_147_483_646 })).toBe(false);
+		expect(validator.Check({ ...base, timeoutMs: 2_147_483_648 })).toBe(false);
+		expect(validator.Check({ ...base, websocketConnectTimeoutMs: 2_147_483_647 })).toBe(false);
 	});
 });

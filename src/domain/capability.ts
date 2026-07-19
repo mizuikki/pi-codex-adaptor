@@ -1,8 +1,5 @@
 import type { ShellSurface, WebSearchMode } from "./config.ts";
 
-/** Pi provider id that may activate OpenAI Codex capabilities. */
-export const OPENAI_CODEX_PI_PROVIDER = "openai-codex";
-
 /**
  * Official OpenAI provider capability upper bounds returned by models.resolve.
  * Callers may disable more features through configuration, but must not invent
@@ -27,7 +24,7 @@ export interface ResolvedModelCapability {
 export type CompactionImplementation = "remote_v2" | "compact_endpoint";
 
 export type CapabilityErrorCode =
-	| "unsupported_provider"
+	| "inactive_provider"
 	| "model_metadata_unavailable"
 	| "provider_capability_unavailable"
 	| "compaction_unsupported";
@@ -52,19 +49,6 @@ export interface ToolsResolveHostOptions {
 	standaloneWebSearchExecutorAvailable: boolean;
 	allowLoginShell?: boolean;
 	execPermissionApprovalsEnabled?: boolean;
-}
-
-/**
- * Reject third-party Pi providers. OpenAI Codex metadata is only meaningful for
- * the openai-codex provider surface.
- */
-export function requireOpenAiCodexProvider(provider: string | undefined): void {
-	if (provider !== OPENAI_CODEX_PI_PROVIDER) {
-		throw new CapabilityError(
-			"unsupported_provider",
-			"OpenAI Codex capabilities are unavailable for third-party providers",
-		);
-	}
 }
 
 /**

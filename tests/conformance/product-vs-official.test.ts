@@ -224,10 +224,6 @@ describe("product vs pinned official conformance", () => {
 				clientVersion: "conformance",
 				allowDevelopmentBuild: true,
 				transport: spawnBridgeTransport(executable),
-				authentication: {
-					kind: "openai_api_key",
-					apiKey: fixtureApiKey,
-				},
 			});
 			try {
 				const productEvents: unknown[] = [];
@@ -248,7 +244,12 @@ describe("product vs pinned official conformance", () => {
 						},
 						transportMode: "sse",
 						providerSupportsWebsockets: false,
-						testBaseUrl: productServer.baseUrl,
+						connection: {
+							providerId: "fixture-provider",
+							baseUrl: productServer.baseUrl,
+							headers: {},
+							authentication: { kind: "bearer", token: fixtureApiKey },
+						},
 					},
 					{
 						onEvent: (event) => {
@@ -428,6 +429,7 @@ function fixtureModel(shellType = "disabled"): Record<string, unknown> {
 		support_verbosity: false,
 		default_verbosity: null,
 		apply_patch_tool_type: "freeform",
+		supports_image_detail_original: true,
 		truncation_policy: { mode: "bytes", limit: 10_000 },
 		supports_parallel_tool_calls: false,
 		experimental_supported_tools: [],

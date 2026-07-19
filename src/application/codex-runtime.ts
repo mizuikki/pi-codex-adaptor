@@ -1,47 +1,5 @@
-/**
- * In-memory OpenAI credentials derived from the Pi provider secret.
- *
- * OAuth bearer values are only produced for JWTs that carry the official
- * ChatGPT account claim. Any other non-empty credential is treated as an API
- * key. Credential values must never appear in errors, logs, or diagnostics.
- */
-export type CodexAuthentication =
-	| {
-			kind: "oauth_bearer";
-			token: string;
-			accountId: string;
-	  }
-	| {
-			kind: "openai_api_key";
-			apiKey: string;
-	  };
-
 /** Official JWT claim used by OpenAI ChatGPT account tokens. */
 export const OFFICIAL_ACCOUNT_CLAIM = "https://api.openai.com/auth";
-
-/**
- * Derive the bridge authentication variant from a Pi provider credential.
- *
- * Empty credentials fail closed. Valid JWTs with the official account claim
- * become OAuth bearer auth; every other non-empty value becomes an API key.
- */
-export function resolveCodexAuthentication(credential: string): CodexAuthentication {
-	if (credential.length === 0) {
-		throw new Error("OpenAI Codex authentication is required");
-	}
-	const accountId = extractAccountId(credential);
-	if (accountId !== undefined) {
-		return {
-			kind: "oauth_bearer",
-			token: credential,
-			accountId,
-		};
-	}
-	return {
-		kind: "openai_api_key",
-		apiKey: credential,
-	};
-}
 
 /**
  * Read the official ChatGPT account id from a JWT credential.
@@ -73,23 +31,6 @@ export function extractAccountId(credential: string): string | undefined {
 	}
 }
 
-/** Compare two authentication values without logging either credential. */
-export function sameCodexAuthentication(
-	current: CodexAuthentication | undefined,
-	next: CodexAuthentication,
-): boolean {
-	if (current === undefined || current.kind !== next.kind) {
-		return false;
-	}
-	if (current.kind === "oauth_bearer" && next.kind === "oauth_bearer") {
-		return current.token === next.token && current.accountId === next.accountId;
-	}
-	if (current.kind === "openai_api_key" && next.kind === "openai_api_key") {
-		return current.apiKey === next.apiKey;
-	}
-	return false;
-}
-
 function decodeBase64Url(value: string): string | undefined {
 	try {
 		const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
@@ -108,7 +49,7 @@ function record(value: unknown): Record<string, unknown> | undefined {
 }
 
 export interface CreateResponseOptions {
-	authentication: CodexAuthentication;
+	connection: CodexProviderConnection;
 	request: unknown;
 	transportMode: "auto" | "sse";
 	providerSupportsWebsockets: boolean;
@@ -122,7 +63,7 @@ export interface CreateResponseResult {
 }
 
 export interface CompactResponseOptions {
-	authentication: CodexAuthentication;
+	connection: CodexProviderConnection;
 	request: unknown;
 	implementation: "remote_v2" | "compact_endpoint";
 	transportMode: "auto" | "sse";
@@ -141,7 +82,7 @@ export interface CodexApprovalRequest {
 export type CodexApprovalDecision = CodexApprovalRequest["availableDecisions"][number];
 
 export interface ExecuteToolOptions {
-	authentication: CodexAuthentication;
+	connection?: CodexProviderConnection;
 	tool: string;
 	argumentsValue: Record<string, unknown>;
 	workdir: string;
@@ -157,8 +98,22 @@ export interface CodexRuntime {
 	createResponse(options: CreateResponseOptions): Promise<CreateResponseResult>;
 	compact(options: CompactResponseOptions): Promise<CreateResponseResult>;
 	readDiagnostics?(): Promise<unknown>;
-	resolveModel(authentication: CodexAuthentication, modelId: string): Promise<unknown>;
-	resolveTools(authentication: CodexAuthentication, params: unknown): Promise<unknown>;
+	resolveModel(modelId: string): Promise<unknown>;
+	resolveTools(params: unknown): Promise<unknown>;
 	executeTool(options: ExecuteToolOptions): Promise<CreateResponseResult>;
 	shutdown(): Promise<void>;
+}
+
+export type CodexProviderAuthentication = { kind: "bearer"; token: string } | { kind: "none" };
+
+/** Immutable request-scoped provider details passed to native network operations. */
+export interface CodexProviderConnection {
+	readonly providerId: string;
+	readonly baseUrl: string;
+	readonly headers: Readonly<Record<string, string>>;
+	readonly authentication: CodexProviderAuthentication;
+	readonly accountId?: string;
+	readonly maxRetries?: number;
+	readonly timeoutMs?: number;
+	readonly websocketConnectTimeoutMs?: number;
 }

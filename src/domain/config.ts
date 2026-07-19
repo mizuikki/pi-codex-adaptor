@@ -10,7 +10,8 @@ export type CompactionConfig =
 	| { mode: "auto"; autoCompactTokenLimit: "model" | number };
 
 export interface CodexConfig {
-	schemaVersion: 1;
+	schemaVersion: 2;
+	activation: { providers: string[] };
 	tools: {
 		backgroundSessions: boolean;
 		optional: {
@@ -18,7 +19,7 @@ export interface CodexConfig {
 			imageGeneration: AutoOrOff;
 		};
 	};
-	openai: {
+	codex: {
 		serviceTier: ServiceTier;
 		verbosity: Verbosity;
 		transport: { mode: TransportMode };
@@ -61,10 +62,7 @@ export class ConfigurationError extends Error {
 export interface ConfigCapabilityContext {
 	/** Positive model context-window size when known from verified metadata. */
 	contextWindow?: number;
-	/**
-	 * Verified model auto-compact threshold. Use `null` when metadata is present but has no limit.
-	 * Leave undefined when model metadata is unavailable.
-	 */
+	/** Verified model auto-compact threshold. Null means metadata has no limit. */
 	modelAutoCompactTokenLimit?: number | null;
 	/** Bridge capability identifiers from handshake or diagnostics. */
 	bridgeCapabilities?: readonly string[];
@@ -72,7 +70,7 @@ export interface ConfigCapabilityContext {
 	shellSurface?: ShellSurface;
 	/** Whether the active provider supports WebSocket transport. */
 	providerSupportsWebsockets?: boolean;
-	/** Whether the active provider can use RemoteCompactionV2. */
+	/** Whether the active provider supports RemoteCompactionV2. */
 	remoteCompactionV2?: boolean;
 	/** Whether the compact endpoint is available. */
 	compactEndpoint?: boolean;
@@ -90,12 +88,13 @@ export interface ConfigSettingEvaluation {
 
 export function createDefaultConfig(): CodexConfig {
 	return {
-		schemaVersion: 1,
+		schemaVersion: 2,
+		activation: { providers: ["openai-codex"] },
 		tools: {
 			backgroundSessions: true,
 			optional: { viewImage: "auto", imageGeneration: "auto" },
 		},
-		openai: {
+		codex: {
 			serviceTier: "default",
 			verbosity: "low",
 			transport: { mode: "auto" },
@@ -109,45 +108,39 @@ export function createDefaultConfig(): CodexConfig {
 export function parseConfig(value: unknown): CodexConfig {
 	const issues: ConfigurationIssue[] = [];
 	const root = record(value, "$", issues);
-	if (root === undefined) {
-		throw new ConfigurationError(issues);
-	}
-	exactKeys(root, ["schemaVersion", "tools", "openai", "ui"], "$", issues);
+	if (root === undefined) throw new ConfigurationError(issues);
+	exactKeys(root, ["schemaVersion", "activation", "tools", "codex", "ui"], "$", issues);
 
-	const schemaVersion = literal(root.schemaVersion, 1, "schemaVersion", issues);
+	const schemaVersion = literal(root.schemaVersion, 2, "schemaVersion", issues);
+	const activation = parseActivation(root.activation, issues);
 	const tools = parseTools(root.tools, issues);
-	const openai = parseOpenAi(root.openai, issues);
+	const codex = parseCodex(root.codex, issues);
 	const ui = parseUi(root.ui, issues);
 	if (
 		issues.length > 0 ||
 		schemaVersion === undefined ||
+		activation === undefined ||
 		tools === undefined ||
-		openai === undefined ||
+		codex === undefined ||
 		ui === undefined
 	) {
 		throw new ConfigurationError(issues);
 	}
-	return { schemaVersion, tools, openai, ui };
+	return { schemaVersion, activation, tools, codex, ui };
 }
 
-/**
- * Schema-parse a draft and apply capability-aware save gates for the supplied context.
- */
+/** Schema-parse a draft and apply capability-aware save gates for the supplied context. */
 export function validateConfigForSave(
 	value: unknown,
 	context: ConfigCapabilityContext = {},
 ): CodexConfig {
 	const config = parseConfig(value);
 	const issues = collectCapabilityIssues(config, context);
-	if (issues.length > 0) {
-		throw new ConfigurationError(issues);
-	}
+	if (issues.length > 0) throw new ConfigurationError(issues);
 	return config;
 }
 
-/**
- * Evaluate capability-dependent settings for UI three-state rendering. Does not throw.
- */
+/** Evaluate capability-dependent settings for UI three-state rendering. Does not throw. */
 export function evaluateConfigSettings(
 	config: CodexConfig,
 	context: ConfigCapabilityContext = {},
@@ -174,10 +167,9 @@ export function evaluateConfigSettings(
 		evaluateCompaction(config, context, capabilities),
 	];
 
-	if (config.openai.compaction.mode === "auto") {
+	if (config.codex.compaction.mode === "auto") {
 		evaluations.push(evaluateAutoCompactTokenLimit(config, context));
 	}
-
 	return evaluations;
 }
 
@@ -187,94 +179,122 @@ function collectCapabilityIssues(
 ): ConfigurationIssue[] {
 	const issues: ConfigurationIssue[] = [];
 	const capabilities = capabilitySet(context.bridgeCapabilities);
+	const compaction = config.codex.compaction;
 
 	if (
-		config.openai.compaction.mode === "auto" &&
-		typeof config.openai.compaction.autoCompactTokenLimit === "number" &&
-		typeof context.contextWindow === "number"
-	) {
-		if (
-			!Number.isSafeInteger(context.contextWindow) ||
+		compaction.mode === "auto" &&
+		typeof compaction.autoCompactTokenLimit === "number" &&
+		typeof context.contextWindow === "number" &&
+		(!Number.isSafeInteger(context.contextWindow) ||
 			context.contextWindow <= 0 ||
-			config.openai.compaction.autoCompactTokenLimit >= context.contextWindow
-		) {
-			issue(
-				issues,
-				"openai.compaction.autoCompactTokenLimit",
-				"invalid_value",
-				"must be a positive integer below the model context window",
-			);
-		}
+			compaction.autoCompactTokenLimit >= context.contextWindow)
+	) {
+		issue(
+			issues,
+			"codex.compaction.autoCompactTokenLimit",
+			"invalid_value",
+			"must be a positive integer below the model context window",
+		);
 	}
 
 	if (
-		config.openai.compaction.mode === "auto" &&
-		config.openai.compaction.autoCompactTokenLimit === "model" &&
+		compaction.mode === "auto" &&
+		compaction.autoCompactTokenLimit === "model" &&
 		context.modelAutoCompactTokenLimit === null
 	) {
 		issue(
 			issues,
-			"openai.compaction.autoCompactTokenLimit",
+			"codex.compaction.autoCompactTokenLimit",
 			"capability_unavailable",
 			"Unavailable: model metadata has no auto-compact limit",
 		);
 	}
 
 	if (
-		config.openai.compaction.mode === "auto" &&
+		compaction.mode === "auto" &&
 		capabilities !== undefined &&
 		!capabilities.has("remote_compaction_v2") &&
 		!capabilities.has("compact_endpoint")
 	) {
 		issue(
 			issues,
-			"openai.compaction.mode",
+			"codex.compaction.mode",
 			"unsupported_capability",
 			"Unavailable: bridge does not advertise an official compaction path",
 		);
 	}
 
 	if (
-		config.openai.transport.mode === "auto" &&
+		compaction.mode === "auto" &&
+		context.remoteCompactionV2 === false &&
+		context.compactEndpoint === false &&
+		(capabilities === undefined ||
+			capabilities.has("remote_compaction_v2") ||
+			capabilities.has("compact_endpoint"))
+	) {
+		issue(
+			issues,
+			"codex.compaction.mode",
+			"unsupported_capability",
+			"Unavailable: provider has no official compaction path",
+		);
+	}
+
+	if (
+		config.codex.transport.mode === "auto" &&
 		context.providerSupportsWebsockets === false &&
 		capabilities !== undefined &&
 		!capabilities.has("responses_sse")
 	) {
 		issue(
 			issues,
-			"openai.transport.mode",
+			"codex.transport.mode",
 			"unsupported_capability",
 			"Unavailable: neither WebSocket nor SSE transport is available",
 		);
 	}
 
 	if (
-		config.openai.transport.mode === "sse" &&
+		config.codex.transport.mode === "auto" &&
+		context.providerSupportsWebsockets !== false &&
+		capabilities !== undefined &&
+		!capabilities.has("responses_websocket") &&
+		!capabilities.has("responses_sse")
+	) {
+		issue(
+			issues,
+			"codex.transport.mode",
+			"unsupported_capability",
+			"Unavailable: neither WebSocket nor SSE transport is available",
+		);
+	}
+
+	if (
+		config.codex.transport.mode === "sse" &&
 		capabilities !== undefined &&
 		!capabilities.has("responses_sse")
 	) {
 		issue(
 			issues,
-			"openai.transport.mode",
+			"codex.transport.mode",
 			"unsupported_capability",
 			"Unavailable: bridge does not advertise responses_sse",
 		);
 	}
 
 	if (
-		config.openai.webSearch.mode !== "disabled" &&
+		config.codex.webSearch.mode !== "disabled" &&
 		capabilities !== undefined &&
 		!capabilities.has("standalone_web_search") &&
 		!capabilities.has("hosted_web_search")
 	) {
 		issue(
 			issues,
-			"openai.webSearch.mode",
+			"codex.webSearch.mode",
 			"unsupported_capability",
 			"Unavailable: bridge does not advertise a web search surface",
 		);
 	}
-
 	return issues;
 }
 
@@ -282,10 +302,7 @@ function evaluateBackgroundSessions(
 	config: CodexConfig,
 	context: ConfigCapabilityContext,
 ): ConfigSettingEvaluation {
-	if (context.shellSurface === undefined) {
-		return { path: "tools.backgroundSessions", availability: { status: "enabled" } };
-	}
-	if (context.shellSurface === "unified-exec") {
+	if (context.shellSurface === undefined || context.shellSurface === "unified-exec") {
 		return {
 			path: "tools.backgroundSessions",
 			availability: config.tools.backgroundSessions
@@ -313,16 +330,10 @@ function evaluateOptionalTool(
 	unsupportedReason: string,
 ): ConfigSettingEvaluation {
 	if (value === "off") {
-		return {
-			path,
-			availability: { status: "disabled", reason: "Disabled by configuration" },
-		};
+		return { path, availability: { status: "disabled", reason: "Disabled by configuration" } };
 	}
 	if (capabilities !== undefined && !capabilities.has(capability)) {
-		return {
-			path,
-			availability: { status: "unsupported", reason: unsupportedReason },
-		};
+		return { path, availability: { status: "unsupported", reason: unsupportedReason } };
 	}
 	return { path, availability: { status: "enabled" } };
 }
@@ -332,23 +343,22 @@ function evaluateTransport(
 	context: ConfigCapabilityContext,
 	capabilities: ReadonlySet<string> | undefined,
 ): ConfigSettingEvaluation {
-	if (config.openai.transport.mode === "sse") {
-		if (capabilities !== undefined && !capabilities.has("responses_sse")) {
-			return {
-				path: "openai.transport.mode",
-				availability: {
-					status: "unsupported",
-					reason: "Unavailable: bridge does not advertise responses_sse",
-				},
-			};
-		}
-		return { path: "openai.transport.mode", availability: { status: "enabled" } };
+	const path = "codex.transport.mode";
+	if (config.codex.transport.mode === "sse") {
+		return capabilities !== undefined && !capabilities.has("responses_sse")
+			? {
+					path,
+					availability: {
+						status: "unsupported",
+						reason: "Unavailable: bridge does not advertise responses_sse",
+					},
+				}
+			: { path, availability: { status: "enabled" } };
 	}
-
 	if (context.providerSupportsWebsockets === false) {
 		if (capabilities !== undefined && !capabilities.has("responses_sse")) {
 			return {
-				path: "openai.transport.mode",
+				path,
 				availability: {
 					status: "unsupported",
 					reason: "Unavailable: neither WebSocket nor SSE transport is available",
@@ -356,40 +366,36 @@ function evaluateTransport(
 			};
 		}
 		return {
-			path: "openai.transport.mode",
+			path,
 			availability: {
 				status: "disabled",
 				reason: "WebSocket unavailable for this provider; SSE will be used",
 			},
 		};
 	}
-
 	if (
 		capabilities !== undefined &&
 		!capabilities.has("responses_websocket") &&
 		!capabilities.has("responses_sse")
 	) {
 		return {
-			path: "openai.transport.mode",
+			path,
 			availability: {
 				status: "unsupported",
 				reason: "Unavailable: bridge does not advertise Responses transport",
 			},
 		};
 	}
-
-	return { path: "openai.transport.mode", availability: { status: "enabled" } };
+	return { path, availability: { status: "enabled" } };
 }
 
 function evaluateWebSearch(
 	config: CodexConfig,
 	capabilities: ReadonlySet<string> | undefined,
 ): ConfigSettingEvaluation {
-	if (config.openai.webSearch.mode === "disabled") {
-		return {
-			path: "openai.webSearch.mode",
-			availability: { status: "disabled", reason: "Disabled by configuration" },
-		};
+	const path = "codex.webSearch.mode";
+	if (config.codex.webSearch.mode === "disabled") {
+		return { path, availability: { status: "disabled", reason: "Disabled by configuration" } };
 	}
 	if (
 		capabilities !== undefined &&
@@ -397,14 +403,14 @@ function evaluateWebSearch(
 		!capabilities.has("hosted_web_search")
 	) {
 		return {
-			path: "openai.webSearch.mode",
+			path,
 			availability: {
 				status: "unsupported",
 				reason: "Unavailable: bridge does not advertise a web search surface",
 			},
 		};
 	}
-	return { path: "openai.webSearch.mode", availability: { status: "enabled" } };
+	return { path, availability: { status: "enabled" } };
 }
 
 function evaluateCompaction(
@@ -412,11 +418,9 @@ function evaluateCompaction(
 	context: ConfigCapabilityContext,
 	capabilities: ReadonlySet<string> | undefined,
 ): ConfigSettingEvaluation {
-	if (config.openai.compaction.mode === "off") {
-		return {
-			path: "openai.compaction.mode",
-			availability: { status: "disabled", reason: "Disabled by configuration" },
-		};
+	const path = "codex.compaction.mode";
+	if (config.codex.compaction.mode === "off") {
+		return { path, availability: { status: "disabled", reason: "Disabled by configuration" } };
 	}
 	if (
 		capabilities !== undefined &&
@@ -424,7 +428,7 @@ function evaluateCompaction(
 		!capabilities.has("compact_endpoint")
 	) {
 		return {
-			path: "openai.compaction.mode",
+			path,
 			availability: {
 				status: "unsupported",
 				reason: "Unavailable: bridge does not advertise an official compaction path",
@@ -433,55 +437,85 @@ function evaluateCompaction(
 	}
 	if (context.remoteCompactionV2 === false && context.compactEndpoint === false) {
 		return {
-			path: "openai.compaction.mode",
+			path,
 			availability: {
 				status: "unsupported",
 				reason: "Unavailable: provider has no official compaction path",
 			},
 		};
 	}
-	return { path: "openai.compaction.mode", availability: { status: "enabled" } };
+	return { path, availability: { status: "enabled" } };
 }
 
 function evaluateAutoCompactTokenLimit(
 	config: CodexConfig,
 	context: ConfigCapabilityContext,
 ): ConfigSettingEvaluation {
-	if (config.openai.compaction.mode !== "auto") {
-		return {
-			path: "openai.compaction.autoCompactTokenLimit",
-			availability: { status: "disabled", reason: "Compaction is off" },
-		};
+	const path = "codex.compaction.autoCompactTokenLimit";
+	if (config.codex.compaction.mode !== "auto") {
+		return { path, availability: { status: "disabled", reason: "Compaction is off" } };
 	}
-	if (config.openai.compaction.autoCompactTokenLimit === "model") {
-		if (context.modelAutoCompactTokenLimit === null) {
-			return {
-				path: "openai.compaction.autoCompactTokenLimit",
-				availability: {
-					status: "unsupported",
-					reason: "Unavailable: model metadata has no auto-compact limit",
-				},
-			};
-		}
-		return { path: "openai.compaction.autoCompactTokenLimit", availability: { status: "enabled" } };
+	if (config.codex.compaction.autoCompactTokenLimit === "model") {
+		return context.modelAutoCompactTokenLimit === null
+			? {
+					path,
+					availability: {
+						status: "unsupported",
+						reason: "Unavailable: model metadata has no auto-compact limit",
+					},
+				}
+			: { path, availability: { status: "enabled" } };
 	}
 	if (
 		typeof context.contextWindow === "number" &&
-		config.openai.compaction.autoCompactTokenLimit >= context.contextWindow
+		config.codex.compaction.autoCompactTokenLimit >= context.contextWindow
 	) {
 		return {
-			path: "openai.compaction.autoCompactTokenLimit",
+			path,
 			availability: {
 				status: "unsupported",
 				reason: "Unavailable: threshold must be below the model context window",
 			},
 		};
 	}
-	return { path: "openai.compaction.autoCompactTokenLimit", availability: { status: "enabled" } };
+	return { path, availability: { status: "enabled" } };
 }
 
 function capabilitySet(values: readonly string[] | undefined): ReadonlySet<string> | undefined {
 	return values === undefined ? undefined : new Set(values);
+}
+
+function parseActivation(
+	value: unknown,
+	issues: ConfigurationIssue[],
+): CodexConfig["activation"] | undefined {
+	const activation = record(value, "activation", issues);
+	if (activation === undefined) return undefined;
+	exactKeys(activation, ["providers"], "activation", issues);
+	if (!Array.isArray(activation.providers)) {
+		issue(issues, "activation.providers", "invalid_type", "must be an array");
+		return undefined;
+	}
+	const providers = activation.providers;
+	if (
+		providers.length === 0 ||
+		providers.some(
+			(provider) =>
+				typeof provider !== "string" ||
+				provider.trim().length === 0 ||
+				provider.length > 256 ||
+				/[\r\n]/.test(provider) ||
+				provider !== provider.trim(),
+		)
+	) {
+		issue(issues, "activation.providers", "invalid_value", "must contain non-empty provider ids");
+		return undefined;
+	}
+	if (new Set(providers).size !== providers.length) {
+		issue(issues, "activation.providers", "invalid_value", "must contain unique provider ids");
+		return undefined;
+	}
+	return { providers: [...providers] as string[] };
 }
 
 function parseTools(
@@ -518,38 +552,38 @@ function parseTools(
 		: { backgroundSessions, optional: { viewImage, imageGeneration } };
 }
 
-function parseOpenAi(
+function parseCodex(
 	value: unknown,
 	issues: ConfigurationIssue[],
-): CodexConfig["openai"] | undefined {
-	const openai = record(value, "openai", issues);
-	if (openai === undefined) return undefined;
+): CodexConfig["codex"] | undefined {
+	const codex = record(value, "codex", issues);
+	if (codex === undefined) return undefined;
 	exactKeys(
-		openai,
+		codex,
 		["serviceTier", "verbosity", "transport", "webSearch", "compaction"],
-		"openai",
+		"codex",
 		issues,
 	);
 	const serviceTier = enumValue(
-		openai.serviceTier,
+		codex.serviceTier,
 		["default", "priority", "flex"],
-		"openai.serviceTier",
+		"codex.serviceTier",
 		issues,
 	);
 	const verbosity = enumValue(
-		openai.verbosity,
+		codex.verbosity,
 		["low", "medium", "high"],
-		"openai.verbosity",
+		"codex.verbosity",
 		issues,
 	);
-	const transportMode = nestedMode(openai.transport, ["auto", "sse"], "openai.transport", issues);
+	const transportMode = nestedMode(codex.transport, ["auto", "sse"], "codex.transport", issues);
 	const webSearchMode = nestedMode(
-		openai.webSearch,
+		codex.webSearch,
 		["disabled", "cached", "indexed", "live"],
-		"openai.webSearch",
+		"codex.webSearch",
 		issues,
 	);
-	const compaction = parseCompaction(openai.compaction, issues);
+	const compaction = parseCompaction(codex.compaction, issues);
 	return serviceTier === undefined ||
 		verbosity === undefined ||
 		transportMode === undefined ||
@@ -569,23 +603,22 @@ function parseCompaction(
 	value: unknown,
 	issues: ConfigurationIssue[],
 ): CompactionConfig | undefined {
-	const compaction = record(value, "openai.compaction", issues);
+	const compaction = record(value, "codex.compaction", issues);
 	if (compaction === undefined) return undefined;
-	const mode = enumValue(compaction.mode, ["off", "auto"], "openai.compaction.mode", issues);
+	const mode = enumValue(compaction.mode, ["off", "auto"], "codex.compaction.mode", issues);
 	if (mode === "off") {
-		exactKeys(compaction, ["mode"], "openai.compaction", issues);
+		exactKeys(compaction, ["mode"], "codex.compaction", issues);
 		return { mode };
 	}
 	if (mode !== "auto") return undefined;
-	exactKeys(compaction, ["mode", "autoCompactTokenLimit"], "openai.compaction", issues);
+	exactKeys(compaction, ["mode", "autoCompactTokenLimit"], "codex.compaction", issues);
 	const limit = compaction.autoCompactTokenLimit;
 	if (limit === "model") return { mode, autoCompactTokenLimit: limit };
-	if (typeof limit === "number" && Number.isSafeInteger(limit) && limit > 0) {
+	if (typeof limit === "number" && Number.isSafeInteger(limit) && limit > 0)
 		return { mode, autoCompactTokenLimit: limit };
-	}
 	issue(
 		issues,
-		"openai.compaction.autoCompactTokenLimit",
+		"codex.compaction.autoCompactTokenLimit",
 		"invalid_value",
 		"must be model or a positive integer",
 	);
@@ -617,9 +650,8 @@ function record(
 	path: string,
 	issues: ConfigurationIssue[],
 ): Record<string, unknown> | undefined {
-	if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+	if (typeof value === "object" && value !== null && !Array.isArray(value))
 		return value as Record<string, unknown>;
-	}
 	issue(issues, path, "invalid_type", "must be an object");
 	return undefined;
 }
@@ -631,13 +663,11 @@ function exactKeys(
 	issues: ConfigurationIssue[],
 ): void {
 	const expectedSet = new Set(expected);
-	if (Object.keys(value).some((key) => !expectedSet.has(key))) {
+	if (Object.keys(value).some((key) => !expectedSet.has(key)))
 		issue(issues, path, "unknown_field", "contains unsupported fields");
-	}
 	for (const key of expected) {
-		if (!Object.hasOwn(value, key)) {
+		if (!Object.hasOwn(value, key))
 			issue(issues, path === "$" ? key : `${path}.${key}`, "missing_field", "is required");
-		}
 	}
 }
 
