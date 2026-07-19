@@ -16,11 +16,13 @@ import { createCodexProviderDispatchers } from "./integration/pi/provider-dispat
 import { openSettingsOverlay } from "./ui/terminal/settings-overlay.ts";
 
 /** Pi composition root for configuration and diagnostics surfaces. */
-export default function piCodexAdaptor(pi: ExtensionAPI): void {
+export default async function piCodexAdaptor(pi: ExtensionAPI): Promise<void> {
 	if (typeof pi.registerCommand !== "function") return;
 	const configFile = resolve(homedir(), ".pi", "agent", "pi-codex-adaptor.json");
 	const service = new ConfigurationService(new FileConfigurationRepository(configFile));
 	const activation = new ProviderActivationPolicy(service);
+	// Load the persisted activation snapshot before Pi can dispatch the first prompt.
+	await activation.refresh();
 	const diagnostics = new FileDiagnosticsExporter();
 	const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 	const runtime = new BundledCodexRuntime({

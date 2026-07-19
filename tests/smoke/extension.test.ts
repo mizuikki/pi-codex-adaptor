@@ -4,17 +4,17 @@ import type { ProviderConfig } from "@earendil-works/pi-coding-agent";
 import piCodexAdaptor from "../../src/extension.ts";
 
 describe("extension entry point", () => {
-	test("tolerates a loader probe without a complete Pi API", () => {
+	test("tolerates a loader probe without a complete Pi API", async () => {
 		const pi = Object.freeze({});
 
-		expect(() => piCodexAdaptor(pi as never)).not.toThrow();
+		await expect(piCodexAdaptor(pi as never)).resolves.toBeUndefined();
 	});
 
-	test("registers both Responses dispatchers and the settings entry point", () => {
+	test("registers both Responses dispatchers and the settings entry point", async () => {
 		const commands: string[] = [];
 		const providers: Array<{ name: string; config: ProviderConfig }> = [];
 		const events: string[] = [];
-		piCodexAdaptor({
+		await piCodexAdaptor({
 			registerCommand: (name: string) => {
 				commands.push(name);
 			},
