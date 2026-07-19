@@ -192,15 +192,7 @@ class CodexToolProfile implements CodexToolProfileCoordinator {
 		this.#ensureCodexState();
 		this.#profileGeneration += 1;
 		this.#conflictNotificationGeneration = -1;
-		const state = this.#state;
-		if (state.kind !== "codex") return;
-		const tools = this.#readTools();
-		const availableNames =
-			tools === undefined ? this.#fallbackAvailableNames(state) : toolNames(tools);
-		this.#applyActiveNames(
-			reconcileCodexActiveToolNames(this.#pi.getActiveTools(), availableNames, []),
-		);
-		this.#state = { ...state, phase: "pending", activeManaged: [], skillLoader: undefined };
+		if (!this.#suppressManagedTools("pending")) return;
 		this.#readiness = { kind: "pending", capabilityKey };
 	}
 
@@ -240,15 +232,7 @@ class CodexToolProfile implements CodexToolProfileCoordinator {
 		notify?: (message: string) => void,
 	): void {
 		this.#ensureCodexState();
-		const state = this.#state;
-		if (state.kind !== "codex") return;
-		const tools = this.#readTools();
-		const availableNames =
-			tools === undefined ? this.#fallbackAvailableNames(state) : toolNames(tools);
-		this.#applyActiveNames(
-			reconcileCodexActiveToolNames(this.#pi.getActiveTools(), availableNames, []),
-		);
-		this.#state = { ...state, phase: "unavailable", activeManaged: [], skillLoader: undefined };
+		if (!this.#suppressManagedTools("unavailable")) return;
 		this.#readiness = { kind: "unavailable", capabilityKey };
 		if (
 			conflictingTool !== undefined &&
@@ -315,6 +299,19 @@ class CodexToolProfile implements CodexToolProfileCoordinator {
 
 	dispose(): void {
 		this.restorePi();
+	}
+
+	#suppressManagedTools(phase: "pending" | "unavailable"): boolean {
+		const state = this.#state;
+		if (state.kind !== "codex") return false;
+		const tools = this.#readTools();
+		const availableNames =
+			tools === undefined ? this.#fallbackAvailableNames(state) : toolNames(tools);
+		this.#applyActiveNames(
+			reconcileCodexActiveToolNames(this.#pi.getActiveTools(), availableNames, []),
+		);
+		this.#state = { ...state, phase, activeManaged: [], skillLoader: undefined };
+		return true;
 	}
 
 	#ensureCodexState(): void {
