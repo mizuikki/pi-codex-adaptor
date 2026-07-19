@@ -75,6 +75,31 @@ describe("exact npm tarball smoke", () => {
 				resolve(installRoot, "node_modules/pi-codex-adaptor"),
 				metadata.pi?.extensions,
 			);
+			const provenance = Bun.spawn(
+				[
+					process.execPath,
+					resolve(repositoryRoot, "tests/smoke/helpers/verify-packed-tool-provenance.ts"),
+					extensionPath,
+				],
+				{
+					cwd: repositoryRoot,
+					env: {
+						...process.env,
+						PI_CODING_AGENT_DIR: piHome,
+						PI_OFFLINE: "1",
+						CODEX_HOME: resolve(piHome, "codex-home"),
+						HOME: piHome,
+					},
+					stderr: "pipe",
+					stdout: "pipe",
+				},
+			);
+			const [provenanceCode] = await Promise.all([
+				provenance.exited,
+				new Response(provenance.stderr).text(),
+				new Response(provenance.stdout).text(),
+			]);
+			expect(provenanceCode).toBe(0);
 
 			const child = Bun.spawn(
 				[

@@ -27,6 +27,12 @@ compaction, settings, validation, status, and diagnostics consume the same cache
 `models.resolve` owns model metadata and native `tools.resolve` owns exact model-visible and dispatch
 tool schemas; TypeScript does not reconstruct either result.
 
+The Pi integration owns a reversible Codex tool-profile controller. It captures the active Pi core
+selection on entry, suppresses those core routes while the provider is active, preserves additive
+external tools, and restores the captured subset on deactivation or shutdown. A shared readiness
+state and additive-tool selection policy are passed to both Responses and compaction assembly, so a
+pending, unavailable, or ownership-conflicted profile cannot dispatch a partial or hybrid surface.
+
 Pi owns the persistent approval policy and maps one validated snapshot to one explicit authorization
 value on each native request. The integration layer never infers bypass from UI availability and does
 not cache authorization across calls. Native code owns the explicit allowlist, strict decoding,
@@ -39,7 +45,7 @@ Bypass removes only the interactive approval wait; it does not provide an OS san
 | --- | --- | --- |
 | `src/domain` | Configuration and capability semantics, value objects, terminal states, redaction policy | Pi, TUI, HTTP, filesystem |
 | `src/application` | Use cases and ports | Concrete UI or process implementations |
-| `src/integration/pi` | Pi lifecycle, activation, message and tool binding | Rust internals or handwritten OpenAI schemas |
+| `src/integration/pi` | Pi lifecycle, activation, reversible tool profiles, message and tool binding | Rust internals or handwritten OpenAI schemas |
 | `src/infrastructure/codex-bridge` | Sidecar discovery, lifecycle, JSONL codec, cancellation | HTTP details or Pi UI |
 | `src/infrastructure/diagnostics` | Confirmed redacted diagnostic-file export | Provider transport or Pi UI |
 | `src/ui/terminal` | `/codex`, settings view models, inline renderers | Provider transport details |

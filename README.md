@@ -7,9 +7,11 @@ The repository is under active implementation. Protocol v3, the native baseline 
 Responses SSE/WebSocket transport with connect fallback, compact endpoint, and exact model metadata
 resolution are implemented. The versioned configuration store, prompt-approved or preauthorized Unified Exec sessions,
 and `/codex` settings overlay are available. The extension replaces only Pi's `openai-codex` stream
-handler with the native bridge adapter, dispatches both supported Responses APIs by exact provider-id
-activation, and delegates unselected providers directly to Pi's public native streams. It activates
-the generated update-plan and model-resolved shell surface without removing third-party tools,
+handler with the native bridge adaptor, dispatches both supported Responses APIs by exact provider-id
+activation, and delegates unselected providers directly to Pi's public native streams. An activated
+provider uses an isolated Codex core tool profile: Pi's seven core tools are suppressed while
+orthogonal additive external tools remain available, and an unavailable Codex profile fails closed without
+restoring Pi core tools. Deactivation restores the Pi core selection captured at entry. The adaptor
 executes prompt-approved or explicitly preauthorized patches through the official parser, supports workspace image inspection, and
 restores process ownership on session shutdown. Because Pi owns one stream handler per API id, the
 adaptor cannot safely compose with another extension that replaces either supported Responses API.

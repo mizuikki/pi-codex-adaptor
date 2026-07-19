@@ -4,6 +4,7 @@ import type {
 	ExtensionContext,
 	ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import { PI_CORE_AGENT_TOOL_NAMES } from "../../../src/integration/pi/codex-tool-profile.ts";
 
 export type EventHandler = (event: unknown, ctx: ExtensionContext) => unknown | Promise<unknown>;
 
@@ -24,6 +25,7 @@ export function createFakePi(options: {
 	token: string;
 	cwd?: string;
 	thirdPartyTools?: readonly string[];
+	activeTools?: readonly string[];
 }): FakePi {
 	const tools = new Map<string, ToolDefinition>();
 	const handlers = new Map<string, EventHandler[]>();
@@ -32,7 +34,30 @@ export function createFakePi(options: {
 	const status = new Map<string, string | undefined>();
 	const widgets = new Map<string, string[] | undefined>();
 	const notifications: string[] = [];
-	let activeTools = [...(options.thirdPartyTools ?? ["third_party"])];
+	const thirdPartyTools = [...(options.thirdPartyTools ?? ["third_party"])] as string[];
+	const availableBuiltinTools = PI_CORE_AGENT_TOOL_NAMES.map((name) => ({
+		name,
+		description: `Fixture ${name}`,
+		parameters: { type: "object", properties: {} },
+		sourceInfo: {
+			path: `<builtin:${name}>`,
+			source: "builtin",
+			scope: "user" as const,
+			origin: "top-level" as const,
+		},
+	}));
+	const availableExternalTools = thirdPartyTools.map((name) => ({
+		name,
+		description: `Fixture ${name}`,
+		parameters: { type: "object", properties: {} },
+		sourceInfo: {
+			path: `<fixture:${name}>`,
+			source: "fixture",
+			scope: "temporary" as const,
+			origin: "top-level" as const,
+		},
+	}));
+	let activeTools = [...(options.activeTools ?? [...PI_CORE_AGENT_TOOL_NAMES, ...thirdPartyTools])];
 	const cwd = options.cwd ?? process.cwd();
 
 	const api = {
@@ -52,7 +77,19 @@ export function createFakePi(options: {
 		setActiveTools: (next: string[]) => {
 			activeTools = next;
 		},
-		getAllTools: () => [...tools.values()],
+		getAllTools: () => [
+			...availableBuiltinTools,
+			...availableExternalTools,
+			...[...tools.values()].map((tool) => ({
+				...tool,
+				sourceInfo: {
+					path: "<fixture:pi-codex-adaptor>",
+					source: "fixture",
+					scope: "temporary" as const,
+					origin: "top-level" as const,
+				},
+			})),
+		],
 		getThinkingLevel: () => "off",
 	} as unknown as ExtensionAPI;
 

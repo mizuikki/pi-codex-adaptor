@@ -17,6 +17,7 @@ uses the same structure: context, decision, and consequences.
 | [0010](./0010-responsive-terminal-experience.md) | Responsive settings overlay and inline tool rendering |
 | [0011](./0011-explicit-provider-dispatch.md) | Explicit provider activation and non-recursive dispatch |
 | [0012](./0012-capability-completeness-and-supplemental-sessions.md) | Effective capability snapshots and supplemental managed sessions |
+| [0013](./0013-codex-agent-tool-profile-isolation.md) | Reversible Codex core tool-profile isolation and additive external tools |
 
 Accepted ADRs are changed only to correct factual errors. A decision change requires a new ADR that
 explicitly supersedes the earlier record. Baseline upgrades and product-boundary changes must remain

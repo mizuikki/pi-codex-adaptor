@@ -22,6 +22,9 @@ atomic patch commit checks remain mandatory. Preauthorization for an unsupported
   never spread into the bridge request. Provider connections are attached only to Responses,
   Search, and image-generation requests; shell, PTY, patch, plan, and local image operations stay
   credential-free.
+- While Codex is active, Pi's seven core execution routes are absent from the active profile. This
+  prevents a model from bypassing native shell, patch, and file-operation controls through Pi's
+  alternate core tools; inactive providers restore the previously active Pi core selection.
 - Official shell tool schemas still expose the `shell` parameter, but native execution host-resolves
   only real supported shells from fixed system installation directories, rejects
   workspace-relative or attacker-created executables such as `./bash` or `/tmp/bash`, rejects

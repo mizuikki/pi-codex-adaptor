@@ -23,6 +23,10 @@ import type { ConfigurationService } from "../../src/application/configuration.t
 import { ProviderActivationPolicy } from "../../src/application/provider-activation.ts";
 import { type CodexConfig, createDefaultConfig } from "../../src/domain/config.ts";
 import {
+	type CodexToolProfileCoordinator,
+	createUnavailableCodexToolProfile,
+} from "../../src/integration/pi/codex-tool-profile.ts";
+import {
 	createCodexProviderDispatchers,
 	piNativeOpenAiCodexResponsesStreamSimple,
 	piNativeOpenAiResponsesStreamSimple,
@@ -200,6 +204,20 @@ class ActiveRuntime implements CodexRuntime {
 	async shutdown(): Promise<void> {}
 }
 
+function healthyProfile(): CodexToolProfileCoordinator {
+	return {
+		readiness: { kind: "healthy", capabilityKey: "fixture-key" },
+		skillLoader: undefined,
+		enterPending: () => {},
+		installHealthy: () => true,
+		installUnavailable: () => {},
+		revalidateHealthyOwnership: () => true,
+		isHealthy: () => true,
+		restorePi: () => {},
+		dispose: () => {},
+	};
+}
+
 function registerPoisonRegistry(
 	openAi: (
 		modelValue: Model<string>,
@@ -271,7 +289,13 @@ describe("provider dispatcher native fallbacks", () => {
 		const { service } = configuration(config);
 		const runtime = new InactiveOnlyRuntime();
 		const policy = new ProviderActivationPolicy(service);
-		const dispatchers = createCodexProviderDispatchers(runtime, service, policy);
+		const dispatchers = createCodexProviderDispatchers(
+			runtime,
+			service,
+			policy,
+			undefined,
+			undefined,
+		);
 
 		let openAiDepth = 0;
 		let openAiMaxDepth = 0;
@@ -385,7 +409,14 @@ describe("provider dispatcher native fallbacks", () => {
 		publish(config);
 		expect(policy.isActive(model("custom-codex", "openai-responses"))).toBe(true);
 
-		const dispatchers = createCodexProviderDispatchers(runtime, service, policy);
+		const dispatchers = createCodexProviderDispatchers(
+			runtime,
+			service,
+			policy,
+			undefined,
+			undefined,
+			healthyProfile(),
+		);
 
 		let registryHits = 0;
 		const poison = (): AssistantMessageEventStream => {
@@ -423,6 +454,31 @@ describe("provider dispatcher native fallbacks", () => {
 		expect(activeResult.stopReason).not.toBe("error");
 		expect(registryHits).toBe(0);
 
+		policy.dispose();
+	});
+
+	test("fails closed for active dispatch when the host has no tool registry API", async () => {
+		const config = createDefaultConfig();
+		const { service } = configuration(config);
+		const runtime = new ActiveRuntime();
+		const policy = new ProviderActivationPolicy(service);
+		const dispatchers = createCodexProviderDispatchers(
+			runtime,
+			service,
+			policy,
+			undefined,
+			undefined,
+			createUnavailableCodexToolProfile(),
+		);
+		const activeStream = dispatchers.codexResponses(
+			model("openai-codex", "openai-codex-responses"),
+			{ messages: [{ role: "user", content: "hello", timestamp: 1 }] },
+			{ apiKey: "fixture-key" },
+		);
+		const result = await activeStream.result();
+
+		expect(result.stopReason).toBe("error");
+		expect(runtime.createResponseCalls).toBe(0);
 		policy.dispose();
 	});
 });
