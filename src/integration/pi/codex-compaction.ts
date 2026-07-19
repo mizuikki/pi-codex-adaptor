@@ -23,7 +23,11 @@ import {
 	selectCompactionImplementation,
 } from "../../domain/capability.ts";
 import type { CompactionConfig } from "../../domain/config.ts";
-import { officialToolNames, responseItemsFromMessages } from "./codex-provider.ts";
+import {
+	officialToolNames,
+	responseItemsFromMessages,
+	supportsProviderWebsockets,
+} from "./codex-provider.ts";
 import { resolveProviderConnection } from "./provider-connection.ts";
 
 const COMPACTION_SUMMARY = "Context compacted by the OpenAI Codex Responses API.";
@@ -169,7 +173,10 @@ export function registerCodexCompaction(
 				},
 				implementation: selectCompactionImplementation(resolution.provider),
 				transportMode: config.codex.transport.mode,
-				providerSupportsWebsockets: resolution.provider.supportsWebsockets,
+				providerSupportsWebsockets: supportsProviderWebsockets(
+					model,
+					resolution.provider.supportsWebsockets,
+				),
 				signal: event.signal,
 			});
 			if (event.signal.aborted) {

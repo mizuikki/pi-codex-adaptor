@@ -394,6 +394,7 @@ describe("Pi Codex provider adapter", () => {
 			headers: {},
 			authentication: { kind: "bearer", token: "opaque-fixture-key" },
 		} satisfies CodexProviderConnection);
+		expect(runtime.request?.providerSupportsWebsockets).toBe(false);
 	});
 
 	test("rejects missing provider credentials without reflecting values", async () => {
