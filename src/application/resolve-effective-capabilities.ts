@@ -187,7 +187,11 @@ export function capabilityContextFromSnapshot(
 		modelAutoCompactTokenLimit: snapshot.compaction.modelThreshold,
 		bridgeCapabilities: snapshot.bridgeCapabilities,
 		shellSurface: snapshot.shell.primary,
-		backgroundSessionsAvailable: snapshot.shell.sessions.status === "available",
+		// A disabled session setting is still reversible. Only an unavailable executor or
+		// disabled shell surface should make the setting itself unavailable in the UI.
+		backgroundSessionsAvailable:
+			snapshot.bridgeCapabilities.includes("unified_exec") &&
+			snapshot.shell.sessionSurface !== "unavailable",
 		viewImageAvailable: snapshot.viewImage.status === "available",
 		imageGenerationAvailable: snapshot.imageGeneration.status === "available",
 		webSearchAvailable: snapshot.webSearch.status === "available",

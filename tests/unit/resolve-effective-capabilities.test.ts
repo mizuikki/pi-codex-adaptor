@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test";
 
 import type { CodexRuntime } from "../../src/application/codex-runtime.ts";
-import { ResolveEffectiveCapabilities } from "../../src/application/resolve-effective-capabilities.ts";
+import {
+	capabilityContextFromSnapshot,
+	ResolveEffectiveCapabilities,
+} from "../../src/application/resolve-effective-capabilities.ts";
 import { createDefaultConfig } from "../../src/domain/config.ts";
 
 class ResolverRuntime implements CodexRuntime {
@@ -106,6 +109,7 @@ describe("effective capability application use case", () => {
 		});
 		expect(changed).not.toBe(first);
 		expect(changed.shell.sessions.status).toBe("disabled");
+		expect(capabilityContextFromSnapshot(changed).backgroundSessionsAvailable).toBe(true);
 		expect(runtime.resolveToolsCalls).toBe(2);
 	});
 
@@ -121,5 +125,6 @@ describe("effective capability application use case", () => {
 			reason: "session_executor_unavailable",
 		});
 		expect(snapshot.shell.sessionSurface).toBe("unavailable");
+		expect(capabilityContextFromSnapshot(snapshot).backgroundSessionsAvailable).toBe(false);
 	});
 });
