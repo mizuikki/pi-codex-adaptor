@@ -13,14 +13,18 @@ request to fail against the child's inactive tool profile.
 
 Pi supplies the owning session identifier in `SimpleStreamOptions.sessionId`. Its extension loader
 evaluates extension graphs without a reliable module cache, so ordinary module identity cannot
-coordinate independently loaded adaptor instances.
+coordinate independently loaded adaptor instances. The public `registerProvider` API is provider
+scoped; registering one provider for `openai-responses` does not intercept unrelated configured
+providers that use the same Pi API.
 
 ## Decision
 
 The Pi integration installs one versioned process router in a `Symbol.for()` slot on `globalThis`.
 Every adaptor instance registers the router's stable functions for `openai-responses` and
-`openai-codex-responses`, then creates a weak session lease around its own dispatchers. The lease is
-bound from Pi's `session_start` context and explicitly released before session-owned shutdown.
+`openai-codex-responses` under `openai-codex` and every configured activated provider id, then
+creates a weak session lease around its own dispatchers. The lease is bound from Pi's
+`session_start` context and explicitly released before session-owned shutdown. Unselected provider
+requests remain on Pi's direct native stream and do not create an adaptor request record.
 
 Each provider request is routed only by a validated, non-empty `options.sessionId`. Exactly one live
 lease must match. Missing, stale, released, or ambiguous attribution returns a local streamed error

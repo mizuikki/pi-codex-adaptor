@@ -6,9 +6,10 @@ protocol and selected runtime modules without running a second agent inside Pi.
 The repository is under active implementation. Protocol v3, the native baseline handshake, official
 Responses SSE/WebSocket transport with connect fallback, compact endpoint, and exact model metadata
 resolution are implemented. The versioned configuration store, prompt-approved or preauthorized Unified Exec sessions,
-and `/codex` settings overlay are available. The extension replaces only Pi's `openai-codex` stream
-handler with the native bridge adaptor, dispatches both supported Responses APIs by exact provider-id
-activation, and delegates unselected providers directly to Pi's public native streams. An activated
+and `/codex` settings overlay are available. The extension registers the native bridge stream for
+`openai-codex` and every configured activated provider id through Pi's public provider API, dispatches
+both supported Responses APIs by exact provider-id activation, and delegates unselected providers directly
+to Pi's public native streams. An activated
 provider uses an isolated Codex core tool profile: Pi's seven core tools are suppressed while
 orthogonal additive external tools remain available, and an unavailable Codex profile fails closed without
 restoring Pi core tools. Deactivation restores the Pi core selection captured at entry. The adaptor
@@ -16,9 +17,13 @@ executes prompt-approved or explicitly preauthorized patches through the officia
 restores process ownership on session shutdown. The two process-stable stream handlers route by Pi's
 session identity to isolated main or nested-session state. An unrelated extension that replaces
 either supported Responses API remains an explicit registry conflict.
-Pi compaction selects the official RemoteCompactionV2 stream when available and otherwise uses the
-typed Compact endpoint; canonical output is retained as versioned opaque session details for exact
-replay. The generated `image_gen.imagegen` namespace uses the official Images client for generation
+Inline automatic compaction runs inside the already-planned provider request when the active context is
+known to be over threshold; it does not abort the run, call Pi's `ctx.compact()`, add a turn, or send a
+continuation message. Manual Pi compaction remains Pi-owned. Both paths use the official
+RemoteCompactionV2 stream when available and otherwise the typed Compact endpoint. Their canonical
+output is retained as versioned opaque checkpoints for provider-bound replay, including the encrypted
+string exactly as returned. The adaptor never decrypts that content or displays it as prose. The
+generated `image_gen.imagegen` namespace uses the official Images client for generation
 and workspace-scoped edits, and standalone `web.run` uses the typed Search client. `/codex` offers
 the four settings categories, a manual compact action, compact inline tool rendering, and redacted
 diagnostics export. The package has not been published to npm.

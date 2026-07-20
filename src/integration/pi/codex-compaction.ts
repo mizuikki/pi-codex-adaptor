@@ -1,19 +1,19 @@
 import type {
+	CompactionResult,
 	ExtensionAPI,
 	ExtensionContext,
 	SessionBeforeCompactEvent,
 	SessionCompactEvent,
 } from "@earendil-works/pi-coding-agent";
+
 import type { CodexRuntime } from "../../application/codex-runtime.ts";
 import {
 	CodexCompactionCoordinator,
 	type CodexCompactionStore,
-	type CompactionThresholdCache,
 	createCodexCompactionDetails,
+	parseCodexAutoCompactionCheckpoint,
 	parseCodexCompactionDetails,
-	resolveCompactionThreshold,
-	shouldAcceptCompactionEvent,
-	shouldTriggerAutoCompaction,
+	validateCompactionOutput,
 } from "../../application/compaction.ts";
 import type { ConfigurationService } from "../../application/configuration.ts";
 import type { ProviderActivationPolicy } from "../../application/provider-activation.ts";
@@ -22,8 +22,12 @@ import {
 	ResolveEffectiveCapabilities,
 	withSupplementalSessionInstructions,
 } from "../../application/resolve-effective-capabilities.ts";
-import type { CompactionConfig } from "../../domain/config.ts";
+import {
+	providerCompactionIdentity,
+	registerCodexCompactionReplay,
+} from "./codex-compaction-replay.ts";
 import { responseItemsFromMessages } from "./codex-provider.ts";
+import type { CodexProviderRequestGuard } from "./codex-provider-request-guard.ts";
 import {
 	type CodexToolProfileCoordinator,
 	createUnavailableCodexToolProfile,
@@ -42,18 +46,13 @@ export function registerCodexCompaction(
 	coordinator: CodexCompactionCoordinator = new CodexCompactionCoordinator(),
 	capabilities = new ResolveEffectiveCapabilities(runtime),
 	profile: CodexToolProfileCoordinator = createUnavailableCodexToolProfile(),
+	requestGuard?: CodexProviderRequestGuard,
 ): void {
 	pi.on("session_start", (_event, ctx) => {
-		const sessionId = ctx.sessionManager.getSessionId();
-		if (coordinator.isBusy(sessionId)) {
-			coordinator.end(sessionId, "cancel");
-		}
-		coordinator.clearTokenObservation(sessionId);
+		coordinator.dispose(ctx.sessionManager.getSessionId());
 		restoreCompaction(ctx, store);
 	});
-	pi.on("model_select", (_event, ctx) => {
-		coordinator.clearTokenObservation(ctx.sessionManager.getSessionId());
-	});
+	pi.on("model_select", () => {});
 	pi.on("session_compact", (event, ctx) => {
 		const sessionId = ctx.sessionManager.getSessionId();
 		coordinator.end(sessionId, "success");
@@ -63,260 +62,158 @@ export function registerCodexCompaction(
 		const sessionId = ctx.sessionManager.getSessionId();
 		coordinator.dispose(sessionId);
 	});
-	pi.on("turn_end", async (_event, ctx) => {
-		await maybeTriggerThresholdCompaction(ctx, {
+	pi.on("session_before_compact", async (event, ctx) => {
+		return compactForPi(event, ctx, {
+			pi,
 			runtime,
 			configuration,
+			store,
 			activation,
 			coordinator,
 			capabilities,
+			profile,
 		});
 	});
-	pi.on("session_before_compact", async (event, ctx) => {
-		const sessionId = ctx.sessionManager.getSessionId();
-		const model = ctx.model;
-		if (model === undefined) {
-			coordinator.end(sessionId, "error");
-			throw new Error("OpenAI Codex compaction requires an active model");
-		}
-		// Inactive providers skip Codex compaction so Pi can fall back to its native path.
-		// True cancellation is reserved for threshold/mode rejection, concurrency, and abort.
-		if (!activation.isActive(model)) return;
-		if (event.signal.aborted) return { cancel: true };
-		let connection: Awaited<ReturnType<typeof resolveProviderConnection>>;
-		try {
-			connection = await resolveProviderConnection(
-				ctx,
-				activation,
-				"Codex compaction is inactive for the selected provider and API",
-			);
-		} catch (error) {
-			coordinator.end(sessionId, "error");
-			throw error;
-		}
-		const config = await configuration.load();
-		const capabilityKey = capabilityCacheKey({
-			modelId: model.id,
-			providerId: model.provider,
-			config,
-			contextWindow: model.contextWindow,
+	if (requestGuard !== undefined) {
+		registerCodexCompactionReplay({
+			pi,
+			runtime,
+			configuration,
+			activation,
+			store,
+			coordinator,
+			capabilities,
+			profile,
+			guard: requestGuard,
 		});
-		if (!profile.isHealthy(capabilityKey)) {
-			coordinator.end(sessionId, "error");
-			throw new Error("Codex tool profile is unavailable for the selected capability");
-		}
-		const capabilitySnapshot = await capabilities.resolve({
-			modelId: model.id,
-			providerId: model.provider,
-			config,
-			contextWindow: model.contextWindow,
-		});
-		coordinator.setThresholdCache(sessionId, {
-			modelId: model.id,
-			autoCompactTokenLimit: capabilitySnapshot.compaction.modelThreshold,
-		});
-		const threshold = resolveCompactionThreshold(
-			config.codex.compaction,
-			capabilitySnapshot.compaction.modelThreshold,
-			model.contextWindow,
-		);
-		if (
-			!shouldAcceptCompactionEvent({
-				mode: config.codex.compaction.mode,
-				reason: event.reason,
-				tokensBefore: event.preparation.tokensBefore,
-				threshold,
-			})
-		) {
-			// Do not clear another in-flight cycle. Initiator-owned pending cycles are
-			// released by Pi onError when this cancel surfaces as compaction failure.
-			return { cancel: true };
-		}
-		const compactionConfig = config.codex.compaction;
-		if (
-			compactionConfig.mode === "auto" &&
-			typeof compactionConfig.autoCompactTokenLimit === "number" &&
-			compactionConfig.autoCompactTokenLimit >= model.contextWindow
-		) {
-			coordinator.end(sessionId, "error");
-			throw new Error("OpenAI Codex compaction threshold must be below the context window");
-		}
-
-		if (!coordinator.beginExecution(sessionId)) {
-			// Another runtime.compact is already executing for this session.
-			return { cancel: true };
-		}
-		try {
-			if (event.signal.aborted) {
-				coordinator.end(sessionId, "cancel");
-				return { cancel: true };
-			}
-			const officialTools = capabilitySnapshot.modelTools;
-			const tools = selectCodexToolSurface(officialTools, pi.getActiveTools(), pi.getAllTools());
-			const previous = store.get(sessionId, model.id);
-			const messages = [
-				...event.preparation.messagesToSummarize,
-				...event.preparation.turnPrefixMessages,
-			];
-			const hasPreviousMarker = messages.some(
-				(message) =>
-					record(message)?.role === "compactionSummary" &&
-					record(message)?.summary === previous?.summary,
-			);
-			const input = [
-				...(hasPreviousMarker ? (previous?.output ?? []) : []),
-				...responseItemsFromMessages(messages),
-			];
-			const result = await runtime.compact({
-				connection,
-				request: {
-					model: model.id,
-					input,
-					instructions: withSupplementalSessionInstructions(
-						ctx.getSystemPrompt(),
-						capabilitySnapshot,
-					),
-					tools: tools.length === 0 ? null : tools,
-					parallel_tool_calls: true,
-					reasoning: reasoningFor(model, pi.getThinkingLevel()),
-					service_tier: config.codex.serviceTier,
-					prompt_cache_key: sessionId,
-					text: { verbosity: config.codex.verbosity },
-				},
-				implementation: capabilitySnapshot.compaction.implementation ?? "compact_endpoint",
-				transportMode: config.codex.transport.mode,
-				providerSupportsWebsockets: capabilitySnapshot.providerSupportsWebsockets,
-				signal: event.signal,
-			});
-			if (event.signal.aborted) {
-				coordinator.end(sessionId, "cancel");
-				return { cancel: true };
-			}
-			if (result.status !== "completed") {
-				throw new Error(`OpenAI Codex compaction ended with status ${result.status}`);
-			}
-			const output = record(result.result)?.output;
-			if (!Array.isArray(output)) {
-				throw new Error("OpenAI Codex compaction returned an invalid canonical window");
-			}
-			const details = createCodexCompactionDetails(model.id, output);
-			// Keep the execution lease until session_compact (or onError paths) clear it.
-			return {
-				compaction: {
-					summary: COMPACTION_SUMMARY,
-					firstKeptEntryId: event.preparation.firstKeptEntryId,
-					tokensBefore: event.preparation.tokensBefore,
-					details,
-				},
-			};
-		} catch (error) {
-			coordinator.end(sessionId, "error");
-			throw error;
-		}
-	});
+	}
 }
 
-async function maybeTriggerThresholdCompaction(
+async function compactForPi(
+	event: SessionBeforeCompactEvent,
 	ctx: ExtensionContext,
 	state: {
+		pi: ExtensionAPI;
 		runtime: CodexRuntime;
 		configuration: ConfigurationService;
+		store: CodexCompactionStore;
 		activation: ProviderActivationPolicy;
 		coordinator: CodexCompactionCoordinator;
 		capabilities: ResolveEffectiveCapabilities;
+		profile: CodexToolProfileCoordinator;
 	},
-): Promise<void> {
+): Promise<{ cancel?: boolean; compaction?: CompactionResult } | undefined> {
 	const sessionId = ctx.sessionManager.getSessionId();
 	const model = ctx.model;
-	if (model === undefined || !state.activation.isActive(model)) {
-		state.coordinator.setPreviousTokens(sessionId, null);
-		return;
+	if (model === undefined) {
+		state.coordinator.end(sessionId, "error");
+		throw new Error("OpenAI Codex compaction requires an active model");
 	}
-	const usage = ctx.getContextUsage?.();
-	const currentTokens = usage?.tokens ?? null;
-	if (currentTokens === null) {
-		return;
-	}
+	if (!state.activation.isActive(model)) return undefined;
+	if (event.signal.aborted) return { cancel: true };
+	// Pi's post-run threshold event aborts the active retry path. Inline automatic
+	// compaction is owned by before_provider_request; overflow remains Pi-owned.
+	if (event.reason === "threshold") return { cancel: true };
 
+	let connection: Awaited<ReturnType<typeof resolveProviderConnection>>;
+	try {
+		connection = await resolveProviderConnection(
+			ctx,
+			state.activation,
+			"Codex compaction is inactive for the selected provider and API",
+		);
+	} catch (error) {
+		state.coordinator.end(sessionId, "error");
+		throw error;
+	}
 	const config = await state.configuration.load();
-	const compaction = config.codex.compaction;
-	if (compaction.mode === "off") {
-		state.coordinator.setPreviousTokens(sessionId, currentTokens);
-		return;
+	if (config.codex.compaction.mode === "off") {
+		state.coordinator.end(sessionId, "cancel");
+		return { cancel: true };
 	}
-
-	const threshold = await resolveThresholdForModel(
-		ctx,
-		sessionId,
-		model.id,
-		model.contextWindow,
-		compaction,
-		state,
+	const capabilityKey = capabilityCacheKey({
+		modelId: model.id,
+		providerId: model.provider,
 		config,
-	);
-	const previousTokens = state.coordinator.getPreviousTokens(sessionId);
-	const shouldTrigger = shouldTriggerAutoCompaction({
-		previousTokens,
-		currentTokens,
-		threshold,
-		compacting: state.coordinator.isBusy(sessionId),
-		mode: compaction.mode,
+		contextWindow: model.contextWindow,
 	});
-	state.coordinator.setPreviousTokens(sessionId, currentTokens);
-	if (!shouldTrigger) return;
-
-	if (!state.coordinator.begin(sessionId)) {
-		return;
+	if (!state.profile.isHealthy(capabilityKey)) {
+		state.coordinator.end(sessionId, "error");
+		throw new Error("Codex tool profile is unavailable for the selected capability");
 	}
-	ctx.compact({
-		onComplete: () => {
-			state.coordinator.end(sessionId, "success");
-		},
-		onError: () => {
-			state.coordinator.end(sessionId, "error");
-		},
-	});
-}
-
-async function resolveThresholdForModel(
-	ctx: ExtensionContext,
-	sessionId: string,
-	modelId: string,
-	contextWindow: number,
-	compaction: CompactionConfig,
-	state: {
-		runtime: CodexRuntime;
-		activation: ProviderActivationPolicy;
-		coordinator: CodexCompactionCoordinator;
-		capabilities: ResolveEffectiveCapabilities;
-	},
-	config: Awaited<ReturnType<ConfigurationService["load"]>>,
-): Promise<number | undefined> {
-	if (compaction.mode === "auto" && typeof compaction.autoCompactTokenLimit === "number") {
-		return resolveCompactionThreshold(compaction, null, contextWindow);
-	}
-	const cached = state.coordinator.getThresholdCache(sessionId);
-	if (cached?.modelId === modelId) {
-		return resolveCompactionThreshold(compaction, cached.autoCompactTokenLimit, contextWindow);
-	}
-	const providerId = ctx.model?.provider;
-	if (providerId === undefined) return undefined;
-	const resolution = await state.capabilities.resolve({
-		modelId,
-		providerId,
+	const capabilitySnapshot = await state.capabilities.resolve({
+		modelId: model.id,
+		providerId: model.provider,
 		config,
-		contextWindow,
+		contextWindow: model.contextWindow,
 	});
-	const nextCache: CompactionThresholdCache = {
-		modelId,
-		autoCompactTokenLimit: resolution.compaction.modelThreshold,
-	};
-	state.coordinator.setThresholdCache(sessionId, nextCache);
-	return resolveCompactionThreshold(
-		compaction,
-		resolution.compaction.modelThreshold,
-		contextWindow,
-	);
+	if (!state.coordinator.beginExecution(sessionId)) return { cancel: true };
+	try {
+		if (event.signal.aborted) {
+			state.coordinator.end(sessionId, "cancel");
+			return { cancel: true };
+		}
+		const identity = providerCompactionIdentity({
+			sessionId,
+			model,
+			connection,
+		});
+		if (identity === undefined)
+			throw new Error("OpenAI Codex compaction credentials are unsupported");
+		const officialTools = capabilitySnapshot.modelTools;
+		const tools = selectCodexToolSurface(
+			officialTools,
+			state.pi.getActiveTools(),
+			state.pi.getAllTools(),
+		);
+		const previous = matchingSnapshot(state.store.getForSession(sessionId), identity);
+		const messages = [
+			...event.preparation.messagesToSummarize,
+			...event.preparation.turnPrefixMessages,
+		];
+		const input = [...(previous?.output ?? []), ...responseItemsFromMessages(messages)];
+		const result = await state.runtime.compact({
+			connection,
+			request: {
+				model: model.id,
+				input,
+				instructions: withSupplementalSessionInstructions(
+					ctx.getSystemPrompt(),
+					capabilitySnapshot,
+				),
+				tools: tools.length === 0 ? null : tools,
+				parallel_tool_calls: true,
+				reasoning: reasoningFor(model, state.pi.getThinkingLevel()),
+				service_tier: config.codex.serviceTier,
+				prompt_cache_key: sessionId,
+				text: { verbosity: config.codex.verbosity },
+			},
+			implementation: capabilitySnapshot.compaction.implementation ?? "compact_endpoint",
+			transportMode: config.codex.transport.mode,
+			providerSupportsWebsockets: capabilitySnapshot.providerSupportsWebsockets,
+			signal: event.signal,
+		});
+		if (event.signal.aborted || result.status === "aborted") {
+			state.coordinator.end(sessionId, "cancel");
+			return { cancel: true };
+		}
+		if (result.status !== "completed")
+			throw new Error(`OpenAI Codex compaction ended with status ${result.status}`);
+		const output = validateCompactionOutput(record(result.result)?.output);
+		const details = createCodexCompactionDetails(identity, output);
+		state.coordinator.end(sessionId, "success");
+		return {
+			compaction: {
+				summary: COMPACTION_SUMMARY,
+				firstKeptEntryId: event.preparation.firstKeptEntryId,
+				tokensBefore: event.preparation.tokensBefore,
+				details,
+			},
+		};
+	} catch (error) {
+		state.coordinator.end(sessionId, "error");
+		throw error;
+	}
 }
 
 function restoreCompaction(ctx: ExtensionContext, store: CodexCompactionStore): void {
@@ -324,13 +221,24 @@ function restoreCompaction(ctx: ExtensionContext, store: CodexCompactionStore): 
 	const branch = ctx.sessionManager.getBranch();
 	for (let index = branch.length - 1; index >= 0; index -= 1) {
 		const entry = record(branch[index]);
+		if (entry?.type === "custom" && entry.customType === "pi-codex-adaptor.auto-compaction") {
+			const checkpoint = parseCodexAutoCompactionCheckpoint(entry.data);
+			if (checkpoint === undefined) store.markReplayInvalid(sessionId);
+			else if (typeof entry.id === "string") store.setAutomatic(sessionId, checkpoint, entry.id);
+			else store.markReplayInvalid(sessionId);
+			return;
+		}
 		if (entry?.type !== "compaction") continue;
 		const details = parseCodexCompactionDetails(entry.details);
-		if (details !== undefined && typeof entry.summary === "string") {
-			store.set(sessionId, entry.summary, details);
-		} else {
+		if (details === undefined || details.version !== 2 || typeof entry.summary !== "string") {
 			store.clear(sessionId);
+			return;
 		}
+		if (typeof entry.id !== "string") {
+			store.markReplayInvalid(sessionId);
+			return;
+		}
+		store.setManual(sessionId, entry.summary, details, entry.id);
 		return;
 	}
 	store.clear(sessionId);
@@ -342,8 +250,42 @@ function acceptCompaction(
 	store: CodexCompactionStore,
 ): void {
 	const details = parseCodexCompactionDetails(event.compactionEntry.details);
-	if (details === undefined) return;
-	store.set(ctx.sessionManager.getSessionId(), event.compactionEntry.summary, details);
+	if (details === undefined || details.version !== 2) {
+		store.clear(ctx.sessionManager.getSessionId());
+		return;
+	}
+	store.setManual(
+		ctx.sessionManager.getSessionId(),
+		event.compactionEntry.summary,
+		details,
+		event.compactionEntry.id,
+	);
+}
+
+function matchingSnapshot(
+	snapshot: ReturnType<CodexCompactionStore["getForSession"]>,
+	identity: {
+		readonly sessionFingerprint: string;
+		readonly providerId: string;
+		readonly api: string;
+		readonly baseUrl: string;
+		readonly modelId: string;
+		readonly authenticationBinding: unknown;
+	},
+): { readonly output: readonly unknown[] } | undefined {
+	if (snapshot === undefined) return undefined;
+	const value = snapshot.source === "manual" ? snapshot.details : snapshot.checkpoint;
+	if (
+		value.sessionFingerprint !== identity.sessionFingerprint ||
+		value.providerId !== identity.providerId ||
+		value.api !== identity.api ||
+		value.baseUrl !== identity.baseUrl ||
+		value.modelId !== identity.modelId ||
+		JSON.stringify(value.authenticationBinding) !== JSON.stringify(identity.authenticationBinding)
+	) {
+		return undefined;
+	}
+	return { output: snapshot.output };
 }
 
 function reasoningFor(
@@ -361,5 +303,4 @@ function record(value: unknown): Record<string, unknown> | undefined {
 		: undefined;
 }
 
-// Keep the imported type referenced for documentation of the event contract.
 export type { SessionBeforeCompactEvent };

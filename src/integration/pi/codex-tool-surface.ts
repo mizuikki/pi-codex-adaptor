@@ -37,11 +37,12 @@ export function isAdditiveToolName(name: string, officialNames: ReadonlySet<stri
 export function toResponsesFunctionTool(
 	tool: PiResponsesToolDefinition,
 ): Record<string, unknown> | undefined {
+	const parameters = projectToolParameters(tool.parameters);
 	if (
 		typeof tool.name !== "string" ||
 		tool.name.length === 0 ||
 		typeof tool.description !== "string" ||
-		!isRecord(tool.parameters)
+		parameters === undefined
 	) {
 		return undefined;
 	}
@@ -49,9 +50,51 @@ export function toResponsesFunctionTool(
 		type: "function",
 		name: tool.name,
 		description: tool.description,
-		parameters: tool.parameters,
+		parameters,
 		strict: false,
 	};
+}
+
+/** Copy the JSON Schema wire surface while ignoring TypeBox symbol metadata. */
+function projectToolParameters(value: unknown): Record<string, unknown> | undefined {
+	const projected = projectJsonValue(value, new Set<object>());
+	return isRecord(projected) ? projected : undefined;
+}
+
+function projectJsonValue(value: unknown, ancestors: Set<object>): unknown {
+	if (value === null || typeof value === "string" || typeof value === "boolean") return value;
+	if (typeof value === "number") return Number.isFinite(value) ? value : undefined;
+	if (typeof value !== "object" || ancestors.has(value)) return undefined;
+	ancestors.add(value);
+	try {
+		if (Array.isArray(value)) {
+			if (Object.getPrototypeOf(value) !== Array.prototype) return undefined;
+			const result: unknown[] = [];
+			for (let index = 0; index < value.length; index += 1) {
+				const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+				if (descriptor === undefined || !("value" in descriptor)) return undefined;
+				const projected = projectJsonValue(descriptor.value, ancestors);
+				if (projected === undefined) return undefined;
+				result.push(projected);
+			}
+			return result;
+		}
+		const prototype = Object.getPrototypeOf(value);
+		if (prototype !== Object.prototype && prototype !== null) return undefined;
+		const result: Record<string, unknown> = {};
+		for (const key of Object.keys(value)) {
+			const descriptor = Object.getOwnPropertyDescriptor(value, key);
+			if (descriptor === undefined || !("value" in descriptor)) return undefined;
+			const projected = projectJsonValue(descriptor.value, ancestors);
+			if (projected === undefined) return undefined;
+			result[key] = projected;
+		}
+		return result;
+	} catch {
+		return undefined;
+	} finally {
+		ancestors.delete(value);
+	}
 }
 
 /** Build the model-visible Codex list shared by Responses and compaction. */

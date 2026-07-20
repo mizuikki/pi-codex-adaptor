@@ -30,6 +30,7 @@ import {
 	createCodexProviderDispatchers,
 	piNativeOpenAiCodexResponsesStreamSimple,
 	piNativeOpenAiResponsesStreamSimple,
+	registerCodexProviderRoutes,
 } from "../../src/integration/pi/provider-dispatcher.ts";
 import { createProviderSessionRouter } from "../../src/integration/pi/provider-session-router.ts";
 
@@ -251,6 +252,28 @@ function registerPoisonRegistry(
 }
 
 describe("provider dispatcher native fallbacks", () => {
+	test("registers selected provider ids with the matching adaptor APIs", () => {
+		const registrations: Array<{ name: string; api: string; streamSimple: unknown }> = [];
+		registerCodexProviderRoutes(
+			(name, config) =>
+				registrations.push({ name, api: config.api ?? "", streamSimple: config.streamSimple }),
+			{
+				codexResponses: piNativeOpenAiCodexResponsesStreamSimple,
+				openAiResponses: piNativeOpenAiResponsesStreamSimple,
+			},
+			["cch-responses"],
+		);
+		expect(registrations.map((entry) => entry.name)).toEqual(["openai-codex", "cch-responses"]);
+		expect(registrations[0]).toMatchObject({
+			api: "openai-codex-responses",
+			streamSimple: piNativeOpenAiCodexResponsesStreamSimple,
+		});
+		expect(registrations[1]).toMatchObject({
+			api: "openai-responses",
+			streamSimple: piNativeOpenAiResponsesStreamSimple,
+		});
+	});
+
 	test("keeps an active main session healthy after an inactive child registers later", async () => {
 		const mainConfig: CodexConfig = {
 			...createDefaultConfig(),

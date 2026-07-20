@@ -19,6 +19,7 @@ uses the same structure: context, decision, and consequences.
 | [0012](./0012-capability-completeness-and-supplemental-sessions.md) | Effective capability snapshots and supplemental managed sessions |
 | [0013](./0013-codex-agent-tool-profile-isolation.md) | Reversible Codex core tool-profile isolation and additive external tools |
 | [0014](./0014-session-affine-provider-dispatch.md) | Process-stable registration and session-affine provider dispatch |
+| [0015](./0015-inline-automatic-compaction-and-opaque-replay.md) | Inline automatic compaction and provider-bound opaque replay |
 
 Accepted ADRs are changed only to correct factual errors. A decision change requires a new ADR that
 explicitly supersedes the earlier record. Baseline upgrades and product-boundary changes must remain

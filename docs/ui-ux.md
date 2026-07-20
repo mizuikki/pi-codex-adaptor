@@ -23,6 +23,12 @@ Provider and model selection changes switch the active tool profile and rebuild 
 prompt/tool status. Codex core isolation and reversible Pi restoration are lifecycle behavior, not a
 new user setting.
 
+The OpenAI section's manual compaction action is manual Pi compaction. It uses a fixed shim summary
+that states the provider performed compaction and keeps the returned version `2` opaque details for
+provider-bound replay. The UI never attempts to decrypt, summarize, or display the encrypted content.
+Inline automatic compaction is silent at the UI layer: it continues the current provider request,
+adds no synthetic message or continuation turn, and persists only a hidden opaque `CustomEntry`.
+
 The Tools category includes an `Approval policy` enum with `prompt` and `bypass`. Prompt is the safe
 default. Cycling from prompt to bypass opens a confirmation with Cancel focused by default. The
 confirmation states that native commands run with the user's permissions and that workspace roots do

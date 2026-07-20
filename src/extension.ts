@@ -12,12 +12,16 @@ import { BundledCodexRuntime } from "./infrastructure/codex-bridge/runtime.ts";
 import { FileConfigurationRepository } from "./infrastructure/configuration/file-config-repository.ts";
 import { FileDiagnosticsExporter } from "./infrastructure/diagnostics/file-diagnostics-exporter.ts";
 import { registerCodexCompaction } from "./integration/pi/codex-compaction.ts";
+import { CodexProviderRequestGuard } from "./integration/pi/codex-provider-request-guard.ts";
 import {
 	createCodexToolProfile,
 	createUnavailableCodexToolProfile,
 } from "./integration/pi/codex-tool-profile.ts";
 import { registerCodexTools } from "./integration/pi/codex-tools.ts";
-import { createCodexProviderDispatchers } from "./integration/pi/provider-dispatcher.ts";
+import {
+	createCodexProviderDispatchers,
+	registerCodexProviderRoutes,
+} from "./integration/pi/provider-dispatcher.ts";
 import {
 	getProcessProviderSessionRouter,
 	type ProviderSessionLease,
@@ -52,7 +56,10 @@ export default async function piCodexAdaptor(pi: ExtensionAPI): Promise<void> {
 	const compactions = new CodexCompactionStore();
 	const compactionCoordinator = new CodexCompactionCoordinator();
 	const capabilities = new ResolveEffectiveCapabilities(runtime);
+	const requestGuard = new CodexProviderRequestGuard();
 	let providerSessionLease: ProviderSessionLease | undefined;
+	let registerSelectedProviderRoutes: (() => void) | undefined;
+	let createProviderSessionLease: (() => ProviderSessionLease) | undefined;
 	if (typeof pi.registerProvider === "function") {
 		const dispatchers = createCodexProviderDispatchers(
 			runtime,
@@ -61,25 +68,34 @@ export default async function piCodexAdaptor(pi: ExtensionAPI): Promise<void> {
 			compactions,
 			capabilities,
 			toolProfile,
+			requestGuard,
 		);
 		const router = getProcessProviderSessionRouter();
-		providerSessionLease = router.createLease(dispatchers);
-		pi.registerProvider("openai-codex", {
-			api: "openai-codex-responses",
-			streamSimple: router.codexResponses,
-		});
-		pi.registerProvider("pi-codex-adaptor-openai-responses", {
-			api: "openai-responses",
-			streamSimple: router.openAiResponses,
-		});
+		createProviderSessionLease = () => router.createLease(dispatchers);
+		providerSessionLease = createProviderSessionLease();
+		const registerProvider = pi.registerProvider;
+		registerSelectedProviderRoutes = () => {
+			registerCodexProviderRoutes(registerProvider, router, activation.providers());
+		};
+		registerSelectedProviderRoutes();
 	}
+	const unregisterProviderRouteListener = service.onChange(() =>
+		registerSelectedProviderRoutes?.(),
+	);
 	if (typeof pi.on === "function") {
 		pi.on("session_start", async (_event, ctx) => {
+			providerSessionLease?.release();
+			providerSessionLease = createProviderSessionLease?.();
 			providerSessionLease?.bind(ctx.sessionManager.getSessionId());
+			requestGuard.invalidateAll();
 			await activation.refresh();
+			registerSelectedProviderRoutes?.();
 		});
 		pi.on("session_shutdown", async () => {
+			unregisterProviderRouteListener();
 			providerSessionLease?.release();
+			requestGuard.invalidateAll();
+			requestGuard.dispose();
 			toolProfile.restorePi();
 			compactionCoordinator.disposeAll();
 			capabilities.invalidate();
@@ -100,6 +116,7 @@ export default async function piCodexAdaptor(pi: ExtensionAPI): Promise<void> {
 				compactionCoordinator,
 				capabilities,
 				toolProfile,
+				requestGuard,
 			);
 		}
 	}

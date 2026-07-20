@@ -41,6 +41,24 @@ native runtime. Missing or ambiguous attribution fails locally, and lifecycle cl
 scoped so one session cannot remove another session's binding. The router is the only intentional
 `globalThis` state and owns none of the session-local services.
 
+Automatic compaction is a provider-hook operation, not a Pi turn operation. After the selected
+dispatcher constructs a request, its extension-local `CodexProviderRequestGuard` opens one
+single-use `AsyncLocalStorage` record around the awaited public `onPayload` chain. The registered
+`before_provider_request` handler reads that record, verifies the routed and hook-context session
+ids, projects `buildContextEntries()` through Pi's exported `sessionEntryToContextMessages()`, and
+structurally matches the resulting input to the exact provider payload. It replays the latest
+provider-bound opaque checkpoint or performs one native compact call before returning the rewritten
+payload. The live tail is cloned from the hook payload, so in-flight provider items that Pi has not
+persisted are not reconstructed from session entries.
+
+Automatic checkpoints are Pi custom entries. `appendEntry` advances Pi's active branch before it
+reports persistence errors, so the adaptor verifies the new leaf and only then installs its in-memory
+snapshot. An indeterminate append poisons replay for that session instance until reload or
+replacement. Manual compaction remains Pi-owned: Pi writes the real `CompactionEntry`, while the
+adaptor supplies version `2` provider-bound details and restores them on reload. Neither path performs
+client-side decryption; protocol `3` limits the retained opaque item to the pinned native typed
+projection.
+
 Pi owns the persistent approval policy and maps one validated snapshot to one explicit authorization
 value on each native request. The integration layer never infers bypass from UI availability and does
 not cache authorization across calls. Native code owns the explicit allowlist, strict decoding,
@@ -53,7 +71,7 @@ Bypass removes only the interactive approval wait; it does not provide an OS san
 | --- | --- | --- |
 | `src/domain` | Configuration and capability semantics, value objects, terminal states, redaction policy | Pi, TUI, HTTP, filesystem |
 | `src/application` | Use cases and ports | Concrete UI or process implementations |
-| `src/integration/pi` | Pi lifecycle, session-affine provider routing, activation, reversible tool profiles, message and tool binding | Rust internals, handwritten OpenAI schemas, or process-global native runtime state |
+| `src/integration/pi` | Pi lifecycle, session-affine provider routing, request approval, activation, reversible tool profiles, opaque checkpoint replay, message and tool binding | Rust internals, handwritten OpenAI schemas, or process-global native runtime state |
 | `src/infrastructure/codex-bridge` | Sidecar discovery, lifecycle, JSONL codec, cancellation | HTTP details or Pi UI |
 | `src/infrastructure/diagnostics` | Confirmed redacted diagnostic-file export | Provider transport or Pi UI |
 | `src/ui/terminal` | `/codex`, settings view models, inline renderers | Provider transport details |

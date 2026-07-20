@@ -17,16 +17,18 @@ describe("extension entry point", () => {
 		await piCodexAdaptor(second.api);
 
 		expect(first.commands).toEqual(["codex"]);
-		expect(first.providers).toHaveLength(2);
-		expect(first.providers[0]?.name).toBe("openai-codex");
-		expect(first.providers[0]?.config.api).toBe("openai-codex-responses");
-		expect(first.providers[0]?.config.streamSimple).toBeFunction();
-		expect(first.providers[1]?.name).toBe("pi-codex-adaptor-openai-responses");
-		expect(first.providers[1]?.config.api).toBe("openai-responses");
-		expect(first.providers[1]?.config.streamSimple).toBeFunction();
+		const codexProvider = first.providers.find((provider) => provider.name === "openai-codex");
+		expect(codexProvider?.config.api).toBe("openai-codex-responses");
+		expect(codexProvider?.config.streamSimple).toBeFunction();
+		for (const provider of first.providers.filter((entry) => entry.name !== "openai-codex")) {
+			expect(provider.config.api).toBe("openai-responses");
+			expect(provider.config.streamSimple).toBeFunction();
+		}
 		expect(first.events).toEqual(["session_start", "session_shutdown"]);
 		expect(second.providers[0]?.config.streamSimple).toBe(first.providers[0]?.config.streamSimple);
-		expect(second.providers[1]?.config.streamSimple).toBe(first.providers[1]?.config.streamSimple);
+		expect(second.providers.map((provider) => provider.name).sort()).toEqual(
+			first.providers.map((provider) => provider.name).sort(),
+		);
 
 		await first.emit("session_start", "session-first");
 		await second.emit("session_start", "session-second");

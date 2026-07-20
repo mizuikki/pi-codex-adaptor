@@ -45,3 +45,17 @@ unselected provider/API routes, and internal test-only tools are not product gap
 Each P1 decision requires an ADR selecting `adopt`, `delegate-to-Pi`, or `exclude`. Adopted and
 delegated capabilities require official specs, bridge/application behavior, UI states, contract tests,
 and differential conformance before this list changes.
+
+## Public-host residuals
+
+The inline automatic compaction contract is implemented within the public Pi hook surface, but three
+host-owned limits remain explicit rather than being treated as product guarantees:
+
+- Pi swallows a later `before_provider_request` hook exception without exposing whether the callback
+  chain had an error. The guard rejects replacement or effective mutation of an approved request, but
+  cannot detect a swallowed exception that leaves the same approved object unchanged.
+- Protocol `3` cancellation is cooperative. A local abort after a compact or Responses invocation
+  does not prove whether the remote server accepted a frame.
+- Bare `AgentSession.dispose()` does not emit `session_shutdown`. In-flight records check their signal
+  and clean up in `finally`; a stale weak router lease may remain ambiguous until public release or
+  eventual weak pruning.

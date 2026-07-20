@@ -70,6 +70,7 @@ export function createProviderConnection(
 		headers: Object.freeze(Object.fromEntries(source)),
 		authentication: freezeAuthentication(authentication),
 		...(accountId === undefined ? {} : { accountId }),
+		...(explicitAccountId === undefined ? {} : { accountIdSource: "header" as const }),
 		...optionalNumber("maxRetries", options.maxRetries, 0, MAX_RETRIES),
 		...optionalTimeoutMs("timeoutMs", options.timeoutMs),
 		...optionalNumber(

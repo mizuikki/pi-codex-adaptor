@@ -6,6 +6,7 @@ import {
 } from "@earendil-works/pi-ai";
 
 import { CapabilityError } from "../../domain/capability.ts";
+import { snapshotSimpleStreamOptions } from "./codex-provider-request-guard.ts";
 import type { StreamSimpleDispatcher } from "./provider-dispatcher.ts";
 
 const PROCESS_ROUTER_KEY = Symbol.for("pi-codex-adaptor.provider-session-router.v1");
@@ -75,7 +76,8 @@ export function createProviderSessionRouter(
 	const dispatch =
 		(field: keyof ProviderSessionDispatchers): StreamSimpleDispatcher =>
 		(model, context, streamOptions) => {
-			const sessionId = streamOptions?.sessionId;
+			const optionsSnapshot = snapshotSimpleStreamOptions(streamOptions);
+			const sessionId = optionsSnapshot?.sessionId;
 			if (typeof sessionId !== "string" || sessionId.trim().length === 0) {
 				return createRouteErrorStream(
 					model,
@@ -92,7 +94,7 @@ export function createProviderSessionRouter(
 					),
 				);
 			}
-			return resolved.binding.dispatchers[field](model, context, streamOptions);
+			return resolved.binding.dispatchers[field](model, context, optionsSnapshot);
 		};
 
 	const router: ProcessProviderSessionRouter = {
