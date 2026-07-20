@@ -10,6 +10,7 @@ import type {
 import { extractAccountId } from "../../src/application/codex-runtime.ts";
 import {
 	CodexCompactionStore,
+	createCodexAutoCompactionCheckpoint,
 	createCodexCompactionDetails,
 } from "../../src/application/compaction.ts";
 import type { ConfigurationService } from "../../src/application/configuration.ts";
@@ -682,6 +683,49 @@ describe("Pi Codex provider adapter", () => {
 				type: "message",
 				role: "user",
 				content: [{ type: "input_text", text: "kept input" }],
+			},
+		]);
+	});
+
+	test("does not treat automatic checkpoints as manual compaction markers", async () => {
+		const runtime = new FixtureRuntime();
+		const compactions = new CodexCompactionStore();
+		const connection = createProviderConnection(model, { apiKey: fixtureToken() });
+		const identity = providerCompactionIdentityFromValues({
+			sessionId: "session-fixture",
+			model,
+			connection,
+		});
+		if (identity === undefined) throw new Error("fixture identity unavailable");
+		compactions.setAutomatic(
+			"session-fixture",
+			createCodexAutoCompactionCheckpoint(identity, "checkpoint-fixture", "covered-entry-fixture", [
+				{ type: "compaction", encrypted_content: "synthetic-opaque-content" },
+			]),
+		);
+		const streamSimple = createFixtureStream(
+			runtime,
+			configuration(),
+			new ProviderActivationPolicy(configuration()),
+			compactions,
+		);
+		const marker =
+			"The conversation history before this point was compacted into the following summary:\n\n<summary>\n</summary>";
+		for await (const _event of streamSimple(
+			model,
+			{
+				messages: [{ role: "user", content: marker, timestamp: 1 }],
+			},
+			{ apiKey: fixtureToken(), sessionId: "session-fixture" },
+		)) {
+			// Consume the stream to completion.
+		}
+		const request = runtime.request?.request as Record<string, unknown>;
+		expect(request.input).toEqual([
+			{
+				type: "message",
+				role: "user",
+				content: [{ type: "input_text", text: marker }],
 			},
 		]);
 	});

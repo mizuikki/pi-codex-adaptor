@@ -80,7 +80,6 @@ export type CodexCompactionSnapshot =
 	  }
 	| {
 			readonly source: "automatic";
-			readonly summary: string;
 			readonly entryId?: string;
 			readonly checkpoint: CodexAutoCompactionCheckpointV1;
 			readonly output: readonly StructuredResponseItem[];
@@ -295,7 +294,6 @@ export class CodexCompactionStore {
 		this.#replayInvalid.delete(sessionId);
 		this.#sessions.set(sessionId, {
 			source: "automatic",
-			summary: "",
 			checkpoint: cloneAutomaticCheckpoint(checkpoint),
 			output: cloneOutputWindow(checkpoint.output),
 			...(entryId === undefined ? {} : { entryId }),

@@ -87,9 +87,9 @@ describe("fake Pi + real native lifecycle", () => {
 		let sessionStarted = false;
 		let sessionShutdown = false;
 		try {
-			const registered = pi.providerConfigs.find((entry) => entry.config.api === "openai-responses")
-				?.config.streamSimple;
-			expect(registered).toBe(router.openAiResponses);
+			const registered = pi.providerConfigs.find((entry) => entry.name === "openai-codex")?.config
+				.streamSimple;
+			expect(registered).toBe(router.codexResponses);
 			registered?.(fixtureModel(), { messages: [] }, { sessionId: "session-lifecycle" });
 			expect(probeCalls).toBe(1);
 

@@ -497,7 +497,7 @@ export function buildCodexRequest(
 			: (model.thinkingLevelMap?.[options.reasoning] ?? options.reasoning);
 	const snapshot = compactions.get(options?.sessionId, model.id);
 	const messages =
-		snapshot !== undefined && isCompactionMarker(context.messages[0], snapshot.summary)
+		snapshot?.source === "manual" && isCompactionMarker(context.messages[0], snapshot.summary)
 			? context.messages.slice(1)
 			: context.messages;
 	const canonicalPrefix = messages === context.messages ? [] : (snapshot?.output ?? []);

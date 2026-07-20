@@ -71,8 +71,7 @@ export function registerCodexProviderRoutes(
 	},
 	providerIds: readonly string[],
 ): void {
-	const selected = new Set(["openai-codex", ...providerIds]);
-	for (const providerId of selected) {
+	for (const providerId of selectedCodexProviderIds(providerIds)) {
 		if (providerId === "openai-codex") {
 			registerProvider(providerId, {
 				api: "openai-codex-responses",
@@ -85,6 +84,30 @@ export function registerCodexProviderRoutes(
 			streamSimple: handlers.openAiResponses,
 		});
 	}
+}
+
+export function reconcileCodexProviderRoutes(
+	registerProvider: ExtensionAPI["registerProvider"],
+	unregisterProvider: ExtensionAPI["unregisterProvider"] | undefined,
+	handlers: {
+		readonly codexResponses: StreamSimpleDispatcher;
+		readonly openAiResponses: StreamSimpleDispatcher;
+	},
+	previousProviderIds: ReadonlySet<string>,
+	providerIds: readonly string[],
+): ReadonlySet<string> {
+	const selected = new Set(selectedCodexProviderIds(providerIds));
+	if (unregisterProvider !== undefined) {
+		for (const providerId of previousProviderIds) {
+			if (!selected.has(providerId)) unregisterProvider(providerId);
+		}
+	}
+	registerCodexProviderRoutes(registerProvider, handlers, providerIds);
+	return selected;
+}
+
+function selectedCodexProviderIds(providerIds: readonly string[]): readonly string[] {
+	return [...new Set(["openai-codex", ...providerIds])];
 }
 
 function createDispatcher(

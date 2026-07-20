@@ -8,6 +8,7 @@ import type {
 
 import type { CodexRuntime } from "../../application/codex-runtime.ts";
 import {
+	CODEX_AUTO_COMPACTION_KIND,
 	CodexCompactionCoordinator,
 	type CodexCompactionStore,
 	createCodexCompactionDetails,
@@ -221,7 +222,7 @@ function restoreCompaction(ctx: ExtensionContext, store: CodexCompactionStore): 
 	const branch = ctx.sessionManager.getBranch();
 	for (let index = branch.length - 1; index >= 0; index -= 1) {
 		const entry = record(branch[index]);
-		if (entry?.type === "custom" && entry.customType === "pi-codex-adaptor.auto-compaction") {
+		if (entry?.type === "custom" && entry.customType === CODEX_AUTO_COMPACTION_KIND) {
 			const checkpoint = parseCodexAutoCompactionCheckpoint(entry.data);
 			if (checkpoint === undefined) store.markReplayInvalid(sessionId);
 			else if (typeof entry.id === "string") store.setAutomatic(sessionId, checkpoint, entry.id);

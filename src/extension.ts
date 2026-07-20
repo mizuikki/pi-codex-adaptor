@@ -20,7 +20,7 @@ import {
 import { registerCodexTools } from "./integration/pi/codex-tools.ts";
 import {
 	createCodexProviderDispatchers,
-	registerCodexProviderRoutes,
+	reconcileCodexProviderRoutes,
 } from "./integration/pi/provider-dispatcher.ts";
 import {
 	getProcessProviderSessionRouter,
@@ -64,6 +64,7 @@ export default async function piCodexAdaptor(pi: ExtensionAPI): Promise<void> {
 	let providerSessionLease: ProviderSessionLease | undefined;
 	let registerSelectedProviderRoutes: (() => void) | undefined;
 	let createProviderSessionLease: (() => ProviderSessionLease) | undefined;
+	let registeredProviderIds = new Set<string>();
 	if (typeof pi.registerProvider === "function") {
 		const dispatchers = createCodexProviderDispatchers(
 			runtime,
@@ -78,8 +79,18 @@ export default async function piCodexAdaptor(pi: ExtensionAPI): Promise<void> {
 		createProviderSessionLease = () => router.createLease(dispatchers);
 		providerSessionLease = createProviderSessionLease();
 		const registerProvider = pi.registerProvider;
+		const unregisterProvider =
+			typeof pi.unregisterProvider === "function" ? pi.unregisterProvider : undefined;
 		registerSelectedProviderRoutes = () => {
-			registerCodexProviderRoutes(registerProvider, router, activation.providers());
+			registeredProviderIds = new Set(
+				reconcileCodexProviderRoutes(
+					registerProvider,
+					unregisterProvider,
+					router,
+					registeredProviderIds,
+					activation.providers(),
+				),
+			);
 		};
 		registerSelectedProviderRoutes();
 	}

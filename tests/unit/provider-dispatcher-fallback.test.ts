@@ -30,6 +30,7 @@ import {
 	createCodexProviderDispatchers,
 	piNativeOpenAiCodexResponsesStreamSimple,
 	piNativeOpenAiResponsesStreamSimple,
+	reconcileCodexProviderRoutes,
 	registerCodexProviderRoutes,
 } from "../../src/integration/pi/provider-dispatcher.ts";
 import { createProviderSessionRouter } from "../../src/integration/pi/provider-session-router.ts";
@@ -272,6 +273,33 @@ describe("provider dispatcher native fallbacks", () => {
 			api: "openai-responses",
 			streamSimple: piNativeOpenAiResponsesStreamSimple,
 		});
+	});
+
+	test("unregisters provider ids removed from the active configuration", () => {
+		const registrations: string[] = [];
+		const unregistrations: string[] = [];
+		const handlers = {
+			codexResponses: piNativeOpenAiCodexResponsesStreamSimple,
+			openAiResponses: piNativeOpenAiResponsesStreamSimple,
+		};
+		const first = reconcileCodexProviderRoutes(
+			(name) => registrations.push(name),
+			(name) => unregistrations.push(name),
+			handlers,
+			new Set(),
+			["old-provider", "kept-provider"],
+		);
+
+		const second = reconcileCodexProviderRoutes(
+			(name) => registrations.push(name),
+			(name) => unregistrations.push(name),
+			handlers,
+			first,
+			["kept-provider", "new-provider"],
+		);
+
+		expect(unregistrations).toEqual(["old-provider"]);
+		expect([...second]).toEqual(["openai-codex", "kept-provider", "new-provider"]);
 	});
 
 	test("keeps an active main session healthy after an inactive child registers later", async () => {
