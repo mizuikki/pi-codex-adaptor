@@ -205,8 +205,7 @@ describe("fake Pi + real native lifecycle", () => {
 			"view_image",
 			"image_gen.imagegen",
 		]);
-		expect(pi.status.get("codex-adaptor")).toContain("shell-command");
-		expect(pi.status.get("codex-adaptor")).toContain("hosted");
+		expect(pi.status.get("codex-adaptor")).toBe("Codex sh bg+ web");
 
 		const shell = pi.context(fixtureModel("gpt-5.6-sol", "openai-codex", server.baseUrl));
 		await emit(pi, "model_select", shell);
@@ -221,8 +220,7 @@ describe("fake Pi + real native lifecycle", () => {
 			"image_gen.imagegen",
 			"web.run",
 		]);
-		expect(pi.status.get("codex-adaptor")).toContain("shell-command");
-		expect(pi.status.get("codex-adaptor")).toContain("standalone");
+		expect(pi.status.get("codex-adaptor")).toBe("Codex sh bg+ web");
 
 		const plan = await pi.tools.get("update_plan")?.execute(
 			"plan-call",
@@ -369,7 +367,7 @@ describe("fake Pi + real native lifecycle", () => {
 		await emit(pi, "session_start", ctx);
 		expect(pi.activeTools).toContain("view_image");
 		expect(pi.activeTools).toContain("image_gen.imagegen");
-		expect(pi.status.get("codex-adaptor")).toContain("hosted");
+		expect(pi.status.get("codex-adaptor")).toBe("Codex sh bg+ web");
 
 		await writeFile(
 			configFile,
@@ -399,7 +397,7 @@ describe("fake Pi + real native lifecycle", () => {
 		expect(pi.activeTools).not.toContain("view_image");
 		expect(pi.activeTools).not.toContain("image_gen.imagegen");
 		expect(pi.activeTools).not.toContain("web.run");
-		expect(pi.status.get("codex-adaptor")).toContain("disabled");
+		expect(pi.status.get("codex-adaptor")).toBe("Codex sh bg+");
 	}, 60_000);
 
 	test("settings save refreshes optional tools without session_start", async () => {
@@ -458,11 +456,8 @@ describe("fake Pi + real native lifecycle", () => {
 			...defaults,
 			security: { approvalPolicy: "bypass" },
 		});
-		await waitFor(
-			() => pi.status.get("codex-adaptor")?.includes("approvals:bypass") === true,
-			2_000,
-		);
-		expect(pi.status.get("codex-adaptor")).toContain("approvals:bypass");
+		await waitFor(() => pi.status.get("codex-adaptor")?.includes("!bypass") === true, 2_000);
+		expect(pi.status.get("codex-adaptor")).toContain("!bypass");
 		await emit(pi, "session_start", ctx);
 		const bypassWarnings = pi.notifications.filter((message) =>
 			message.includes("approval bypass is enabled"),
