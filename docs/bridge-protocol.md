@@ -97,8 +97,10 @@ Empty session writes remain non-mutating and do not re-prompt. Session resize an
 frames are correlated independently, and shutdown terminates every remaining process tree. Output is
 streamed as acknowledged events and capped at one MiB between polls.
 
-`apply_patch` accepts the official freeform patch grammar, rejects absolute and parent-traversal
-paths, verifies every source and move destination against canonical Pi-supplied workspace roots,
+`apply_patch` accepts the official freeform patch grammar and both relative and absolute paths.
+Relative paths resolve against the validated tool workdir; absolute paths are accepted only when
+their canonical targets remain within a Pi-supplied workspace root. It rejects parent traversal and
+workspace escapes, verifies every source and move destination against canonical workspace roots,
 and waits for patch approval in prompt mode before invoking the pinned official parser and context
 matcher; bypass retains validation and the commit-point cancellation check without approval state.
 Cancellation is honored before approval and at an atomic commit point immediately before the

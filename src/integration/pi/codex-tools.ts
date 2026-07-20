@@ -391,7 +391,7 @@ function registerNativeTool(
 					: name === "shell_command"
 						? "Run a bounded shell command"
 						: name === "apply_patch"
-							? "Apply a patch to files"
+							? "Apply a patch to files; prefer workspace-relative paths"
 							: "Inspect an image file",
 		parameters: parameters as TSchema,
 		renderShell: "self",
