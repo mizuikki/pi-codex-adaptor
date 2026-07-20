@@ -1868,15 +1868,15 @@ async fn apply_patch(
         request_id,
         params.authorization,
         ApprovalOperation::Patch,
-        format!("Modify {} file(s)", paths.len()),
-        json!({ "paths": paths }),
+        format!("Modify {} file(s)", paths.approval.len()),
+        json!({ "paths": paths.approval }),
         "Pi declined the patch approval",
         output,
         approvals,
         cancellation,
     )
     .await?;
-    validate_patch_paths(&parsed.hunks, &workdir, &params.workspace_roots).await?;
+    let validated = validate_patch_paths(&parsed.hunks, &workdir, &params.workspace_roots).await?;
     // Atomic commit point: cancel is honored until immediately before the
     // filesystem apply begins. Once the blocking apply is scheduled, this
     // request waits for the actual terminal outcome instead of claiming aborted
@@ -1885,16 +1885,16 @@ async fn apply_patch(
     let apply = tokio::task::spawn_blocking(move || {
         codex_apply_patch_adapter::apply_patch(&patch, &workdir)
     });
-    let outcome = apply
+    apply
         .await
         .map_err(|_| patch_error("patch_execution_failed", "the patch could not be applied"))?
         .map_err(|_| patch_error("patch_application_failed", "the patch could not be applied"))?;
-    let output = render_patch_summary(&outcome);
+    let output = render_patch_summary(&validated.affected);
     Ok(RequestSuccess::completed(json!({
         "output": output,
-        "added": outcome.added,
-        "modified": outcome.modified,
-        "deleted": outcome.deleted,
+        "added": validated.affected.added,
+        "modified": validated.affected.modified,
+        "deleted": validated.affected.deleted,
     })))
 }
 
@@ -2294,11 +2294,22 @@ fn recent_search_input(items: Vec<ResponseItem>) -> Option<SearchInput> {
     (!messages.is_empty()).then_some(SearchInput::Items(messages))
 }
 
+struct ValidatedPatchPaths {
+    approval: Vec<String>,
+    affected: DisplayAffectedPaths,
+}
+
+struct DisplayAffectedPaths {
+    added: Vec<String>,
+    modified: Vec<String>,
+    deleted: Vec<String>,
+}
+
 async fn validate_patch_paths(
     hunks: &[codex_apply_patch_adapter::Hunk],
     workdir: &Path,
     workspace_roots: &[String],
-) -> Result<Vec<String>, BridgeError> {
+) -> Result<ValidatedPatchPaths, BridgeError> {
     let mut roots = Vec::with_capacity(workspace_roots.len());
     for root in workspace_roots {
         roots.push(tokio::fs::canonicalize(root).await.map_err(|_| {
@@ -2308,7 +2319,8 @@ async fn validate_patch_paths(
             )
         })?);
     }
-    let mut paths = Vec::new();
+    let mut approval = Vec::new();
+    let mut display_by_requested_path = HashMap::new();
     for hunk in hunks {
         let candidates = match hunk {
             codex_apply_patch_adapter::Hunk::AddFile { path, .. }
@@ -2324,16 +2336,16 @@ async fn validate_patch_paths(
                 ..
             } => vec![path, destination],
         };
-        for relative in candidates {
-            if relative.as_os_str().is_empty()
-                || relative.is_absolute()
-                || relative.components().any(|component| {
-                    matches!(
-                        component,
-                        std::path::Component::ParentDir
-                            | std::path::Component::RootDir
-                            | std::path::Component::Prefix(_)
-                    )
+        for requested in candidates {
+            let absolute = requested.is_absolute();
+            if requested.as_os_str().is_empty()
+                || requested.components().any(|component| {
+                    matches!(component, std::path::Component::ParentDir)
+                        || !absolute
+                            && matches!(
+                                component,
+                                std::path::Component::RootDir | std::path::Component::Prefix(_)
+                            )
                 })
             {
                 return Err(patch_error(
@@ -2341,14 +2353,18 @@ async fn validate_patch_paths(
                     "the patch contains an invalid path",
                 ));
             }
-            let candidate = workdir.join(relative);
-            let anchor = canonical_existing_anchor(&candidate).await?;
-            if !roots.iter().any(|root| anchor.starts_with(root)) {
+            let candidate = if absolute {
+                requested.clone()
+            } else {
+                workdir.join(requested)
+            };
+            let resolved = canonical_patch_path(&candidate).await?;
+            let Some(root) = roots.iter().find(|root| resolved.starts_with(root)) else {
                 return Err(patch_error(
                     "workspace_escape",
                     "the patch path is outside the approved workspace",
                 ));
-            }
+            };
             if let Ok(metadata) = tokio::fs::symlink_metadata(&candidate).await
                 && metadata.file_type().is_symlink()
             {
@@ -2357,21 +2373,69 @@ async fn validate_patch_paths(
                     "patching symbolic links is not supported",
                 ));
             }
-            let display = relative.to_string_lossy().replace('\\', "/");
-            if !paths.contains(&display) {
-                paths.push(display);
+            let relative = resolved.strip_prefix(root).map_err(|_| {
+                patch_error("patch_path_unavailable", "the patch path is unavailable")
+            })?;
+            let display = display_relative_path(relative);
+            display_by_requested_path.insert(requested.clone(), display.clone());
+            if !approval.contains(&display) {
+                approval.push(display);
             }
         }
     }
-    Ok(paths)
+    let affected = codex_apply_patch_adapter::affected_paths(hunks);
+    Ok(ValidatedPatchPaths {
+        approval,
+        affected: DisplayAffectedPaths {
+            added: display_affected_paths(&affected.added, &display_by_requested_path)?,
+            modified: display_affected_paths(&affected.modified, &display_by_requested_path)?,
+            deleted: display_affected_paths(&affected.deleted, &display_by_requested_path)?,
+        },
+    })
 }
 
-async fn canonical_existing_anchor(path: &Path) -> Result<PathBuf, BridgeError> {
+fn display_affected_paths(
+    paths: &[PathBuf],
+    display_by_requested_path: &HashMap<PathBuf, String>,
+) -> Result<Vec<String>, BridgeError> {
+    paths
+        .iter()
+        .map(|path| {
+            display_by_requested_path.get(path).cloned().ok_or_else(|| {
+                patch_error("patch_path_unavailable", "the patch path is unavailable")
+            })
+        })
+        .collect()
+}
+
+fn display_relative_path(path: &Path) -> String {
+    let display = path.to_string_lossy().replace('\\', "/");
+    if display.is_empty() {
+        ".".to_owned()
+    } else {
+        display
+    }
+}
+
+async fn canonical_patch_path(path: &Path) -> Result<PathBuf, BridgeError> {
     let mut anchor = path.to_path_buf();
+    let mut missing = Vec::new();
     loop {
         match tokio::fs::canonicalize(&anchor).await {
-            Ok(canonical) => return Ok(canonical),
+            Ok(mut canonical) => {
+                for component in missing.iter().rev() {
+                    canonical.push(component);
+                }
+                return Ok(canonical);
+            }
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                let Some(component) = anchor.file_name().map(ToOwned::to_owned) else {
+                    return Err(patch_error(
+                        "patch_path_unavailable",
+                        "the patch path is unavailable",
+                    ));
+                };
+                missing.push(component);
                 if !anchor.pop() {
                     return Err(patch_error(
                         "patch_path_unavailable",
@@ -2389,7 +2453,7 @@ async fn canonical_existing_anchor(path: &Path) -> Result<PathBuf, BridgeError> 
     }
 }
 
-fn render_patch_summary(affected: &codex_apply_patch_adapter::AffectedPaths) -> String {
+fn render_patch_summary(affected: &DisplayAffectedPaths) -> String {
     let mut lines = vec!["Done!".to_owned()];
     for (label, paths) in [
         ("Added", &affected.added),
@@ -2397,7 +2461,7 @@ fn render_patch_summary(affected: &codex_apply_patch_adapter::AffectedPaths) -> 
         ("Deleted", &affected.deleted),
     ] {
         for path in paths {
-            lines.push(format!("{label}: {}", path.display()));
+            lines.push(format!("{label}: {path}"));
         }
     }
     lines.join("\n")
@@ -4524,7 +4588,7 @@ mod tests {
                     "cmd": "printf fixture",
                     "workdir": workspace_text,
                     "workspaceRoots": [workspace.to_string_lossy()],
-                    "yield_time_ms": 1_000,
+                    "yield_time_ms": 10_000,
                     "allow_background_sessions": false,
                 })
             } else {
@@ -4818,6 +4882,210 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn accepts_workspace_absolute_patch_paths_and_returns_relative_paths() {
+        let workspace = std::env::temp_dir().join(format!(
+            "pi-codex-adaptor-absolute-patch-fixture-{}",
+            std::process::id()
+        ));
+        let _ = tokio::fs::remove_dir_all(&workspace).await;
+        tokio::fs::create_dir_all(&workspace)
+            .await
+            .expect("fixture directory should be created");
+        let source = workspace.join("source.txt");
+        let destination = workspace.join("moved.txt");
+        let added = workspace.join("added.txt");
+        let deleted = workspace.join("deleted.txt");
+        tokio::fs::write(&source, "before\n")
+            .await
+            .expect("source fixture should be written");
+        tokio::fs::write(&deleted, "delete\n")
+            .await
+            .expect("delete fixture should be written");
+        let patch = format!(
+            "*** Begin Patch\n*** Update File: {}\n*** Move to: {}\n@@\n-before\n+after\n*** Add File: {}\n+added\n*** Add File: relative.txt\n+relative\n*** Delete File: {}\n*** End Patch",
+            source.display(),
+            destination.display(),
+            added.display(),
+            deleted.display()
+        );
+        let (output, mut messages) = mpsc::channel(8);
+        let flow = Arc::new(FlowController::new(
+            "request-absolute-patch".to_owned(),
+            output,
+        ));
+        let approvals = Arc::new(Mutex::new(HashMap::new()));
+        let sessions = Arc::new(NativeSessions::default());
+        let cancellation = CancellationToken::new();
+        let task_flow = Arc::clone(&flow);
+        let task_approvals = Arc::clone(&approvals);
+        let task_sessions = Arc::clone(&sessions);
+        let task_cancellation = cancellation.clone();
+        let task_workspace = workspace.clone();
+        let task_workspace_root = workspace.clone();
+        let request = tokio::spawn(async move {
+            tools_execute(
+                "request-absolute-patch",
+                json!({
+                    "tool": "apply_patch",
+                    "authorization": "require_approval",
+                    "input": patch,
+                    "workdir": task_workspace,
+                    "workspaceRoots": [task_workspace_root],
+                }),
+                &task_flow,
+                &task_cancellation,
+                &task_flow.output,
+                &task_approvals,
+                &task_sessions,
+            )
+            .await
+        });
+        let approval = messages.recv().await.expect("approval should be emitted");
+        let ServerMessage::ApprovalRequest { approval, .. } = approval else {
+            panic!("approval should be emitted");
+        };
+        assert_eq!(
+            approval.details["paths"],
+            json!([
+                "source.txt",
+                "moved.txt",
+                "added.txt",
+                "relative.txt",
+                "deleted.txt"
+            ])
+        );
+        resolve_only_pending_approval(&approvals, ApprovalDecision::AllowOnce).await;
+        let result = request
+            .await
+            .expect("patch task should join")
+            .expect("patch should apply");
+
+        assert_eq!(result.result["added"], json!(["added.txt", "relative.txt"]));
+        assert_eq!(result.result["modified"], json!(["source.txt"]));
+        assert_eq!(result.result["deleted"], json!(["deleted.txt"]));
+        assert_eq!(
+            result.result["output"],
+            "Done!\nAdded: added.txt\nAdded: relative.txt\nModified: source.txt\nDeleted: deleted.txt"
+        );
+        assert_eq!(
+            tokio::fs::read_to_string(&destination)
+                .await
+                .expect("moved file should be readable"),
+            "after\n"
+        );
+        assert!(!source.exists());
+        assert!(!deleted.exists());
+        assert_eq!(
+            tokio::fs::read_to_string(&added)
+                .await
+                .expect("added file should be readable"),
+            "added\n"
+        );
+        let _ = tokio::fs::remove_dir_all(workspace).await;
+    }
+
+    #[tokio::test]
+    async fn rejects_absolute_patch_paths_outside_workspace_before_approval() {
+        let root = std::env::temp_dir().join(format!(
+            "pi-codex-adaptor-absolute-patch-escape-{}",
+            std::process::id()
+        ));
+        let workspace = root.join("workspace");
+        let outside = root.join("outside.txt");
+        let _ = tokio::fs::remove_dir_all(&root).await;
+        tokio::fs::create_dir_all(&workspace)
+            .await
+            .expect("fixture directory should be created");
+        let (output, mut messages) = mpsc::channel(8);
+        let flow = FlowController::new("request-absolute-patch-escape".to_owned(), output);
+        let approvals = Arc::new(Mutex::new(HashMap::new()));
+        let sessions = Arc::new(NativeSessions::default());
+        let result = tools_execute(
+            "request-absolute-patch-escape",
+            json!({
+                "tool": "apply_patch",
+                "authorization": "require_approval",
+                "input": format!(
+                    "*** Begin Patch\n*** Add File: {}\n+escape\n*** End Patch",
+                    outside.display()
+                ),
+                "workdir": workspace,
+                "workspaceRoots": [workspace],
+            }),
+            &flow,
+            &CancellationToken::new(),
+            &flow.output,
+            &approvals,
+            &sessions,
+        )
+        .await;
+
+        assert!(matches!(
+            result,
+            Err(RequestFailure::Bridge(error)) if error.code == "workspace_escape"
+        ));
+        assert_no_approval_messages(&mut messages);
+        assert!(approvals.lock().await.is_empty());
+        assert!(!outside.exists());
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn rejects_absolute_patch_paths_that_escape_through_a_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let root = std::env::temp_dir().join(format!(
+            "pi-codex-adaptor-absolute-patch-symlink-{}",
+            std::process::id()
+        ));
+        let workspace = root.join("workspace");
+        let outside = root.join("outside");
+        let link = workspace.join("link");
+        let target = link.join("escape.txt");
+        let _ = tokio::fs::remove_dir_all(&root).await;
+        tokio::fs::create_dir_all(&workspace)
+            .await
+            .expect("workspace should be created");
+        tokio::fs::create_dir_all(&outside)
+            .await
+            .expect("outside directory should be created");
+        symlink(&outside, &link).expect("fixture symlink should be created");
+        let (output, mut messages) = mpsc::channel(8);
+        let flow = FlowController::new("request-absolute-patch-symlink".to_owned(), output);
+        let approvals = Arc::new(Mutex::new(HashMap::new()));
+        let sessions = Arc::new(NativeSessions::default());
+        let result = tools_execute(
+            "request-absolute-patch-symlink",
+            json!({
+                "tool": "apply_patch",
+                "authorization": "require_approval",
+                "input": format!(
+                    "*** Begin Patch\n*** Add File: {}\n+escape\n*** End Patch",
+                    target.display()
+                ),
+                "workdir": workspace,
+                "workspaceRoots": [workspace],
+            }),
+            &flow,
+            &CancellationToken::new(),
+            &flow.output,
+            &approvals,
+            &sessions,
+        )
+        .await;
+
+        assert!(matches!(
+            result,
+            Err(RequestFailure::Bridge(error)) if error.code == "workspace_escape"
+        ));
+        assert_no_approval_messages(&mut messages);
+        assert!(approvals.lock().await.is_empty());
+        assert!(!outside.join("escape.txt").exists());
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
     async fn preauthorized_patch_skips_approval_state_after_path_validation() {
         let workspace = std::env::temp_dir().join(format!(
             "pi-codex-adaptor-bypass-patch-fixture-{}",
@@ -4834,12 +5102,16 @@ mod tests {
         let flow = FlowController::new("request-bypass-patch".to_owned(), output);
         let approvals = Arc::new(Mutex::new(HashMap::new()));
         let sessions = Arc::new(NativeSessions::default());
+        let patch = format!(
+            "*** Begin Patch\n*** Update File: {}\n@@\n-before\n+after\n*** End Patch",
+            workspace.join("fixture.txt").display()
+        );
         let result = tools_execute(
             "request-bypass-patch",
             json!({
                 "tool": "apply_patch",
                 "authorization": "preauthorized",
-                "input": "*** Begin Patch\n*** Update File: fixture.txt\n@@\n-before\n+after\n*** End Patch",
+                "input": patch,
                 "workdir": workspace,
                 "workspaceRoots": [workspace],
             }),

@@ -304,6 +304,9 @@ describe("Pi core tool activation", () => {
 			"web.run",
 		]);
 		expect([...tools.values()].every((tool) => typeof tool.promptSnippet === "string")).toBe(true);
+		expect(tools.get("apply_patch")?.promptSnippet).toBe(
+			"Apply a patch to files; prefer workspace-relative paths",
+		);
 		const selected = context().ctx;
 		await handlers.get("session_start")?.[0]?.({ type: "session_start" }, selected);
 		expect(active).toEqual([
