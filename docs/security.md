@@ -59,6 +59,15 @@ atomic patch commit checks remain mandatory. Preauthorization for an unsupported
   open-ended numeric range. Arbitrary values above the 24-hour bound remain rejected.
 - Prompts, messages, credentials, complete headers, absolute user paths, account data, and opaque
   compaction items are excluded from logs and default diagnostics.
+- Opaque checkpoint windows are sensitive provider output. They are cloned into versioned Pi session
+  data and bound to the active session, branch boundary, provider, base URL, API, model, and
+  authentication identity. No client-side decryption occurs, and the encrypted string is never used
+  as a summary, error message, fixture assertion message, or diagnostic value. An official JWT account
+  claim may survive credential refresh; an explicit conflicting account header, non-JWT bearer, or
+  missing bearer fails closed or binds to the exact credential as defined by the provider contract.
+- The request guard is extension-instance local. The process router stores only weak session leases;
+  it does not retain credentials, opaque windows, payload approvals, or compaction state. A replaced,
+  stale, ambiguous, or mismatched route cannot reach compact, append, fallback, or Responses dispatch.
 - Responses transport is implemented only by pinned official native modules. TypeScript does not add
   a second retry, SSE, or WebSocket implementation.
 - The complete provider contract is declared explicitly for every `tools.resolve` call. Missing

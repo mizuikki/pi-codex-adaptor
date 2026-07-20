@@ -10,17 +10,24 @@ import type {
 import { extractAccountId } from "../../src/application/codex-runtime.ts";
 import {
 	CodexCompactionStore,
+	createCodexAutoCompactionCheckpoint,
 	createCodexCompactionDetails,
 } from "../../src/application/compaction.ts";
 import type { ConfigurationService } from "../../src/application/configuration.ts";
 import { ProviderActivationPolicy } from "../../src/application/provider-activation.ts";
 import { SUPPLEMENTAL_SESSION_INSTRUCTIONS } from "../../src/application/resolve-effective-capabilities.ts";
 import { type CodexConfig, createDefaultConfig } from "../../src/domain/config.ts";
-import { createCodexStreamSimple as createCodexStreamSimpleAdapter } from "../../src/integration/pi/codex-provider.ts";
+import { providerCompactionIdentityFromValues } from "../../src/integration/pi/codex-compaction-replay.ts";
+import {
+	createCodexStreamSimple as createCodexStreamSimpleAdapter,
+	decodeResponseItemSignature,
+	encodeResponseItemSignature,
+} from "../../src/integration/pi/codex-provider.ts";
 import type {
 	CodexToolProfileCoordinator,
 	CodexToolProfileReadiness,
 } from "../../src/integration/pi/codex-tool-profile.ts";
+import { createProviderConnection } from "../../src/integration/pi/provider-connection.ts";
 
 class FixtureRuntime implements CodexRuntime {
 	request: CreateResponseOptions | undefined;
@@ -342,42 +349,48 @@ describe("Pi Codex provider adapter", () => {
 			stopReason: "toolUse",
 			usage: { input: 12, cacheRead: 3, output: 4, reasoning: 1, totalTokens: 16 },
 		});
-		expect(done.message.content).toEqual([
-			{
-				type: "text",
-				text: "hello",
-				textSignature: JSON.stringify({ v: 1, id: "message-fixture", phase: "final_answer" }),
-			},
-			{
-				type: "toolCall",
-				id: "patch-call",
-				name: "apply_patch",
-				arguments: { input: "*** Begin Patch\n*** End Patch" },
-			},
-			{
-				type: "toolCall",
-				id: "image-call",
-				name: "image_gen.imagegen",
-				arguments: { prompt: "fixture" },
-			},
-			{
-				type: "toolCall",
-				id: "call-fixture",
-				name: "update_plan",
-				arguments: { plan: [] },
-			},
-			{
-				type: "text",
-				text: "Web search: fixture weather",
-				textSignature: JSON.stringify({
-					v: 1,
-					kind: "web_search_call",
-					id: "ws-fixture",
-					status: "completed",
-					action: { type: "search", query: "fixture weather" },
-				}),
-			},
-		]);
+		const content = done.message.content;
+		expect(content[0]).toMatchObject({ type: "text", text: "hello" });
+		expect(
+			decodeResponseItemSignature(
+				content[0]?.type === "text" ? content[0].textSignature : undefined,
+			),
+		).toEqual({
+			type: "message",
+			id: "message-fixture",
+			phase: "final_answer",
+			role: "assistant",
+			content: [{ type: "output_text", text: "hello" }],
+		});
+		expect(content[1]).toMatchObject({
+			type: "toolCall",
+			id: "patch-call",
+			name: "apply_patch",
+			arguments: { input: "*** Begin Patch\n*** End Patch" },
+		});
+		expect(
+			decodeResponseItemSignature(
+				content[1]?.type === "toolCall" ? content[1].thoughtSignature : undefined,
+			),
+		).toEqual({
+			type: "custom_tool_call",
+			call_id: "patch-call",
+			name: "apply_patch",
+			input: "*** Begin Patch\n*** End Patch",
+		});
+		expect(content[2]).toMatchObject({ type: "toolCall", id: "image-call" });
+		expect(content[3]).toMatchObject({ type: "toolCall", id: "call-fixture" });
+		expect(content[4]).toMatchObject({ type: "text", text: "Web search: fixture weather" });
+		expect(
+			decodeResponseItemSignature(
+				content[4]?.type === "text" ? content[4].textSignature : undefined,
+			),
+		).toEqual({
+			type: "web_search_call",
+			id: "ws-fixture",
+			status: "completed",
+			action: { type: "search", query: "fixture weather" },
+		});
 		expect(runtime.request?.connection).toEqual({
 			providerId: "openai-codex",
 			baseUrl: "https://invalid.example",
@@ -627,11 +640,18 @@ describe("Pi Codex provider adapter", () => {
 		const runtime = new FixtureRuntime();
 		const compactions = new CodexCompactionStore();
 		const summary = "Context compacted by the OpenAI Codex Responses API.";
+		const connection = createProviderConnection(model, { apiKey: fixtureToken() });
+		const identity = providerCompactionIdentityFromValues({
+			sessionId: "session-fixture",
+			model,
+			connection,
+		});
+		if (identity === undefined) throw new Error("fixture identity unavailable");
 		compactions.set(
 			"session-fixture",
 			summary,
-			createCodexCompactionDetails("fixture-model", [
-				{ type: "message", role: "assistant", content: [] },
+			createCodexCompactionDetails(identity, [
+				{ type: "compaction", encrypted_content: "synthetic-opaque-content" },
 			]),
 		);
 		const streamSimple = createFixtureStream(
@@ -658,12 +678,173 @@ describe("Pi Codex provider adapter", () => {
 		}
 		const request = runtime.request?.request as Record<string, unknown>;
 		expect(request.input).toEqual([
-			{ type: "message", role: "assistant", content: [] },
+			{ type: "compaction", encrypted_content: "synthetic-opaque-content" },
 			{
 				type: "message",
 				role: "user",
 				content: [{ type: "input_text", text: "kept input" }],
 			},
 		]);
+	});
+
+	test("does not treat automatic checkpoints as manual compaction markers", async () => {
+		const runtime = new FixtureRuntime();
+		const compactions = new CodexCompactionStore();
+		const connection = createProviderConnection(model, { apiKey: fixtureToken() });
+		const identity = providerCompactionIdentityFromValues({
+			sessionId: "session-fixture",
+			model,
+			connection,
+		});
+		if (identity === undefined) throw new Error("fixture identity unavailable");
+		compactions.setAutomatic(
+			"session-fixture",
+			createCodexAutoCompactionCheckpoint(identity, "checkpoint-fixture", "covered-entry-fixture", [
+				{ type: "compaction", encrypted_content: "synthetic-opaque-content" },
+			]),
+		);
+		const streamSimple = createFixtureStream(
+			runtime,
+			configuration(),
+			new ProviderActivationPolicy(configuration()),
+			compactions,
+		);
+		const marker =
+			"The conversation history before this point was compacted into the following summary:\n\n<summary>\n</summary>";
+		for await (const _event of streamSimple(
+			model,
+			{
+				messages: [{ role: "user", content: marker, timestamp: 1 }],
+			},
+			{ apiKey: fixtureToken(), sessionId: "session-fixture" },
+		)) {
+			// Consume the stream to completion.
+		}
+		const request = runtime.request?.request as Record<string, unknown>;
+		expect(request.input).toEqual([
+			{
+				type: "message",
+				role: "user",
+				content: [{ type: "input_text", text: marker }],
+			},
+		]);
+	});
+
+	test("round-trips every supported typed response-item family through its envelope", () => {
+		const metadata = { turn_id: "synthetic-turn" };
+		const items = [
+			{ type: "additional_tools", id: "tools-id", role: "system", tools: [] },
+			{
+				type: "message",
+				id: "message-id",
+				role: "assistant",
+				phase: "commentary",
+				content: [{ type: "output_text", text: "synthetic message" }],
+				internal_chat_message_metadata_passthrough: metadata,
+			},
+			{
+				type: "agent_message",
+				id: "agent-id",
+				author: "synthetic-author",
+				recipient: "synthetic-recipient",
+				content: [],
+				internal_chat_message_metadata_passthrough: metadata,
+			},
+			{
+				type: "reasoning",
+				id: "reasoning-id",
+				summary: [{ type: "summary_text", text: "synthetic reasoning" }],
+				content: [{ type: "reasoning_text", text: "synthetic detail" }],
+				encrypted_content: "synthetic-reasoning-opaque",
+				internal_chat_message_metadata_passthrough: metadata,
+			},
+			{
+				type: "local_shell_call",
+				id: "shell-id",
+				call_id: "shell-call",
+				status: "completed",
+				action: { type: "exec", command: "synthetic" },
+				internal_chat_message_metadata_passthrough: metadata,
+			},
+			{
+				type: "function_call",
+				id: "function-id",
+				name: "synthetic_tool",
+				namespace: "synthetic_namespace",
+				arguments: '{"value":1}',
+				call_id: "function-call",
+				internal_chat_message_metadata_passthrough: metadata,
+			},
+			{
+				type: "tool_search_call",
+				id: "search-call-id",
+				call_id: "search-call",
+				status: "completed",
+				execution: "synthetic-execution",
+				arguments: { query: "synthetic" },
+				internal_chat_message_metadata_passthrough: metadata,
+			},
+			{
+				type: "function_call_output",
+				id: "function-output-id",
+				call_id: "function-call",
+				output: [{ type: "input_text", text: "synthetic output" }],
+				internal_chat_message_metadata_passthrough: metadata,
+			},
+			{
+				type: "custom_tool_call",
+				id: "custom-call-id",
+				status: "completed",
+				call_id: "custom-call",
+				name: "synthetic_custom_tool",
+				namespace: "synthetic_namespace",
+				input: "synthetic input",
+				internal_chat_message_metadata_passthrough: metadata,
+			},
+			{
+				type: "custom_tool_call_output",
+				id: "custom-output-id",
+				call_id: "custom-call",
+				name: "synthetic_custom_tool",
+				output: "synthetic custom output",
+				internal_chat_message_metadata_passthrough: metadata,
+			},
+			{
+				type: "tool_search_output",
+				id: "search-output-id",
+				call_id: "search-call",
+				status: "completed",
+				execution: "synthetic-execution",
+				tools: [],
+				internal_chat_message_metadata_passthrough: metadata,
+			},
+			{
+				type: "web_search_call",
+				id: "web-id",
+				status: "completed",
+				action: { type: "search", query: "synthetic query" },
+				internal_chat_message_metadata_passthrough: metadata,
+			},
+			{
+				type: "image_generation_call",
+				id: "image-id",
+				status: "completed",
+				revised_prompt: "synthetic revised prompt",
+				result: "synthetic image result",
+				internal_chat_message_metadata_passthrough: metadata,
+			},
+			{ type: "compaction", id: "compaction-id", encrypted_content: "synthetic-opaque-content" },
+			{
+				type: "context_compaction",
+				id: "context-compaction-id",
+				encrypted_content: "synthetic-context-opaque",
+				internal_chat_message_metadata_passthrough: metadata,
+			},
+			{ type: "message", role: "user", content: [] },
+		] as const;
+
+		for (const item of items) {
+			expect(decodeResponseItemSignature(encodeResponseItemSignature(item))).toEqual(item);
+		}
 	});
 });

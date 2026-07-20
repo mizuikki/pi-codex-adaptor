@@ -11,6 +11,7 @@ import {
 	streamSimpleOpenAICodexResponses,
 	streamSimpleOpenAIResponses,
 } from "@earendil-works/pi-ai/compat";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import type { CodexRuntime } from "../../application/codex-runtime.ts";
 import { CodexCompactionStore } from "../../application/compaction.ts";
@@ -18,6 +19,7 @@ import type { ConfigurationService } from "../../application/configuration.ts";
 import type { ProviderActivationPolicy } from "../../application/provider-activation.ts";
 import type { ResolveEffectiveCapabilities } from "../../application/resolve-effective-capabilities.ts";
 import { createCodexStreamSimple } from "./codex-provider.ts";
+import type { CodexProviderRequestGuard } from "./codex-provider-request-guard.ts";
 import type { CodexToolProfileCoordinator } from "./codex-tool-profile.ts";
 
 /** Direct Pi-native `openai-responses` stream; never consults the API registry. */
@@ -41,6 +43,7 @@ export function createCodexProviderDispatchers(
 	compactions = new CodexCompactionStore(),
 	capabilities?: ResolveEffectiveCapabilities,
 	profile?: CodexToolProfileCoordinator,
+	requestGuard?: CodexProviderRequestGuard,
 ): {
 	codexResponses: StreamSimpleDispatcher;
 	openAiResponses: StreamSimpleDispatcher;
@@ -52,11 +55,59 @@ export function createCodexProviderDispatchers(
 		compactions,
 		capabilities,
 		profile,
+		requestGuard,
 	);
 	return {
 		codexResponses: createDispatcher(activation, codex, piNativeOpenAiCodexResponsesStreamSimple),
 		openAiResponses: createDispatcher(activation, codex, piNativeOpenAiResponsesStreamSimple),
 	};
+}
+
+export function registerCodexProviderRoutes(
+	registerProvider: ExtensionAPI["registerProvider"],
+	handlers: {
+		readonly codexResponses: StreamSimpleDispatcher;
+		readonly openAiResponses: StreamSimpleDispatcher;
+	},
+	providerIds: readonly string[],
+): void {
+	for (const providerId of selectedCodexProviderIds(providerIds)) {
+		if (providerId === "openai-codex") {
+			registerProvider(providerId, {
+				api: "openai-codex-responses",
+				streamSimple: handlers.codexResponses,
+			});
+			continue;
+		}
+		registerProvider(providerId, {
+			api: "openai-responses",
+			streamSimple: handlers.openAiResponses,
+		});
+	}
+}
+
+export function reconcileCodexProviderRoutes(
+	registerProvider: ExtensionAPI["registerProvider"],
+	unregisterProvider: ExtensionAPI["unregisterProvider"] | undefined,
+	handlers: {
+		readonly codexResponses: StreamSimpleDispatcher;
+		readonly openAiResponses: StreamSimpleDispatcher;
+	},
+	previousProviderIds: ReadonlySet<string>,
+	providerIds: readonly string[],
+): ReadonlySet<string> {
+	const selected = new Set(selectedCodexProviderIds(providerIds));
+	if (unregisterProvider !== undefined) {
+		for (const providerId of previousProviderIds) {
+			if (!selected.has(providerId)) unregisterProvider(providerId);
+		}
+	}
+	registerCodexProviderRoutes(registerProvider, handlers, providerIds);
+	return selected;
+}
+
+function selectedCodexProviderIds(providerIds: readonly string[]): readonly string[] {
+	return [...new Set(["openai-codex", ...providerIds])];
 }
 
 function createDispatcher(

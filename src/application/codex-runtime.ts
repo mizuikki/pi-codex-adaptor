@@ -117,6 +117,7 @@ export interface CodexProviderConnection {
 	readonly headers: Readonly<Record<string, string>>;
 	readonly authentication: CodexProviderAuthentication;
 	readonly accountId?: string;
+	readonly accountIdSource?: "header" | "jwt";
 	readonly maxRetries?: number;
 	readonly timeoutMs?: number;
 	readonly websocketConnectTimeoutMs?: number;

@@ -162,6 +162,49 @@ describe("Codex tool profile policy", () => {
 		]);
 	});
 
+	test("projects TypeBox metadata out of additive tool parameter schemas", () => {
+		const metadata = Symbol("schema metadata");
+		const nested = { type: "string", [metadata]: "String" };
+		const parameters = {
+			type: "object",
+			properties: { value: nested },
+			[metadata]: "Object",
+		};
+		const tools = selectCodexToolSurface(
+			[],
+			["third_party"],
+			[{ name: "third_party", description: "synthetic", parameters }],
+		);
+		expect(tools).toEqual([
+			{
+				type: "function",
+				name: "third_party",
+				description: "synthetic",
+				parameters: {
+					type: "object",
+					properties: { value: { type: "string" } },
+				},
+				strict: false,
+			},
+		]);
+		expect(tools[0]).not.toBe(parameters);
+	});
+
+	test("rejects accessor-backed additive tool parameter schemas", () => {
+		const parameters = { type: "object" } as Record<string, unknown>;
+		Object.defineProperty(parameters, "properties", {
+			enumerable: true,
+			get: () => ({}),
+		});
+		expect(
+			selectCodexToolSurface(
+				[],
+				["third_party"],
+				[{ name: "third_party", description: "synthetic", parameters }],
+			),
+		).toEqual([]);
+	});
+
 	test("captures only active core names, restores them once, and skips no-op writes", () => {
 		const fixture = profileFixture();
 		fixture.profile.enterPending("key-a");

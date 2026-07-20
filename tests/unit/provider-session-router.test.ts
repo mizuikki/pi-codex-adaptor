@@ -68,6 +68,34 @@ describe("provider session router", () => {
 		expect(calls).toEqual(["main:openai", "child:codex"]);
 	});
 
+	test("passes an immutable options snapshot selected before route lookup", () => {
+		let received: Record<string, unknown> | undefined;
+		const router = createProviderSessionRouter();
+		const lease = router.createLease({
+			codexResponses: () => completedStream([], "codex"),
+			openAiResponses: (_model, _context, options) => {
+				received = options as Record<string, unknown>;
+				return completedStream([], "openai");
+			},
+		});
+		lease.bind("session-snapshot");
+		const source = {
+			sessionId: "session-snapshot",
+			headers: { "X-Synthetic": "before" },
+		};
+
+		router.openAiResponses(model(), { messages: [] }, source);
+		source.sessionId = "session-replaced";
+		source.headers["X-Synthetic"] = "after";
+
+		expect(received).toEqual({
+			sessionId: "session-snapshot",
+			headers: { "X-Synthetic": "before" },
+		});
+		expect(Object.isFrozen(received)).toBe(true);
+		expect(Object.isFrozen(received?.headers)).toBe(true);
+	});
+
 	test("rebinding removes the old association and release is idempotent", async () => {
 		const calls: string[] = [];
 		const router = createProviderSessionRouter();

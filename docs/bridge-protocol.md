@@ -40,10 +40,15 @@ emits only the official client's validated events. `responses.compact` accepts t
 WebSocket capability. `remote_v2` appends the official compaction trigger, consumes the official
 stream, requires exactly one official `compaction` output item followed by completion, and returns
 that item unchanged. The compact-endpoint fallback returns canonical `ResponseItem` output unchanged.
-The timeout defaults to 120 seconds and is bounded at 600 seconds. The bridge deserializes the
-complete request into official field types before network I/O. The Pi integration stores returned
-items in versioned compaction-entry details, restores them on session reload, substitutes them for
-Pi's display-only summary on the next request, and passes them back without parsing or trimming.
+The timeout defaults to 120 seconds and is bounded at 600 seconds. The bridge deserializes each SSE
+output item at the typed native `ResponseItem` boundary: supported aliases normalize to the canonical
+item type, and fields unknown to that native type are unavailable to TypeScript and are therefore not
+claimed as losslessly retained. The canonical `compaction` projection preserves its exact non-empty
+`encrypted_content` string. The protocol carries no trigger field in the returned output; the remote
+implementation's trigger is a native request-side detail. The Pi integration stores the returned
+typed projection in versioned opaque checkpoint details, restores it on session reload, substitutes it
+for Pi's display-only summary on the next request, and passes it back without decryption, parsing, or
+trimming.
 Account rate-limit events are consumed and discarded at the native boundary.
 
 `models.resolve` accepts an exact `{ "modelId": string }` and is credential-free and network-free. It

@@ -9,8 +9,11 @@ import {
 	type ToolCall,
 } from "@earendil-works/pi-ai";
 
-import type { CodexRuntime } from "../../application/codex-runtime.ts";
-import { CodexCompactionStore } from "../../application/compaction.ts";
+import type { CodexProviderConnection, CodexRuntime } from "../../application/codex-runtime.ts";
+import {
+	CodexCompactionStore,
+	isSupportedStructuredResponseItem,
+} from "../../application/compaction.ts";
 import type { ConfigurationService } from "../../application/configuration.ts";
 import type { ProviderActivationPolicy } from "../../application/provider-activation.ts";
 import {
@@ -19,7 +22,14 @@ import {
 	ResolveEffectiveCapabilities,
 	withSupplementalSessionInstructions,
 } from "../../application/resolve-effective-capabilities.ts";
+import { isStrictJsonValue, isStrictPlainRecord } from "../../application/structured-json.ts";
 import { CapabilityError } from "../../domain/capability.ts";
+import type { CodexConfig } from "../../domain/config.ts";
+import {
+	type CodexProviderRequestGuard,
+	type CodexProviderRequestRecord,
+	snapshotSimpleStreamOptions,
+} from "./codex-provider-request-guard.ts";
 import {
 	type CodexToolProfileCoordinator,
 	createUnavailableCodexToolProfile,
@@ -36,6 +46,7 @@ export function createCodexStreamSimple(
 	compactions = new CodexCompactionStore(),
 	capabilities = new ResolveEffectiveCapabilities(runtime),
 	profile: CodexToolProfileCoordinator = createUnavailableCodexToolProfile(),
+	requestGuard?: CodexProviderRequestGuard,
 ): (
 	model: Model<string>,
 	context: Context,
@@ -53,7 +64,8 @@ export function createCodexStreamSimple(
 			profile,
 			model,
 			context,
-			options,
+			snapshotSimpleStreamOptions(options),
+			requestGuard,
 		);
 		return stream;
 	};
@@ -70,8 +82,13 @@ async function runResponse(
 	model: Model<string>,
 	context: Context,
 	options: SimpleStreamOptions | undefined,
+	requestGuard: CodexProviderRequestGuard | undefined,
 ): Promise<void> {
 	const output = createOutput(model);
+	let requestRecord: CodexProviderRequestRecord | undefined;
+	let dispatchConnection: CodexProviderConnection | undefined;
+	let dispatchConfig: CodexConfig["codex"] | undefined;
+	let dispatchProviderSupportsWebsockets: boolean | undefined;
 	stream.push({ type: "start", partial: output });
 	try {
 		if (!activation.isActive(model)) {
@@ -100,8 +117,11 @@ async function runResponse(
 			config,
 			contextWindow: model.contextWindow,
 		});
+		dispatchConnection = connection;
+		dispatchConfig = config.codex;
+		dispatchProviderSupportsWebsockets = snapshot.providerSupportsWebsockets;
 		const officialTools = snapshot.modelTools;
-		let request: unknown = buildRequest(
+		let request = buildRequest(
 			model,
 			context,
 			options,
@@ -110,14 +130,43 @@ async function runResponse(
 			compactions,
 			snapshot,
 		);
-		const replacement = await options?.onPayload?.(request, model);
-		if (replacement !== undefined) request = replacement;
+		if (requestGuard !== undefined) {
+			const requestOptions = options;
+			if (requestOptions === undefined || requestOptions.sessionId === undefined) {
+				throw new Error("Codex provider session route is unavailable");
+			}
+			requestRecord = requestGuard.open({
+				options: requestOptions,
+				sessionId: requestOptions.sessionId,
+				model,
+				context,
+				request,
+				inputLedger: Array.isArray(request.input) ? request.input : [],
+				connection,
+				config,
+				capabilities: snapshot,
+				...(requestOptions.signal === undefined ? {} : { signal: requestOptions.signal }),
+			});
+			const replacement = await requestGuard.run(requestRecord, async () =>
+				requestOptions.onPayload?.(request, model),
+			);
+			if (replacement !== undefined) request = asRequest(replacement);
+			const approvedRecord: CodexProviderRequestRecord = requestRecord;
+			requestGuard.assertApproved(approvedRecord, request);
+			dispatchConnection = approvedRecord.connection;
+			dispatchConfig = approvedRecord.config.codex;
+			dispatchProviderSupportsWebsockets = approvedRecord.capabilities.providerSupportsWebsockets;
+		} else {
+			const replacement = await options?.onPayload?.(request, model);
+			if (replacement !== undefined) request = asRequest(replacement);
+		}
 		const state = new ResponseState(output, stream, model);
 		const result = await runtime.createResponse({
-			connection,
+			connection: dispatchConnection ?? connection,
 			request,
-			transportMode: config.codex.transport.mode,
-			providerSupportsWebsockets: snapshot.providerSupportsWebsockets,
+			transportMode: dispatchConfig?.transport.mode ?? config.codex.transport.mode,
+			providerSupportsWebsockets:
+				dispatchProviderSupportsWebsockets ?? snapshot.providerSupportsWebsockets,
 			...(options?.signal === undefined ? {} : { signal: options.signal }),
 			onEvent: (event) => state.accept(event),
 		});
@@ -140,6 +189,10 @@ async function runResponse(
 		output.errorMessage = safeErrorMessage(error);
 		stream.push({ type: "error", reason: output.stopReason, error: output });
 		stream.end();
+	} finally {
+		if (requestGuard !== undefined && requestRecord !== undefined) {
+			requestGuard.consume(requestRecord);
+		}
 	}
 }
 
@@ -224,18 +277,20 @@ class ResponseState {
 		}
 		if (item.type === "reasoning") {
 			this.#applyCompletedThinking(item.summary);
-			const encrypted = item.encrypted_content;
-			if (typeof encrypted === "string" && encrypted.length > 0) {
+			const signature = responseItemSignature(item, "reasoning");
+			if (signature !== undefined) {
 				const index = this.#ensureThinking();
 				const content = this.#output.content[index];
-				if (content?.type === "thinking") content.thinkingSignature = encrypted;
+				if (content?.type === "thinking") content.thinkingSignature = signature;
 			}
 			return;
 		}
 		if (item.type === "function_call" || item.type === "custom_tool_call") {
 			const toolCall = toToolCall(item);
 			if (toolCall !== undefined) this.#addToolCall(toolCall);
+			return;
 		}
+		this.#consumeOpaqueItem(item);
 	}
 
 	#applyCompletedText(value: unknown): void {
@@ -273,17 +328,20 @@ class ResponseState {
 	}
 
 	#applyTextSignature(item: Record<string, unknown>): void {
-		if (typeof item.id !== "string") return;
 		const index = this.#ensureText();
 		const content = this.#output.content[index];
 		if (content?.type !== "text") return;
-		content.textSignature = JSON.stringify({
-			v: 1,
-			id: item.id,
-			...(item.phase === "commentary" || item.phase === "final_answer"
-				? { phase: item.phase }
-				: {}),
-		});
+		const normalized = {
+			...item,
+			...(typeof item.role === "string" ? {} : { role: "assistant" }),
+			...(Array.isArray(item.content)
+				? {}
+				: {
+						content: content.text.length === 0 ? [] : [{ type: "output_text", text: content.text }],
+					}),
+		};
+		const signature = responseItemSignature(normalized, "message");
+		if (signature !== undefined) content.textSignature = signature;
 	}
 
 	#addToolCall(toolCall: ToolCall): void {
@@ -296,6 +354,23 @@ class ResponseState {
 			type: "toolcall_end",
 			contentIndex: index,
 			toolCall,
+			partial: this.#output,
+		});
+	}
+
+	#consumeOpaqueItem(item: Record<string, unknown>): void {
+		this.#endOpenBlocks();
+		const index = this.#output.content.length;
+		this.#output.content.push({
+			type: "text",
+			text: "",
+			textSignature: encodeResponseItemSignature(item),
+		});
+		this.#stream.push({ type: "text_start", contentIndex: index, partial: this.#output });
+		this.#stream.push({
+			type: "text_end",
+			contentIndex: index,
+			content: "",
 			partial: this.#output,
 		});
 	}
@@ -325,13 +400,7 @@ class ResponseState {
 		this.#output.content.push({
 			type: "text",
 			text: summary,
-			textSignature: JSON.stringify({
-				v: 1,
-				kind: "web_search_call",
-				id: item.id,
-				status: item.status,
-				action: item.action,
-			}),
+			textSignature: encodeResponseItemSignature(item),
 		});
 		this.#stream.push({ type: "text_start", contentIndex: index, partial: this.#output });
 		this.#stream.push({
@@ -404,7 +473,7 @@ class ResponseState {
 	}
 }
 
-function buildRequest(
+export function buildCodexRequest(
 	model: Model<string>,
 	context: Context,
 	options: SimpleStreamOptions | undefined,
@@ -415,7 +484,7 @@ function buildRequest(
 	officialTools: readonly unknown[],
 	compactions: CodexCompactionStore,
 	capabilities: EffectiveCapabilitySnapshot,
-): unknown {
+): Record<string, unknown> {
 	const activeDefinitions = context.tools ?? [];
 	const tools = selectCodexToolSurface(
 		officialTools,
@@ -428,7 +497,7 @@ function buildRequest(
 			: (model.thinkingLevelMap?.[options.reasoning] ?? options.reasoning);
 	const snapshot = compactions.get(options?.sessionId, model.id);
 	const messages =
-		snapshot !== undefined && isCompactionMarker(context.messages[0], snapshot.summary)
+		snapshot?.source === "manual" && isCompactionMarker(context.messages[0], snapshot.summary)
 			? context.messages.slice(1)
 			: context.messages;
 	const canonicalPrefix = messages === context.messages ? [] : (snapshot?.output ?? []);
@@ -452,8 +521,47 @@ function buildRequest(
 	};
 }
 
+const buildRequest = buildCodexRequest;
+
 export function responseItemsFromMessages(messages: readonly unknown[]): unknown[] {
 	return messages.flatMap(toResponseItems);
+}
+
+const RESPONSE_ITEM_SIGNATURE_KIND = "pi-codex-adaptor.response-item";
+const RESPONSE_ITEM_SIGNATURE_VERSION = 2;
+
+/** Encode a complete bridge-supported item in a Pi signature field without interpreting it. */
+export function encodeResponseItemSignature(item: unknown): string {
+	if (!isInertJson(item) || !isSupportedStructuredResponseItem(item)) {
+		throw new Error("Provider response item cannot be persisted safely");
+	}
+	return JSON.stringify({
+		v: RESPONSE_ITEM_SIGNATURE_VERSION,
+		kind: RESPONSE_ITEM_SIGNATURE_KIND,
+		item,
+	});
+}
+
+export function decodeResponseItemSignature(value: unknown): Record<string, unknown> | undefined {
+	if (typeof value !== "string" || value.length === 0) return undefined;
+	try {
+		const parsed = JSON.parse(value) as unknown;
+		const envelope = record(parsed);
+		const item = envelope?.item;
+		if (
+			envelope === undefined ||
+			!hasExactKeys(envelope, ["v", "kind", "item"]) ||
+			envelope?.v !== RESPONSE_ITEM_SIGNATURE_VERSION ||
+			envelope.kind !== RESPONSE_ITEM_SIGNATURE_KIND ||
+			!isInertJson(item) ||
+			!isSupportedStructuredResponseItem(item)
+		) {
+			return undefined;
+		}
+		return item as Record<string, unknown>;
+	} catch {
+		return undefined;
+	}
 }
 
 function toResponseItems(message: unknown): unknown[] {
@@ -498,6 +606,11 @@ function toResponseItems(message: unknown): unknown[] {
 		const content = record(value);
 		if (content === undefined) continue;
 		if (content.type === "text") {
+			const preserved = decodeResponseItemSignature(content.textSignature);
+			if (preserved !== undefined) {
+				items.push(preserved);
+				continue;
+			}
 			const signature = parseTextSignature(content.textSignature);
 			if (signature?.kind === "web_search_call") {
 				items.push({
@@ -511,16 +624,35 @@ function toResponseItems(message: unknown): unknown[] {
 			items.push({
 				type: "message",
 				role: "assistant",
+				...(typeof signature?.id === "string" ? { id: signature.id } : {}),
+				...(signature?.phase === "commentary" || signature?.phase === "final_answer"
+					? { phase: signature.phase }
+					: {}),
 				content: [{ type: "output_text", text: content.text }],
 			});
 		} else if (content.type === "thinking") {
+			const preserved = decodeResponseItemSignature(content.thinkingSignature);
+			if (preserved !== undefined) {
+				items.push(preserved);
+				continue;
+			}
+			const legacySignature = parseTextSignature(content.thinkingSignature);
 			items.push({
 				type: "reasoning",
+				...(typeof legacySignature?.id === "string" ? { id: legacySignature.id } : {}),
 				summary: content.thinking ? [{ type: "summary_text", text: content.thinking }] : [],
 				content: null,
-				encrypted_content: content.thinkingSignature ?? null,
+				encrypted_content:
+					typeof content.thinkingSignature === "string" && legacySignature === undefined
+						? content.thinkingSignature
+						: null,
 			});
 		} else {
+			const preserved = decodeResponseItemSignature(content.thoughtSignature);
+			if (preserved !== undefined) {
+				items.push(preserved);
+				continue;
+			}
 			const argumentsValue = record(content.arguments);
 			if (content.name === "apply_patch" && typeof argumentsValue?.input === "string") {
 				items.push({
@@ -640,11 +772,16 @@ function toToolCall(item: Record<string, unknown>): ToolCall | undefined {
 		parsed = { input: rawArguments };
 	}
 	const namespace = typeof item.namespace === "string" ? item.namespace : undefined;
+	const signature = responseItemSignature(
+		item,
+		item.type === "custom_tool_call" ? "custom_tool_call" : "function_call",
+	);
 	return {
 		type: "toolCall",
 		id: item.call_id,
 		name: namespace === undefined ? item.name : `${namespace}.${item.name}`,
 		arguments: record(parsed) ?? { input: rawArguments },
+		...(signature === undefined ? {} : { thoughtSignature: signature }),
 	};
 }
 
@@ -680,9 +817,7 @@ function applyUsage(output: AssistantMessage, value: unknown): void {
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {
-	return typeof value === "object" && value !== null && !Array.isArray(value)
-		? (value as Record<string, unknown>)
-		: undefined;
+	return isStrictPlainRecord(value) ? value : undefined;
 }
 
 function parseTextSignature(value: unknown): Record<string, unknown> | undefined {
@@ -696,6 +831,32 @@ function parseTextSignature(value: unknown): Record<string, unknown> | undefined
 
 function integer(value: unknown): number {
 	return typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.trunc(value)) : 0;
+}
+
+function responseItemSignature(
+	item: Record<string, unknown>,
+	_type: "message" | "reasoning" | "function_call" | "custom_tool_call",
+): string | undefined {
+	return encodeResponseItemSignature(item);
+}
+
+function isInertJson(value: unknown): boolean {
+	return isStrictJsonValue(value);
+}
+
+function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
+	if (!isStrictPlainRecord(value)) return false;
+	const expected = new Set(keys);
+	const actual = Object.keys(value);
+	return actual.length === expected.size && actual.every((key) => expected.has(key));
+}
+
+function asRequest(value: unknown): Record<string, unknown> {
+	const request = record(value);
+	if (request === undefined || !isStrictJsonValue(request) || !Array.isArray(request.input)) {
+		throw new Error("OpenAI Codex provider payload is invalid");
+	}
+	return request;
 }
 
 function safeErrorMessage(error: unknown): string {
