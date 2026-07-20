@@ -18,6 +18,10 @@ import {
 } from "./integration/pi/codex-tool-profile.ts";
 import { registerCodexTools } from "./integration/pi/codex-tools.ts";
 import { createCodexProviderDispatchers } from "./integration/pi/provider-dispatcher.ts";
+import {
+	getProcessProviderSessionRouter,
+	type ProviderSessionLease,
+} from "./integration/pi/provider-session-router.ts";
 import { openSettingsOverlay } from "./ui/terminal/settings-overlay.ts";
 
 /** Pi composition root for configuration and diagnostics surfaces. */
@@ -48,6 +52,7 @@ export default async function piCodexAdaptor(pi: ExtensionAPI): Promise<void> {
 	const compactions = new CodexCompactionStore();
 	const compactionCoordinator = new CodexCompactionCoordinator();
 	const capabilities = new ResolveEffectiveCapabilities(runtime);
+	let providerSessionLease: ProviderSessionLease | undefined;
 	if (typeof pi.registerProvider === "function") {
 		const dispatchers = createCodexProviderDispatchers(
 			runtime,
@@ -57,20 +62,24 @@ export default async function piCodexAdaptor(pi: ExtensionAPI): Promise<void> {
 			capabilities,
 			toolProfile,
 		);
+		const router = getProcessProviderSessionRouter();
+		providerSessionLease = router.createLease(dispatchers);
 		pi.registerProvider("openai-codex", {
 			api: "openai-codex-responses",
-			streamSimple: dispatchers.codexResponses,
+			streamSimple: router.codexResponses,
 		});
 		pi.registerProvider("pi-codex-adaptor-openai-responses", {
 			api: "openai-responses",
-			streamSimple: dispatchers.openAiResponses,
+			streamSimple: router.openAiResponses,
 		});
 	}
 	if (typeof pi.on === "function") {
-		pi.on("session_start", async () => {
+		pi.on("session_start", async (_event, ctx) => {
+			providerSessionLease?.bind(ctx.sessionManager.getSessionId());
 			await activation.refresh();
 		});
 		pi.on("session_shutdown", async () => {
+			providerSessionLease?.release();
 			toolProfile.restorePi();
 			compactionCoordinator.disposeAll();
 			capabilities.invalidate();

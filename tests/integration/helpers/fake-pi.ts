@@ -2,6 +2,7 @@ import type { Model } from "@earendil-works/pi-ai";
 import type {
 	ExtensionAPI,
 	ExtensionContext,
+	ProviderConfig,
 	ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { PI_CORE_AGENT_TOOL_NAMES } from "../../../src/integration/pi/codex-tool-profile.ts";
@@ -15,10 +16,11 @@ export interface FakePi {
 	handlers: Map<string, EventHandler[]>;
 	commands: string[];
 	providers: string[];
+	providerConfigs: Array<{ name: string; config: ProviderConfig }>;
 	status: Map<string, string | undefined>;
 	widgets: Map<string, string[] | undefined>;
 	notifications: string[];
-	context(model?: Model<string> | undefined): ExtensionContext;
+	context(model?: Model<string> | undefined, sessionId?: string): ExtensionContext;
 }
 
 export function createFakePi(options: {
@@ -26,11 +28,13 @@ export function createFakePi(options: {
 	cwd?: string;
 	thirdPartyTools?: readonly string[];
 	activeTools?: readonly string[];
+	sessionId?: string;
 }): FakePi {
 	const tools = new Map<string, ToolDefinition>();
 	const handlers = new Map<string, EventHandler[]>();
 	const commands: string[] = [];
 	const providers: string[] = [];
+	const providerConfigs: Array<{ name: string; config: ProviderConfig }> = [];
 	const status = new Map<string, string | undefined>();
 	const widgets = new Map<string, string[] | undefined>();
 	const notifications: string[] = [];
@@ -67,8 +71,9 @@ export function createFakePi(options: {
 		registerCommand: (name: string) => {
 			commands.push(name);
 		},
-		registerProvider: (name: string) => {
+		registerProvider: (name: string, config: ProviderConfig) => {
 			providers.push(name);
+			providerConfigs.push({ name, config });
 		},
 		on: (event: string, handler: EventHandler) => {
 			handlers.set(event, [...(handlers.get(event) ?? []), handler]);
@@ -93,7 +98,10 @@ export function createFakePi(options: {
 		getThinkingLevel: () => "off",
 	} as unknown as ExtensionAPI;
 
-	function context(model: Model<string> | undefined = fixtureModel()): ExtensionContext {
+	function context(
+		model: Model<string> | undefined = fixtureModel(),
+		sessionId = options.sessionId ?? "fixture-session",
+	): ExtensionContext {
 		return {
 			model,
 			cwd,
@@ -115,7 +123,7 @@ export function createFakePi(options: {
 				},
 			},
 			sessionManager: {
-				getSessionId: () => "fixture-session",
+				getSessionId: () => sessionId,
 				getBranch: () => [],
 				getEntries: () => [],
 			},
@@ -135,6 +143,7 @@ export function createFakePi(options: {
 		handlers,
 		commands,
 		providers,
+		providerConfigs,
 		status,
 		widgets,
 		notifications,

@@ -28,6 +28,12 @@ export const piNativeOpenAiResponsesStreamSimple =
 export const piNativeOpenAiCodexResponsesStreamSimple =
 	streamSimpleOpenAICodexResponses as StreamSimpleDispatcher;
 
+export type StreamSimpleDispatcher = (
+	model: Model<string>,
+	context: Context,
+	options?: SimpleStreamOptions,
+) => AssistantMessageEventStream;
+
 export function createCodexProviderDispatchers(
 	runtime: CodexRuntime,
 	configuration: ConfigurationService,
@@ -52,12 +58,6 @@ export function createCodexProviderDispatchers(
 		openAiResponses: createDispatcher(activation, codex, piNativeOpenAiResponsesStreamSimple),
 	};
 }
-
-type StreamSimpleDispatcher = (
-	model: Model<string>,
-	context: Context,
-	options?: SimpleStreamOptions,
-) => AssistantMessageEventStream;
 
 function createDispatcher(
 	activation: ProviderActivationPolicy,

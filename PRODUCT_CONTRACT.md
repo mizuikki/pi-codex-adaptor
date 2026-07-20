@@ -122,7 +122,10 @@ termination, cancellation, and shutdown cleanup. Pi activation is reversible, pr
 external tools, and suppresses Pi core tools while the Codex provider is active. A pending or unavailable
 activated Codex profile fails closed without restoring Pi core tools; deactivation restores only the
 Pi core selection captured before activation. It replays opaque compaction output and renders compact
-tool state inline.
+tool state inline. Both Responses API registrations use process-stable functions that route by Pi's
+session identifier to exactly one session-local activation, profile, compaction, capability, fallback,
+and runtime owner. Nested adaptor loads cannot replace another session's dispatcher; missing or
+ambiguous attribution fails locally without a provider call.
 `/codex` exposes settings, manual compaction, and a confirmed, redacted diagnostics export. Remaining
 release gates, including Trusted Publishing and a published prerelease, are not complete. The planned
 first prerelease version is `0.1.0-rc.0`.

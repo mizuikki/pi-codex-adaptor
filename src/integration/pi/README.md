@@ -14,3 +14,10 @@ Responses and compaction share the same additive-tool selection policy and requi
 profile readiness before native dispatch. Pi prompt rebuilding remains authoritative: registered
 Codex tools provide short host snippets, and a healthy profile appends structured model-invocable
 skill locations with the resolved shell loader without replacing Pi's assembled prompt.
+
+Provider registration is process stable while execution remains session local. Each extension
+instance binds its two local dispatchers to a weak lease on `session_start`; the global API functions
+select exactly one lease from Pi's stream `sessionId`. Shutdown releases the lease before disposing
+its profile, capability, compaction, activation, and runtime state. Missing, stale, or ambiguous
+routes fail locally without provider side effects. Session identifiers are transient map keys and
+must never appear in errors, diagnostics, logs, or persisted data.
