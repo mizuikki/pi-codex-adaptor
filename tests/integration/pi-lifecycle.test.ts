@@ -83,29 +83,40 @@ describe("fake Pi + real native lifecycle", () => {
 			openAiResponses: probe,
 		});
 		probeLease.bind("session-lifecycle");
-		const registered = pi.providerConfigs.find((entry) => entry.config.api === "openai-responses")
-			?.config.streamSimple;
-		expect(registered).toBe(router.openAiResponses);
-		registered?.(fixtureModel(), { messages: [] }, { sessionId: "session-lifecycle" });
-		expect(probeCalls).toBe(1);
-
 		const ctx = pi.context(fixtureModel(), "session-lifecycle");
-		await emit(pi, "session_start", ctx);
-		const ambiguous = await registered?.(
-			fixtureModel(),
-			{ messages: [] },
-			{ sessionId: "session-lifecycle" },
-		).result();
-		expect(ambiguous?.stopReason).toBe("error");
-		expect(ambiguous?.errorMessage).toBe(
-			"Codex provider route is ambiguous for the current Pi session",
-		);
-		expect(probeCalls).toBe(1);
+		let sessionStarted = false;
+		let sessionShutdown = false;
+		try {
+			const registered = pi.providerConfigs.find((entry) => entry.config.api === "openai-responses")
+				?.config.streamSimple;
+			expect(registered).toBe(router.openAiResponses);
+			registered?.(fixtureModel(), { messages: [] }, { sessionId: "session-lifecycle" });
+			expect(probeCalls).toBe(1);
 
-		await emit(pi, "session_shutdown", ctx);
-		registered?.(fixtureModel(), { messages: [] }, { sessionId: "session-lifecycle" });
-		expect(probeCalls).toBe(2);
-		probeLease.release();
+			sessionStarted = true;
+			await emit(pi, "session_start", ctx);
+			const ambiguous = await registered?.(
+				fixtureModel(),
+				{ messages: [] },
+				{ sessionId: "session-lifecycle" },
+			).result();
+			expect(ambiguous?.stopReason).toBe("error");
+			expect(ambiguous?.errorMessage).toBe(
+				"Codex provider route is ambiguous for the current Pi session",
+			);
+			expect(probeCalls).toBe(1);
+
+			await emit(pi, "session_shutdown", ctx);
+			sessionShutdown = true;
+			registered?.(fixtureModel(), { messages: [] }, { sessionId: "session-lifecycle" });
+			expect(probeCalls).toBe(2);
+		} finally {
+			try {
+				if (sessionStarted && !sessionShutdown) await emit(pi, "session_shutdown", ctx);
+			} finally {
+				probeLease.release();
+			}
+		}
 	});
 
 	test("executes and polls a supplemental session on the bundled shell-command model", async () => {
