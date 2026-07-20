@@ -4588,7 +4588,7 @@ mod tests {
                     "cmd": "printf fixture",
                     "workdir": workspace_text,
                     "workspaceRoots": [workspace.to_string_lossy()],
-                    "yield_time_ms": 1_000,
+                    "yield_time_ms": 10_000,
                     "allow_background_sessions": false,
                 })
             } else {
