@@ -13,8 +13,9 @@ provider uses an isolated Codex core tool profile: Pi's seven core tools are sup
 orthogonal additive external tools remain available, and an unavailable Codex profile fails closed without
 restoring Pi core tools. Deactivation restores the Pi core selection captured at entry. The adaptor
 executes prompt-approved or explicitly preauthorized patches through the official parser, supports workspace image inspection, and
-restores process ownership on session shutdown. Because Pi owns one stream handler per API id, the
-adaptor cannot safely compose with another extension that replaces either supported Responses API.
+restores process ownership on session shutdown. The two process-stable stream handlers route by Pi's
+session identity to isolated main or nested-session state. An unrelated extension that replaces
+either supported Responses API remains an explicit registry conflict.
 Pi compaction selects the official RemoteCompactionV2 stream when available and otherwise uses the
 typed Compact endpoint; canonical output is retained as versioned opaque session details for exact
 replay. The generated `image_gen.imagegen` namespace uses the official Images client for generation

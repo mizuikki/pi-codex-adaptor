@@ -33,6 +33,14 @@ external tools, and restores the captured subset on deactivation or shutdown. A 
 state and additive-tool selection policy are passed to both Responses and compaction assembly, so a
 pending, unavailable, or ownership-conflicted profile cannot dispatch a partial or hybrid surface.
 
+Pi provider registration has process identity but provider execution has session identity. The Pi
+integration installs process-stable dispatchers for both supported API ids and routes each request by
+Pi's non-empty stream `sessionId` to exactly one weak session lease. The selected lease retains the
+session-local activation, tool profile, capability resolver, compaction state, fallback choice, and
+native runtime. Missing or ambiguous attribution fails locally, and lifecycle cleanup is token
+scoped so one session cannot remove another session's binding. The router is the only intentional
+`globalThis` state and owns none of the session-local services.
+
 Pi owns the persistent approval policy and maps one validated snapshot to one explicit authorization
 value on each native request. The integration layer never infers bypass from UI availability and does
 not cache authorization across calls. Native code owns the explicit allowlist, strict decoding,
@@ -45,7 +53,7 @@ Bypass removes only the interactive approval wait; it does not provide an OS san
 | --- | --- | --- |
 | `src/domain` | Configuration and capability semantics, value objects, terminal states, redaction policy | Pi, TUI, HTTP, filesystem |
 | `src/application` | Use cases and ports | Concrete UI or process implementations |
-| `src/integration/pi` | Pi lifecycle, activation, reversible tool profiles, message and tool binding | Rust internals or handwritten OpenAI schemas |
+| `src/integration/pi` | Pi lifecycle, session-affine provider routing, activation, reversible tool profiles, message and tool binding | Rust internals, handwritten OpenAI schemas, or process-global native runtime state |
 | `src/infrastructure/codex-bridge` | Sidecar discovery, lifecycle, JSONL codec, cancellation | HTTP details or Pi UI |
 | `src/infrastructure/diagnostics` | Confirmed redacted diagnostic-file export | Provider transport or Pi UI |
 | `src/ui/terminal` | `/codex`, settings view models, inline renderers | Provider transport details |

@@ -63,6 +63,7 @@ export type CapabilityErrorCode =
 	| "provider_capability_unavailable"
 	| "compaction_unsupported"
 	| "effective_capability_invalid"
+	| "provider_session_unavailable"
 	| "provider_contract_mismatch";
 
 export class CapabilityError extends Error {

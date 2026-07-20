@@ -31,6 +31,7 @@ import {
 	piNativeOpenAiCodexResponsesStreamSimple,
 	piNativeOpenAiResponsesStreamSimple,
 } from "../../src/integration/pi/provider-dispatcher.ts";
+import { createProviderSessionRouter } from "../../src/integration/pi/provider-session-router.ts";
 
 afterEach(() => {
 	resetApiProviders();
@@ -250,6 +251,85 @@ function registerPoisonRegistry(
 }
 
 describe("provider dispatcher native fallbacks", () => {
+	test("keeps an active main session healthy after an inactive child registers later", async () => {
+		const mainConfig: CodexConfig = {
+			...createDefaultConfig(),
+			activation: { providers: ["fixture-main-provider"] },
+		};
+		const mainConfiguration = configuration(mainConfig);
+		const childConfiguration = configuration(createDefaultConfig());
+		const mainRuntime = new ActiveRuntime();
+		const childRuntime = new InactiveOnlyRuntime();
+		const mainPolicy = new ProviderActivationPolicy(mainConfiguration.service);
+		const childPolicy = new ProviderActivationPolicy(childConfiguration.service);
+		mainConfiguration.publish(mainConfig);
+
+		const mainDispatchers = createCodexProviderDispatchers(
+			mainRuntime,
+			mainConfiguration.service,
+			mainPolicy,
+			undefined,
+			undefined,
+			healthyProfile(),
+		);
+		const childDispatchers = createCodexProviderDispatchers(
+			childRuntime,
+			childConfiguration.service,
+			childPolicy,
+			undefined,
+			undefined,
+			createUnavailableCodexToolProfile(),
+		);
+		const router = createProviderSessionRouter();
+		const mainLease = router.createLease(mainDispatchers);
+		const childLease = router.createLease(childDispatchers);
+		mainLease.bind("session-main");
+		registerPoisonRegistry(
+			router.openAiResponses,
+			router.codexResponses,
+			"main-extension-registration",
+		);
+		childLease.bind("session-child");
+		registerPoisonRegistry(
+			router.openAiResponses,
+			router.codexResponses,
+			"child-extension-registration",
+		);
+
+		const context: Context = { messages: [] };
+		const mainModel = model("fixture-main-provider", "openai-responses");
+		const childModel = model("fixture-child-provider", "openai-responses");
+		const firstMain = await registryStreamSimple(mainModel, context, {
+			apiKey: "fixture-key",
+			sessionId: "session-main",
+		}).result();
+		expect(firstMain.stopReason).not.toBe("error");
+		expect(mainRuntime.createResponseCalls).toBe(1);
+		expect(childRuntime.createResponseCalls).toBe(0);
+
+		const childFallback = registryStreamSimple(childModel, context, {
+			apiKey: "fixture-key",
+			sessionId: "session-child",
+			signal: AbortSignal.abort(),
+		});
+		const childResult = await childFallback.result();
+		expect(childResult.stopReason).toBe("aborted");
+		expect(childRuntime.createResponseCalls).toBe(0);
+
+		childLease.release();
+		const secondMain = await registryStreamSimple(mainModel, context, {
+			apiKey: "fixture-key",
+			sessionId: "session-main",
+		}).result();
+		expect(secondMain.stopReason).not.toBe("error");
+		expect(mainRuntime.createResponseCalls).toBe(2);
+		expect(childRuntime.createResponseCalls).toBe(0);
+
+		mainLease.release();
+		mainPolicy.dispose();
+		childPolicy.dispose();
+	});
+
 	test("wires distinct Pi-native fallbacks that never consult the API registry", () => {
 		expect(piNativeOpenAiResponsesStreamSimple).toBe(
 			streamSimpleOpenAIResponses as typeof piNativeOpenAiResponsesStreamSimple,

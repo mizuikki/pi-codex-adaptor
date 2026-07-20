@@ -2,9 +2,11 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { CodexCompactionStore } from "../../src/application/compaction.ts";
 import { ConfigurationService } from "../../src/application/configuration.ts";
 import { ProviderActivationPolicy } from "../../src/application/provider-activation.ts";
+import piCodexAdaptor from "../../src/extension.ts";
 import { FileConfigurationRepository } from "../../src/infrastructure/configuration/file-config-repository.ts";
 import { createCodexStreamSimple } from "../../src/integration/pi/codex-provider.ts";
 import {
@@ -12,6 +14,7 @@ import {
 	PI_CORE_AGENT_TOOL_NAMES,
 } from "../../src/integration/pi/codex-tool-profile.ts";
 import { registerCodexTools } from "../../src/integration/pi/codex-tools.ts";
+import { getProcessProviderSessionRouter } from "../../src/integration/pi/provider-session-router.ts";
 
 import { createFakePi, emit, fixtureModel, fixtureToken } from "./helpers/fake-pi.ts";
 import { fixtureModelSpec, startFakeResponsesServer } from "./helpers/fake-responses-server.ts";
@@ -59,6 +62,52 @@ function healthyProfile(): CodexToolProfileCoordinator {
 }
 
 describe("fake Pi + real native lifecycle", () => {
+	test("binds and releases the process provider route with the Pi session lifecycle", async () => {
+		const pi = createFakePi({ token: fixtureToken(), sessionId: "session-lifecycle" });
+		const lifecycleApi = {
+			registerCommand: pi.api.registerCommand,
+			registerProvider: pi.api.registerProvider,
+			on: pi.api.on,
+		};
+		await piCodexAdaptor(lifecycleApi as never);
+		const router = getProcessProviderSessionRouter();
+		let probeCalls = 0;
+		const probe = () => {
+			probeCalls += 1;
+			const stream = createAssistantMessageEventStream();
+			stream.end();
+			return stream;
+		};
+		const probeLease = router.createLease({
+			codexResponses: probe,
+			openAiResponses: probe,
+		});
+		probeLease.bind("session-lifecycle");
+		const registered = pi.providerConfigs.find((entry) => entry.config.api === "openai-responses")
+			?.config.streamSimple;
+		expect(registered).toBe(router.openAiResponses);
+		registered?.(fixtureModel(), { messages: [] }, { sessionId: "session-lifecycle" });
+		expect(probeCalls).toBe(1);
+
+		const ctx = pi.context(fixtureModel(), "session-lifecycle");
+		await emit(pi, "session_start", ctx);
+		const ambiguous = await registered?.(
+			fixtureModel(),
+			{ messages: [] },
+			{ sessionId: "session-lifecycle" },
+		).result();
+		expect(ambiguous?.stopReason).toBe("error");
+		expect(ambiguous?.errorMessage).toBe(
+			"Codex provider route is ambiguous for the current Pi session",
+		);
+		expect(probeCalls).toBe(1);
+
+		await emit(pi, "session_shutdown", ctx);
+		registered?.(fixtureModel(), { messages: [] }, { sessionId: "session-lifecycle" });
+		expect(probeCalls).toBe(2);
+		probeLease.release();
+	});
+
 	test("executes and polls a supplemental session on the bundled shell-command model", async () => {
 		if (process.platform === "win32") return;
 		const { runtime } = await createIntegrationRuntime();
