@@ -584,7 +584,7 @@ describe("Pi core tool activation", () => {
 			value,
 		) => status.set(key, value);
 		await handlers.get("session_start")?.[0]?.({ type: "session_start" }, first);
-		expect(status.get("codex-adaptor")).toContain("Codex 0.144.3");
+		expect(status.get("codex-adaptor")).toBe("Codex exec bg web");
 
 		let release: ((config: CodexConfig) => void) | undefined;
 		load = () =>
@@ -963,7 +963,7 @@ describe("Pi core tool activation", () => {
 		await handlers.get("session_start")?.[0]?.({ type: "session_start" }, ctx);
 		expect(active).toContain("view_image");
 		expect(active).toContain("image_gen.imagegen");
-		expect(status.get("codex-adaptor")).toContain("unified-exec");
+		expect(status.get("codex-adaptor")).toBe("Codex exec bg web");
 
 		// Successful settings save/reset/restore publishes the validated snapshot via onChange.
 		await service.publish({

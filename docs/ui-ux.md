@@ -34,9 +34,11 @@ default. Cycling from prompt to bypass opens a confirmation with Cancel focused 
 confirmation states that native commands run with the user's permissions and that workspace roots do
 not sandbox shell behavior. Cancel leaves the draft unchanged; enabling bypass marks the draft dirty
 and emits one warning. Switching back to prompt needs no confirmation. A saved bypass policy adds
-`approvals:bypass` to the adaptor status only when status output is enabled, and emits one warning at
-session startup. Direct valid file configuration is supported, including headless sessions; bypass
-does not create per-tool-call notifications.
+`!bypass` to the compact adaptor status only when status output is enabled, and emits one warning at
+session startup. The status starts with `Codex`, then includes only active `exec` or `sh`, `bg` or
+`bg+`, and `web` surfaces; disabled, unavailable, and unsupported surfaces are omitted. Direct valid
+file configuration is supported, including headless sessions; bypass does not create per-tool-call
+notifications.
 
 Approval prompts owned by the terminal UI default to Decline, then Cancel, then Allow once. Headless
 prompt mode does not open an overlay, animate, or wait for input and is never inferred to mean bypass.

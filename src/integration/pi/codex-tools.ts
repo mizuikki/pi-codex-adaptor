@@ -20,6 +20,7 @@ import { resolveProviderActivation } from "../../domain/provider-activation.ts";
 import { requestCodexApproval } from "../../ui/terminal/approval-prompt.ts";
 import { APPROVAL_BYPASS_WARNING } from "../../ui/terminal/settings-model.ts";
 import { responseItemsFromMessages } from "./codex-provider.ts";
+import { formatCodexStatus } from "./codex-status.ts";
 import { codexSkillsPrompt } from "./codex-system-prompt.ts";
 import { type CodexToolProfileCoordinator, createCodexToolProfile } from "./codex-tool-profile.ts";
 import { OFFICIAL_CORE_TOOL_CONTRACTS, PI_CORE_TOOL_PARAMETERS } from "./generated/core-tools.ts";
@@ -162,14 +163,9 @@ export function registerCodexTools(
 			}
 			lastHealthyCapabilityKey = capabilityKey;
 			lastHealthyModelIdentity = selectedIdentity;
-			const webSurface = snapshot.webSurface;
 			setStatus(
 				ctx,
-				config.ui.status
-					? `Codex 0.144.3 | ${snapshot.shell.primary} | sessions:${snapshot.shell.sessionSurface} | web:${webSurface}${
-							config.security.approvalPolicy === "bypass" ? " | approvals:bypass" : ""
-						}`
-					: undefined,
+				config.ui.status ? formatCodexStatus(snapshot, config.security.approvalPolicy) : undefined,
 			);
 		} catch {
 			if (generation === activationGeneration) {
