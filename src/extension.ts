@@ -26,11 +26,15 @@ import {
 	getProcessProviderSessionRouter,
 	type ProviderSessionLease,
 } from "./integration/pi/provider-session-router.ts";
+import { registerCodexCompactionEntryRenderer } from "./ui/terminal/codex-compaction-entry.ts";
 import { openSettingsOverlay } from "./ui/terminal/settings-overlay.ts";
 
 /** Pi composition root for configuration and diagnostics surfaces. */
 export default async function piCodexAdaptor(pi: ExtensionAPI): Promise<void> {
 	if (typeof pi.registerCommand !== "function") return;
+	if (typeof pi.registerEntryRenderer === "function") {
+		registerCodexCompactionEntryRenderer(pi);
+	}
 	const configFile = resolve(homedir(), ".pi", "agent", "pi-codex-adaptor.json");
 	const service = new ConfigurationService(new FileConfigurationRepository(configFile));
 	const activation = new ProviderActivationPolicy(service);
