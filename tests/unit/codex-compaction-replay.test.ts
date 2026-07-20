@@ -484,6 +484,27 @@ describe("active-branch Codex compaction replay", () => {
 		]);
 	});
 
+	test("compacts branch-backed input when Pi includes the current turn in context entries", async () => {
+		const value = harness();
+		const events = await value.run(false);
+		expect(events.at(-1)).toMatchObject({ type: "done" });
+		expect(value.runtime.compactCalls).toBe(1);
+		expect(value.runtime.responseCalls).toBe(1);
+		expect(value.session.entries.at(-1)).toMatchObject({
+			type: "custom",
+			parentId: "tool-1",
+			customType: "pi-codex-adaptor.auto-compaction",
+		});
+		expect((value.runtime.responseRequests[0] as { input: unknown[] }).input).toEqual([
+			{
+				type: "compaction",
+				id: "synthetic-compaction-item",
+				encrypted_content: OPAQUE,
+				internal_chat_message_metadata_passthrough: { turn_id: "synthetic-turn" },
+			},
+		]);
+	});
+
 	test("replays the checkpoint on the next high-usage request without compacting identical input again", async () => {
 		const value = harness();
 		await value.run(true);
@@ -566,10 +587,11 @@ describe("active-branch Codex compaction replay", () => {
 		const fork = harness();
 		const forkEvents = await fork.run(false);
 		expect(forkEvents.at(-1)).toMatchObject({ type: "done" });
-		expect(fork.runtime.compactCalls).toBe(0);
-		expect(
-			JSON.stringify((fork.runtime.responseRequests[0] as { input: unknown[] }).input),
-		).not.toContain(OPAQUE);
+		expect(fork.runtime.compactCalls).toBe(1);
+		expect((fork.runtime.responseRequests[0] as { input: unknown[] }).input[0]).toMatchObject({
+			type: "compaction",
+			encrypted_content: OPAQUE,
+		});
 
 		const manualSession = new SessionFixture();
 		manualSession.appendEntry("pi-codex-adaptor.auto-compaction", automatic.checkpoint);

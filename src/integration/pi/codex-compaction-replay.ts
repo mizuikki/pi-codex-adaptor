@@ -175,7 +175,9 @@ async function handleBeforeProviderRequest(
 			mode: record.config.codex.compaction.mode,
 			contextTokens: ctx.getContextUsage?.()?.tokens ?? null,
 			threshold: resolveThreshold(record),
-			hasUncheckpointedInput: segmentation.liveTail.length > 0,
+			hasUncheckpointedInput:
+				candidateLeafId !== null &&
+				(checkpoint.value === undefined || checkpoint.value.entry.id !== candidateLeafId),
 			busy: options.coordinator.isBusy(record.sessionId),
 		})
 	) {
