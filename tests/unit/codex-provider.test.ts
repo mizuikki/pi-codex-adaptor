@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import type { Context, Model } from "@earendil-works/pi-ai";
+import {
+	type AssistantMessage,
+	type Context,
+	isRetryableAssistantError,
+	type Model,
+} from "@earendil-works/pi-ai";
 
 import type {
 	CodexProviderConnection,
@@ -17,6 +22,7 @@ import type { ConfigurationService } from "../../src/application/configuration.t
 import { ProviderActivationPolicy } from "../../src/application/provider-activation.ts";
 import { SUPPLEMENTAL_SESSION_INSTRUCTIONS } from "../../src/application/resolve-effective-capabilities.ts";
 import { type CodexConfig, createDefaultConfig } from "../../src/domain/config.ts";
+import { BridgeRemoteError } from "../../src/infrastructure/codex-bridge/client.ts";
 import { providerCompactionIdentityFromValues } from "../../src/integration/pi/codex-compaction-replay.ts";
 import {
 	createCodexStreamSimple as createCodexStreamSimpleAdapter,
@@ -34,10 +40,14 @@ class FixtureRuntime implements CodexRuntime {
 	lastToolsParams: Record<string, unknown> | undefined;
 	calls = 0;
 	shellSurface: "unified-exec" | "shell-command" = "unified-exec";
+	throwOnCreate: Error | undefined;
 
 	async createResponse(options: CreateResponseOptions): Promise<CreateResponseResult> {
 		this.calls += 1;
 		this.request = options;
+		if (this.throwOnCreate !== undefined) {
+			throw this.throwOnCreate;
+		}
 		await options.onEvent({ type: "response.output_text.delta", delta: "hello" });
 		await options.onEvent({
 			type: "response.output_item.done",
@@ -846,5 +856,139 @@ describe("Pi Codex provider adapter", () => {
 		for (const item of items) {
 			expect(decodeResponseItemSignature(encodeResponseItemSignature(item))).toEqual(item);
 		}
+	});
+
+	test("maps retryable BridgeRemoteError to a Pi-compatible assistant error without retrying", async () => {
+		const runtime = new FixtureRuntime();
+		const secretSource = "upstream body contains fixture-secret-token";
+		runtime.throwOnCreate = new BridgeRemoteError({
+			category: "NativeToolError",
+			code: "openai_request_failed",
+			message: secretSource,
+			retryable: true,
+		});
+		const streamSimple = createFixtureStream(
+			runtime,
+			configuration(),
+			new ProviderActivationPolicy(configuration()),
+			new CodexCompactionStore(),
+		);
+		const events = [];
+		for await (const event of streamSimple(model, context, {
+			apiKey: fixtureToken(),
+			sessionId: "session-fixture",
+		})) {
+			events.push(event);
+		}
+
+		const error = events.at(-1);
+		expect(error).toMatchObject({ type: "error", reason: "error" });
+		if (error?.type !== "error") throw new Error("expected error event");
+		expect(error.error.errorMessage).toBe("OpenAI provider service unavailable");
+		expect(JSON.stringify(error)).not.toContain("fixture-secret-token");
+		expect(JSON.stringify(error)).not.toContain(secretSource);
+		expect(runtime.calls).toBe(1);
+		expect(
+			isRetryableAssistantError({
+				stopReason: error.error.stopReason,
+				errorMessage: error.error.errorMessage,
+			} as AssistantMessage),
+		).toBe(true);
+	});
+
+	test("does not promote non-retryable BridgeRemoteError messages", async () => {
+		const runtime = new FixtureRuntime();
+		runtime.throwOnCreate = new BridgeRemoteError({
+			category: "NativeToolError",
+			code: "openai_request_failed",
+			message: "The OpenAI request failed",
+			retryable: false,
+		});
+		const streamSimple = createFixtureStream(
+			runtime,
+			configuration(),
+			new ProviderActivationPolicy(configuration()),
+			new CodexCompactionStore(),
+		);
+		const events = [];
+		for await (const event of streamSimple(model, context, {
+			apiKey: fixtureToken(),
+			sessionId: "session-fixture",
+		})) {
+			events.push(event);
+		}
+
+		const error = events.at(-1);
+		expect(error).toMatchObject({ type: "error", reason: "error" });
+		if (error?.type !== "error") throw new Error("expected error event");
+		expect(error.error.errorMessage).toBe("The OpenAI request failed");
+		expect(error.error.errorMessage).not.toBe("OpenAI provider service unavailable");
+		expect(runtime.calls).toBe(1);
+		expect(
+			isRetryableAssistantError({
+				stopReason: error.error.stopReason,
+				errorMessage: error.error.errorMessage,
+			} as AssistantMessage),
+		).toBe(false);
+	});
+
+	test("does not promote a spoofed ordinary Error as retryable", async () => {
+		const runtime = new FixtureRuntime();
+		const spoofed = new Error("OpenAI provider service unavailable");
+		spoofed.name = "BridgeRemoteError";
+		runtime.throwOnCreate = spoofed;
+		const streamSimple = createFixtureStream(
+			runtime,
+			configuration(),
+			new ProviderActivationPolicy(configuration()),
+			new CodexCompactionStore(),
+		);
+		const events = [];
+		for await (const event of streamSimple(model, context, {
+			apiKey: fixtureToken(),
+			sessionId: "session-fixture",
+		})) {
+			events.push(event);
+		}
+
+		const error = events.at(-1);
+		expect(error).toMatchObject({ type: "error", reason: "error" });
+		if (error?.type !== "error") throw new Error("expected error event");
+		expect(error.error.errorMessage).toBe("OpenAI Codex request failed");
+		expect(runtime.calls).toBe(1);
+		expect(
+			isRetryableAssistantError({
+				stopReason: error.error.stopReason,
+				errorMessage: error.error.errorMessage,
+			} as AssistantMessage),
+		).toBe(false);
+	});
+
+	test("preserves abort output without the retry marker", async () => {
+		const runtime = new FixtureRuntime();
+		runtime.throwOnCreate = new DOMException("The OpenAI Codex request was aborted", "AbortError");
+		const streamSimple = createFixtureStream(
+			runtime,
+			configuration(),
+			new ProviderActivationPolicy(configuration()),
+			new CodexCompactionStore(),
+		);
+		const controller = new AbortController();
+		controller.abort();
+		const events = [];
+		for await (const event of streamSimple(model, context, {
+			apiKey: fixtureToken(),
+			sessionId: "session-fixture",
+			signal: controller.signal,
+		})) {
+			events.push(event);
+		}
+
+		const error = events.at(-1);
+		expect(error).toMatchObject({ type: "error", reason: "aborted" });
+		if (error?.type !== "error") throw new Error("expected error event");
+		expect(error.error.errorMessage).toBe("Request aborted");
+		expect(error.error.errorMessage).not.toBe("OpenAI provider service unavailable");
+		expect(runtime.calls).toBe(1);
 	});
 });

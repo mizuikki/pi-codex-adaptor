@@ -74,7 +74,11 @@ atomic patch commit checks remain mandatory. Preauthorization for an unsupported
   text; it contains no dynamic exception, provider, credential, URL, session, prompt, path, response,
   header, or opaque-output data. A missing or failed UI notification does not permit fallback.
 - Responses transport is implemented only by pinned official native modules. TypeScript does not add
-  a second retry, SSE, or WebSocket implementation.
+  a second retry, SSE, or WebSocket implementation. When a provider stream fails, the Pi integration
+  maps only a strict, protocol-decoded `BridgeRemoteError.retryable` classification into Pi's existing
+  safe assistant-error text. That mapping is a redacted compatibility surface; it does not schedule a
+  retry, reconnect the bridge, or issue a second provider request. Pi retains host-owned retry
+  scheduling, backoff, cancellation, and UI for normal agent turns.
 - The complete provider contract is declared explicitly for every `tools.resolve` call. Missing
   required contract fields fail with `provider_contract_incomplete`, while provider endpoints that
   respond as unsupported fail with `provider_contract_mismatch`. Errors name only the missing
