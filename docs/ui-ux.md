@@ -26,8 +26,32 @@ new user setting.
 The OpenAI section's manual compaction action is manual Pi compaction. It uses a fixed shim summary
 that states the provider performed compaction and keeps the returned version `2` opaque details for
 provider-bound replay. The UI never attempts to decrypt, summarize, or display the encrypted content.
-Inline automatic compaction is silent at the UI layer: it continues the current provider request,
-adds no synthetic message or continuation turn, and persists only a hidden opaque `CustomEntry`.
+Manual compaction keeps Pi's existing compaction-summary presentation.
+
+Inline automatic compaction remains silent in the live provider flow: it continues the current
+provider request and adds no synthetic conversational message or continuation turn. The durable
+checkpoint is still a hidden opaque `CustomEntry`. When Pi renders that custom entry, the adaptor
+projects exactly one information row:
+
+```text
+• Context compacted
+```
+
+Only the leading `•` is dimmed; the message uses normal transcript styling. The row has no tool
+gutter, lifecycle state, expansion, token count, checkpoint identifier, or opaque content.
+
+Managed Codex tools render as compact unframed transcript rows owned by
+`src/ui/terminal/codex-tool-renderer.ts`. Each row uses the renderer-owned single-column glyphs `•`,
+`│`, and `└`, with explicit English state words for running, completed, failed, timed-out, and
+aborted outcomes. `context.isError` forces a textual failure label even when `details.status` is
+absent. Collapsed command output shows at most five logical lines plus an ASCII
+`... N lines omitted` row; Pi's existing tool expansion action reveals the complete native-bounded
+output. Headers clip and detail lines wrap to the current terminal width so gutters stay aligned.
+After execution starts, the result slot owns the single lifecycle header so live stacking and HTML
+export never show both `Running` and `Ran` for one tool call. The UI never displays raw patch input,
+image-generation prompts or revised prompts, raw web responses, credentials, or arbitrary argument
+objects. Final command rows prefer `details.output` so model-visible JSON metadata suffixes stay out
+of the human transcript while model-facing tool content remains unchanged.
 
 The Tools category includes an `Approval policy` enum with `prompt` and `bypass`. Prompt is the safe
 default. Cycling from prompt to bypass opens a confirmation with Cancel focused by default. The

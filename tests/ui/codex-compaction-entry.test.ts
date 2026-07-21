@@ -6,11 +6,12 @@ import {
 	createCodexAutoCompactionCheckpoint,
 } from "../../src/application/compaction.ts";
 import {
+	CODEX_COMPACTION_MARKER,
 	CODEX_COMPACTION_TRANSCRIPT_TEXT,
 	registerCodexCompactionEntryRenderer,
 } from "../../src/ui/terminal/codex-compaction-entry.ts";
 
-test("automatic compaction entries render as a durable Codex-style transcript line", () => {
+test("automatic compaction entries render as a single Codex-style information row", () => {
 	let customType: string | undefined;
 	let renderer: EntryRenderer | undefined;
 	registerCodexCompactionEntryRenderer({
@@ -54,7 +55,27 @@ test("automatic compaction entries render as a durable Codex-style transcript li
 		theme as never,
 	);
 
-	expect(component?.render(80).map((line) => line.trimEnd())).toEqual([
-		`[dim]${CODEX_COMPACTION_TRANSCRIPT_TEXT}`,
-	]);
+	const styled = component?.render(80).map((line) => line.trimEnd()) ?? [];
+	expect(styled).toEqual([`[dim]${CODEX_COMPACTION_MARKER} ${CODEX_COMPACTION_TRANSCRIPT_TEXT}`]);
+
+	const plain = styled.map((line) => line.replace(/\[[a-zA-Z]+\]/g, ""));
+	expect(plain).toEqual([`${CODEX_COMPACTION_MARKER} ${CODEX_COMPACTION_TRANSCRIPT_TEXT}`]);
+	expect(CODEX_COMPACTION_TRANSCRIPT_TEXT).toBe("Context compacted");
+
+	// Checkpoint data, gutters, expansion, and token counts stay out of the projection.
+	const joined = plain.join("\n");
+	expect(joined).not.toContain("synthetic-checkpoint");
+	expect(joined).not.toContain("synthetic-opaque");
+	expect(joined).not.toContain("encrypted");
+	expect(joined).not.toContain("\u2502");
+	expect(joined).not.toContain("\u2514");
+	expect(joined).not.toContain("token");
+
+	// Stable single line at representative widths.
+	expect(component?.render(40).map((line) => line.replace(/\[[a-zA-Z]+\]/g, "").trimEnd())).toEqual(
+		[`${CODEX_COMPACTION_MARKER} ${CODEX_COMPACTION_TRANSCRIPT_TEXT}`],
+	);
+	expect(
+		component?.render(120).map((line) => line.replace(/\[[a-zA-Z]+\]/g, "").trimEnd()),
+	).toEqual([`${CODEX_COMPACTION_MARKER} ${CODEX_COMPACTION_TRANSCRIPT_TEXT}`]);
 });
