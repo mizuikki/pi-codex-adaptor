@@ -6,7 +6,7 @@ import type {
 	SessionCompactEvent,
 } from "@earendil-works/pi-coding-agent";
 
-import type { CodexRuntime } from "../../application/codex-runtime.ts";
+import { type CodexRuntime, remoteCompactionV2Context } from "../../application/codex-runtime.ts";
 import {
 	CODEX_AUTO_COMPACTION_KIND,
 	CodexCompactionCoordinator,
@@ -173,6 +173,11 @@ async function compactForPi(
 			...event.preparation.turnPrefixMessages,
 		];
 		const input = [...(previous?.output ?? []), ...responseItemsFromMessages(messages)];
+		const remoteV2Context = remoteCompactionV2Context(
+			capabilitySnapshot.compaction.implementation,
+			sessionId,
+			"manual",
+		);
 		const result = await state.runtime.compact({
 			connection,
 			request: {
@@ -192,6 +197,7 @@ async function compactForPi(
 			implementation: capabilitySnapshot.compaction.implementation ?? "compact_endpoint",
 			transportMode: config.codex.transport.mode,
 			providerSupportsWebsockets: capabilitySnapshot.providerSupportsWebsockets,
+			...(remoteV2Context === undefined ? {} : { remoteCompactionV2Context: remoteV2Context }),
 			signal: event.signal,
 		});
 		if (event.signal.aborted || result.status === "aborted") {

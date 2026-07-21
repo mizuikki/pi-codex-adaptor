@@ -3,7 +3,7 @@
 `pi-codex-adaptor` is a Pi extension that will adapt the public OpenAI Codex `0.144.3`
 protocol and selected runtime modules without running a second agent inside Pi.
 
-The repository is under active implementation. Protocol v3, the native baseline handshake, official
+The repository is under active implementation. Protocol v4, the native baseline handshake, official
 Responses SSE/WebSocket transport with connect fallback, compact endpoint, and exact model metadata
 resolution are implemented. The versioned configuration store, prompt-approved or preauthorized Unified Exec sessions,
 and `/codex` settings overlay are available. The extension registers the native bridge stream for
@@ -58,9 +58,10 @@ bun ci
 bun run native:local
 ```
 
-The command infers the host target, embeds the current Git commit, assembles the executable and
-`native-artifact.json`, transactionally replaces `native/bin/<target>/`, and verifies the checksum
-and executable identity. A failed verification restores the previous installed artifact.
+The command requires a clean Git worktree and an unchanged `HEAD`, then infers the host target,
+embeds that Git commit, assembles the executable and `native-artifact.json`, transactionally replaces
+`native/bin/<target>/`, and verifies the checksum and executable identity. A failed verification
+restores the previous installed artifact.
 
 ```sh
 bun run native:local -- --debug

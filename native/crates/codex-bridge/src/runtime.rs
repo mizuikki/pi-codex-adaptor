@@ -74,6 +74,7 @@ use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::approx_token_count;
 use codex_utils_output_truncation::formatted_truncate_text;
 use http::HeaderMap;
+use http::HeaderValue;
 use serde::Deserialize;
 use serde_json::Value;
 use serde_json::json;
@@ -455,6 +456,8 @@ struct ResponsesCreateParams {
     request: ResponsesApiRequest,
     transport_mode: ResponsesTransportMode,
     provider_supports_websockets: bool,
+    #[serde(default)]
+    remote_compaction_v2_context: Option<RemoteCompactionV2Context>,
 }
 
 #[derive(Clone, Copy, Default, Deserialize)]
@@ -478,6 +481,8 @@ struct ResponsesCompactParams {
     provider_supports_websockets: bool,
     #[serde(default = "default_compaction_timeout_ms")]
     request_timeout_ms: u64,
+    #[serde(default)]
+    remote_compaction_v2_context: Option<RemoteCompactionV2Context>,
 }
 
 #[derive(Clone, Copy, Default, Deserialize)]
@@ -486,6 +491,164 @@ enum CompactionImplementation {
     #[default]
     CompactEndpoint,
     RemoteV2,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RemoteCompactionV2Context {
+    session_id: String,
+    #[serde(default)]
+    compaction_trigger: Option<RemoteCompactionV2Trigger>,
+}
+
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum RemoteCompactionV2Trigger {
+    Auto,
+    Manual,
+}
+
+#[derive(Clone, Copy)]
+enum RemoteCompactionV2RequestKind {
+    Turn,
+    Compaction,
+}
+
+#[derive(Clone, Copy)]
+struct RemoteCompactionV2RequestMetadata<'a> {
+    context: Option<&'a RemoteCompactionV2Context>,
+    kind: RemoteCompactionV2RequestKind,
+}
+
+impl RemoteCompactionV2Context {
+    fn validate(self) -> Result<Self, BridgeError> {
+        if self.session_id.is_empty()
+            || self.session_id.len() > 256
+            || self.session_id.contains(['\r', '\n'])
+        {
+            return Err(invalid_params(
+                "remote compaction v2 session context is invalid",
+            ));
+        }
+        Ok(self)
+    }
+
+    fn apply_to_request(
+        &self,
+        request: &mut ResponsesApiRequest,
+        kind: RemoteCompactionV2RequestKind,
+    ) -> Result<(), BridgeError> {
+        let mut metadata = request.client_metadata.take().unwrap_or_default();
+        metadata.extend(self.client_metadata(kind)?);
+        request.client_metadata = Some(metadata);
+        Ok(())
+    }
+
+    fn responses_options(
+        &self,
+        kind: RemoteCompactionV2RequestKind,
+    ) -> Result<ResponsesOptions, BridgeError> {
+        Ok(ResponsesOptions {
+            session_id: Some(self.session_id.clone()),
+            thread_id: Some(self.session_id.clone()),
+            extra_headers: self.extra_headers(kind)?,
+            ..ResponsesOptions::default()
+        })
+    }
+
+    fn websocket_headers(
+        &self,
+        kind: RemoteCompactionV2RequestKind,
+    ) -> Result<HeaderMap, BridgeError> {
+        let mut headers = self.extra_headers(kind)?;
+        insert_remote_v2_header(&mut headers, "session-id", &self.session_id)?;
+        insert_remote_v2_header(&mut headers, "thread-id", &self.session_id)?;
+        insert_remote_v2_header(&mut headers, "x-client-request-id", &self.session_id)?;
+        Ok(headers)
+    }
+
+    fn client_metadata(
+        &self,
+        kind: RemoteCompactionV2RequestKind,
+    ) -> Result<HashMap<String, String>, BridgeError> {
+        Ok(HashMap::from([
+            ("session_id".to_owned(), self.session_id.clone()),
+            ("thread_id".to_owned(), self.session_id.clone()),
+            ("x-codex-window-id".to_owned(), self.session_id.clone()),
+            (
+                "x-codex-turn-metadata".to_owned(),
+                self.turn_metadata(kind)?,
+            ),
+        ]))
+    }
+
+    fn extra_headers(&self, kind: RemoteCompactionV2RequestKind) -> Result<HeaderMap, BridgeError> {
+        let mut headers = HeaderMap::new();
+        insert_remote_v2_header(
+            &mut headers,
+            "x-codex-beta-features",
+            "remote_compaction_v2",
+        )?;
+        insert_remote_v2_header(&mut headers, "x-codex-window-id", &self.session_id)?;
+        insert_remote_v2_header(
+            &mut headers,
+            "x-codex-turn-metadata",
+            &self.turn_metadata(kind)?,
+        )?;
+        Ok(headers)
+    }
+
+    fn turn_metadata(&self, kind: RemoteCompactionV2RequestKind) -> Result<String, BridgeError> {
+        let base = json!({
+            "session_id": self.session_id,
+            "thread_id": self.session_id,
+            "window_id": self.session_id,
+        });
+        let mut metadata = base
+            .as_object()
+            .cloned()
+            .ok_or_else(|| invalid_params("remote compaction v2 metadata could not be encoded"))?;
+        match kind {
+            RemoteCompactionV2RequestKind::Turn => {
+                metadata.insert("request_kind".to_owned(), json!("turn"));
+            }
+            RemoteCompactionV2RequestKind::Compaction => {
+                let trigger = self
+                    .compaction_trigger
+                    .unwrap_or(RemoteCompactionV2Trigger::Auto);
+                let (trigger, reason, phase) = match trigger {
+                    RemoteCompactionV2Trigger::Auto => ("auto", "context_limit", "pre_turn"),
+                    RemoteCompactionV2Trigger::Manual => {
+                        ("manual", "user_requested", "standalone_turn")
+                    }
+                };
+                metadata.insert("request_kind".to_owned(), json!("compaction"));
+                metadata.insert(
+                    "compaction".to_owned(),
+                    json!({
+                        "trigger": trigger,
+                        "reason": reason,
+                        "implementation": "responses_compaction_v2",
+                        "phase": phase,
+                        "strategy": "memento",
+                    }),
+                );
+            }
+        }
+        serde_json::to_string(&metadata)
+            .map_err(|_| invalid_params("remote compaction v2 metadata could not be encoded"))
+    }
+}
+
+fn insert_remote_v2_header(
+    headers: &mut HeaderMap,
+    name: &'static str,
+    value: &str,
+) -> Result<(), BridgeError> {
+    let value = HeaderValue::from_str(value)
+        .map_err(|_| invalid_params("remote compaction v2 session context is invalid"))?;
+    headers.insert(name, value);
+    Ok(())
 }
 
 #[derive(Deserialize)]
@@ -3517,6 +3680,14 @@ async fn responses_create(
     let mut parsed = serde_json::from_value::<ResponsesCreateParams>(params)
         .map_err(|_| invalid_params("responses.create parameters are invalid"))?;
     parsed.request.stream = true;
+    let remote_v2_context = parsed
+        .remote_compaction_v2_context
+        .take()
+        .map(RemoteCompactionV2Context::validate)
+        .transpose()?;
+    if let Some(context) = remote_v2_context.as_ref() {
+        context.apply_to_request(&mut parsed.request, RemoteCompactionV2RequestKind::Turn)?;
+    }
     let connection = api::connect(&parsed.connection)?;
     let websocket_connect_timeout = connection.websocket_connect_timeout;
     let mut response = await_with_cancellation(
@@ -3527,6 +3698,10 @@ async fn responses_create(
             parsed.provider_supports_websockets,
             connection,
             websocket_connect_timeout,
+            RemoteCompactionV2RequestMetadata {
+                context: remote_v2_context.as_ref(),
+                kind: RemoteCompactionV2RequestKind::Turn,
+            },
             "responses_sse",
         )),
     )
@@ -3568,8 +3743,17 @@ async fn start_response_stream(
     provider_supports_websockets: bool,
     connection: api::ApiConnection,
     websocket_connect_timeout: Duration,
+    remote_v2: RemoteCompactionV2RequestMetadata<'_>,
     contract_capability: &'static str,
 ) -> Result<codex_api::ResponseStream, BridgeError> {
+    let responses_options = match remote_v2.context {
+        Some(context) => context.responses_options(remote_v2.kind)?,
+        None => ResponsesOptions::default(),
+    };
+    let websocket_headers = match remote_v2.context {
+        Some(context) => context.websocket_headers(remote_v2.kind)?,
+        None => HeaderMap::default(),
+    };
     if matches!(transport_mode, ResponsesTransportMode::Auto) && provider_supports_websockets {
         let websocket = ResponsesWebsocketClient::new(
             connection.provider.clone(),
@@ -3580,7 +3764,7 @@ async fn start_response_stream(
             websocket_connect_timeout,
             websocket.connect(
                 &factory,
-                HeaderMap::default(),
+                websocket_headers,
                 HeaderMap::default(),
                 None,
                 None,
@@ -3604,7 +3788,7 @@ async fn start_response_stream(
         connection.provider,
         connection.authentication,
     )
-    .stream_request(request, ResponsesOptions::default())
+    .stream_request(request, responses_options)
     .await
     .map_err(|error| api::map_provider_contract_error(&error, contract_capability))
 }
@@ -3613,7 +3797,7 @@ async fn responses_compact(
     params: Value,
     cancellation: &CancellationToken,
 ) -> Result<Value, RequestFailure> {
-    let parsed = serde_json::from_value::<ResponsesCompactParams>(params)
+    let mut parsed = serde_json::from_value::<ResponsesCompactParams>(params)
         .map_err(|_| invalid_params("responses.compact parameters are invalid"))?;
     if parsed.request_timeout_ms == 0 || parsed.request_timeout_ms > 600_000 {
         return Err(invalid_params(
@@ -3621,6 +3805,11 @@ async fn responses_compact(
         )
         .into());
     }
+    let remote_v2_context = parsed
+        .remote_compaction_v2_context
+        .take()
+        .map(RemoteCompactionV2Context::validate)
+        .transpose()?;
     let implementation = parsed.implementation;
     let connection = api::connect(&parsed.connection)?;
     ensure_not_cancelled(cancellation)?;
@@ -3636,6 +3825,7 @@ async fn responses_compact(
                     parsed.provider_supports_websockets,
                     connection,
                     cancellation,
+                    remote_v2_context,
                 ),
             )),
         )
@@ -3686,11 +3876,12 @@ async fn responses_compact_remote(
     provider_supports_websockets: bool,
     connection: api::ApiConnection,
     cancellation: &CancellationToken,
+    remote_v2_context: Option<RemoteCompactionV2Context>,
 ) -> Result<Value, RequestFailure> {
     let retained_input = request.input.clone();
     let mut input = request.input;
     input.push(ResponseItem::CompactionTrigger {});
-    let request = ResponsesApiRequest {
+    let mut request = ResponsesApiRequest {
         model: request.model,
         instructions: request.instructions,
         input,
@@ -3707,6 +3898,9 @@ async fn responses_compact_remote(
         text: request.text,
         client_metadata: None,
     };
+    if let Some(context) = remote_v2_context.as_ref() {
+        context.apply_to_request(&mut request, RemoteCompactionV2RequestKind::Compaction)?;
+    }
     let websocket_connect_timeout = connection.websocket_connect_timeout;
     let mut stream = await_with_cancellation(
         cancellation,
@@ -3716,6 +3910,10 @@ async fn responses_compact_remote(
             provider_supports_websockets,
             connection,
             websocket_connect_timeout,
+            RemoteCompactionV2RequestMetadata {
+                context: remote_v2_context.as_ref(),
+                kind: RemoteCompactionV2RequestKind::Compaction,
+            },
             "remote_compaction_v2",
         )),
     )
@@ -4110,7 +4308,7 @@ mod tests {
 
     fn initialization() -> &'static str {
         concat!(
-            "{\"type\":\"initialize\",\"requestId\":\"init-1\",\"protocolVersion\":3,",
+            "{\"type\":\"initialize\",\"requestId\":\"init-1\",\"protocolVersion\":4,",
             "\"client\":{\"name\":\"contract-test\",\"version\":\"0.0.0\"}}\n"
         )
     }
@@ -4307,7 +4505,7 @@ mod tests {
 
     #[tokio::test]
     async fn falls_back_from_official_websocket_connect_to_sse() {
-        let (base_url, server) = spawn_websocket_fallback_server().await;
+        let (base_url, _websocket_request, server) = spawn_websocket_fallback_server().await;
         let connection = api::connect(&fixture_connection(base_url))
             .expect("fixture API connection should build");
         let request = serde_json::from_value(fixture_response_request())
@@ -4319,6 +4517,10 @@ mod tests {
             true,
             connection,
             websocket_connect_timeout,
+            RemoteCompactionV2RequestMetadata {
+                context: None,
+                kind: RemoteCompactionV2RequestKind::Turn,
+            },
             "responses_sse",
         )
         .await
@@ -4333,6 +4535,78 @@ mod tests {
             }
         }
         assert!(completed);
+        server.await.expect("fallback fixture server should join");
+    }
+
+    #[tokio::test]
+    async fn remote_v2_websocket_fallback_sends_codex_session_context() {
+        let (base_url, websocket_request, server) = spawn_websocket_fallback_server().await;
+        let connection = api::connect(&fixture_connection(base_url))
+            .expect("fixture API connection should build");
+        let request = serde_json::from_value(fixture_response_request())
+            .expect("fixture response request should be typed");
+        let websocket_connect_timeout = connection.websocket_connect_timeout;
+        let context = RemoteCompactionV2Context {
+            session_id: "remote-v2-session".to_owned(),
+            compaction_trigger: None,
+        };
+        let mut response = start_response_stream(
+            request,
+            ResponsesTransportMode::Auto,
+            true,
+            connection,
+            websocket_connect_timeout,
+            RemoteCompactionV2RequestMetadata {
+                context: Some(&context),
+                kind: RemoteCompactionV2RequestKind::Turn,
+            },
+            "responses_sse",
+        )
+        .await
+        .expect("SSE fallback should connect");
+
+        let mut completed = false;
+        while let Some(event) = response.rx_event.recv().await {
+            if matches!(
+                event.expect("fallback event should parse"),
+                codex_api::ResponseEvent::Completed { .. }
+            ) {
+                completed = true;
+                break;
+            }
+        }
+        assert!(completed);
+
+        let request = websocket_request
+            .await
+            .expect("websocket request should be captured");
+        assert_eq!(
+            fixture_header(&request, "session-id"),
+            Some("remote-v2-session")
+        );
+        assert_eq!(
+            fixture_header(&request, "thread-id"),
+            Some("remote-v2-session")
+        );
+        assert_eq!(
+            fixture_header(&request, "x-client-request-id"),
+            Some("remote-v2-session")
+        );
+        assert_eq!(
+            fixture_header(&request, "x-codex-beta-features"),
+            Some("remote_compaction_v2")
+        );
+        assert_eq!(
+            fixture_header(&request, "x-codex-window-id"),
+            Some("remote-v2-session")
+        );
+        let turn: Value = serde_json::from_str(
+            fixture_header(&request, "x-codex-turn-metadata")
+                .expect("websocket request should include turn metadata"),
+        )
+        .expect("websocket turn metadata should be JSON");
+        assert_eq!(turn["request_kind"], "turn");
+        assert_eq!(turn["session_id"], "remote-v2-session");
         server.await.expect("fallback fixture server should join");
     }
 
@@ -4414,6 +4688,151 @@ mod tests {
         assert_eq!(result["output"][0]["role"], "user");
         assert_eq!(result["output"][1]["type"], "compaction");
         assert_eq!(result["output"][1]["encrypted_content"], "opaque");
+        server.await.expect("fixture server should join");
+    }
+
+    #[tokio::test]
+    #[allow(clippy::large_futures)]
+    async fn remote_v2_compaction_sends_codex_session_context() {
+        let (base_url, request, server) = spawn_capturing_fixture_http_server(
+            concat!(
+                "event: response.output_item.done\n",
+                "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"compaction\",\"encrypted_content\":\"opaque\"}}\n\n",
+                "event: response.completed\n",
+                "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"remote-compaction\"}}\n\n",
+            )
+            .to_owned(),
+        )
+        .await;
+        let result = responses_compact(
+            json!({
+                "implementation": "remote_v2",
+                "transportMode": "sse",
+                "providerSupportsWebsockets": false,
+                "remoteCompactionV2Context": {
+                    "sessionId": "remote-v2-session",
+                    "compactionTrigger": "auto"
+                },
+                "request": {
+                    "model": "fixture-model",
+                    "input": [],
+                    "instructions": "",
+                    "tools": null,
+                    "parallel_tool_calls": true,
+                    "reasoning": null,
+                    "service_tier": null,
+                    "prompt_cache_key": null,
+                    "text": null
+                },
+                "requestTimeoutMs": 1_000,
+                "connection": fixture_connection(base_url),
+            }),
+            &CancellationToken::new(),
+        )
+        .await
+        .expect("remote compaction should complete");
+        assert_eq!(result["output"][0]["type"], "compaction");
+
+        let request = request.await.expect("fixture request should be captured");
+        assert_eq!(
+            fixture_header(&request, "session-id"),
+            Some("remote-v2-session")
+        );
+        assert_eq!(
+            fixture_header(&request, "x-client-request-id"),
+            Some("remote-v2-session")
+        );
+        assert_eq!(
+            fixture_header(&request, "x-codex-beta-features"),
+            Some("remote_compaction_v2")
+        );
+        let body = fixture_request_body(&request);
+        let metadata = &body["client_metadata"];
+        assert_eq!(metadata["session_id"], "remote-v2-session");
+        assert_eq!(metadata["thread_id"], "remote-v2-session");
+        assert_eq!(metadata["x-codex-window-id"], "remote-v2-session");
+        let turn: Value = serde_json::from_str(
+            metadata["x-codex-turn-metadata"]
+                .as_str()
+                .expect("turn metadata should be a string"),
+        )
+        .expect("turn metadata should be JSON");
+        assert_eq!(turn["request_kind"], "compaction");
+        assert_eq!(turn["compaction"]["trigger"], "auto");
+        assert_eq!(turn["compaction"]["reason"], "context_limit");
+        assert_eq!(
+            turn["compaction"]["implementation"],
+            "responses_compaction_v2"
+        );
+        server.await.expect("fixture server should join");
+    }
+
+    #[tokio::test]
+    #[allow(clippy::large_futures)]
+    async fn remote_v2_continuation_request_keeps_codex_session_context() {
+        let (base_url, request, server) = spawn_capturing_fixture_http_server(
+            concat!(
+                "event: response.completed\n",
+                "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"continuation\"}}\n\n",
+            )
+            .to_owned(),
+        )
+        .await;
+        let (output, mut messages) = mpsc::channel(4);
+        let flow = Arc::new(FlowController::new(
+            "remote-v2-continuation".to_owned(),
+            output,
+        ));
+        let cancellation = CancellationToken::new();
+        let request_flow = Arc::clone(&flow);
+        let request_cancellation = cancellation.clone();
+        let task = tokio::spawn(async move {
+            responses_create(
+                json!({
+                    "request": fixture_response_request(),
+                    "transportMode": "sse",
+                    "providerSupportsWebsockets": false,
+                    "remoteCompactionV2Context": { "sessionId": "remote-v2-session" },
+                    "connection": fixture_connection(base_url),
+                }),
+                &request_flow,
+                &request_cancellation,
+            )
+            .await
+        });
+        let ServerMessage::Event { sequence, .. } = messages
+            .recv()
+            .await
+            .expect("completion event should be emitted")
+        else {
+            panic!("fixture should emit a response event");
+        };
+        flow.acknowledge(sequence)
+            .await
+            .expect("completion event should be acknowledged");
+        task.await
+            .expect("continuation request should join")
+            .expect("continuation request should complete");
+
+        let request = request.await.expect("fixture request should be captured");
+        assert_eq!(
+            fixture_header(&request, "session-id"),
+            Some("remote-v2-session")
+        );
+        assert_eq!(
+            fixture_header(&request, "x-codex-window-id"),
+            Some("remote-v2-session")
+        );
+        let body = fixture_request_body(&request);
+        let turn: Value = serde_json::from_str(
+            body["client_metadata"]["x-codex-turn-metadata"]
+                .as_str()
+                .expect("turn metadata should be a string"),
+        )
+        .expect("turn metadata should be JSON");
+        assert_eq!(turn["request_kind"], "turn");
+        assert_eq!(turn["session_id"], "remote-v2-session");
+        assert!(turn.get("compaction").is_none());
         server.await.expect("fixture server should join");
     }
 
@@ -6081,7 +6500,7 @@ mod tests {
             "sessions": { "enabled": false, "executorAvailable": true, "future": true },
             "shell": { "allowLoginShell": true, "execPermissionApprovalsEnabled": false },
         }))
-        .expect_err("unknown protocol-v3 session fields must fail");
+        .expect_err("unknown protocol-v4 session fields must fail");
         assert!(matches!(
             unknown,
             RequestFailure::Bridge(error) if error.code == "invalid_params"
@@ -8196,6 +8615,74 @@ mod tests {
         (format!("http://{address}/v1"), server)
     }
 
+    async fn spawn_capturing_fixture_http_server(
+        body: String,
+    ) -> (
+        String,
+        oneshot::Receiver<String>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("fixture listener should bind");
+        let address = listener
+            .local_addr()
+            .expect("fixture listener should have an address");
+        let content_type = if body.starts_with("event:") {
+            "text/event-stream"
+        } else {
+            "application/json"
+        };
+        let (sender, receiver) = oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener
+                .accept()
+                .await
+                .expect("fixture request should connect");
+            let mut request = vec![0_u8; 16 * 1024];
+            let length = stream
+                .read(&mut request)
+                .await
+                .expect("fixture request should be readable");
+            let request = String::from_utf8(request[..length].to_vec())
+                .expect("fixture request should be UTF-8");
+            sender
+                .send(request)
+                .expect("fixture request should be captured");
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: {content_type}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream
+                .write_all(response.as_bytes())
+                .await
+                .expect("fixture response should be writable");
+            stream
+                .shutdown()
+                .await
+                .expect("fixture response should close");
+        });
+        (format!("http://{address}/v1"), receiver, server)
+    }
+
+    fn fixture_header<'a>(request: &'a str, expected_name: &str) -> Option<&'a str> {
+        request
+            .split("\r\n")
+            .take_while(|line| !line.is_empty())
+            .find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.eq_ignore_ascii_case(expected_name)
+                    .then_some(value.trim())
+            })
+    }
+
+    fn fixture_request_body(request: &str) -> Value {
+        let (_, body) = request
+            .split_once("\r\n\r\n")
+            .expect("fixture request should have a body");
+        serde_json::from_str(body).expect("fixture request body should be JSON")
+    }
+
     async fn spawn_stalling_fixture_http_server() -> (String, tokio::task::JoinHandle<()>) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
@@ -8244,13 +8731,18 @@ mod tests {
         (format!("http://{address}/v1"), hits, server)
     }
 
-    async fn spawn_websocket_fallback_server() -> (String, tokio::task::JoinHandle<()>) {
+    async fn spawn_websocket_fallback_server() -> (
+        String,
+        oneshot::Receiver<String>,
+        tokio::task::JoinHandle<()>,
+    ) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("fallback listener should bind");
         let address = listener
             .local_addr()
             .expect("fallback listener should have an address");
+        let (sender, receiver) = oneshot::channel();
         let server = tokio::spawn(async move {
             let (mut websocket, _) = listener
                 .accept()
@@ -8261,7 +8753,10 @@ mod tests {
                 .read(&mut request)
                 .await
                 .expect("websocket probe should be readable");
-            assert!(String::from_utf8_lossy(&request[..length]).starts_with("GET /v1/responses"));
+            let websocket_request = String::from_utf8(request[..length].to_vec())
+                .expect("websocket request should be UTF-8");
+            assert!(websocket_request.starts_with("GET /v1/responses"));
+            let _ = sender.send(websocket_request);
             websocket
                 .write_all(
                     b"HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
@@ -8297,7 +8792,7 @@ mod tests {
                 .await
                 .expect("SSE fallback response should close");
         });
-        (format!("http://{address}/v1"), server)
+        (format!("http://{address}/v1"), receiver, server)
     }
 
     #[tokio::test]
@@ -8632,7 +9127,7 @@ mod tests {
     async fn rejects_malformed_secret_bearing_frames_with_stable_safe_messages() {
         let secret = "fixture-secret-sentinel";
         let malformed = format!(
-            "{{\"type\":\"initialize\",\"requestId\":\"init-1\",\"protocolVersion\":3,\"client\":{{\"name\":\"contract-test\",\"version\":\"0.0.0\"}},\"extra\":true,\"opaque\":\"{secret}\"}}\n"
+            "{{\"type\":\"initialize\",\"requestId\":\"init-1\",\"protocolVersion\":4,\"client\":{{\"name\":\"contract-test\",\"version\":\"0.0.0\"}},\"extra\":true,\"opaque\":\"{secret}\"}}\n"
         );
         let messages = run_server(&malformed).await;
         assert_eq!(messages.len(), 1);
@@ -8641,7 +9136,7 @@ mod tests {
         };
         assert!(request_id.is_none());
         assert_eq!(error.code, "invalid_frame");
-        assert_eq!(error.message, "bridge frame does not match protocol v3");
+        assert_eq!(error.message, "bridge frame does not match protocol v4");
         assert!(!error.message.contains(secret));
         assert!(!error.message.contains("fixture-secret-sentinel"));
         assert!(!format!("{messages:?}").contains(secret));

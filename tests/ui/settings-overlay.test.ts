@@ -128,7 +128,7 @@ describe("settings overlay disposal", () => {
 			baseline: "0.144.3",
 			provider: "openai-codex",
 			model: "test-model",
-			bridge: "protocol v3",
+			bridge: "protocol v4",
 		});
 		let done = false;
 		const overlay = new SettingsOverlay(model, service, ctx, diagnostics(), undefined, () => {
@@ -158,7 +158,7 @@ describe("settings overlay disposal", () => {
 			baseline: "0.144.3",
 			provider: "openai-codex",
 			model: "test-model",
-			bridge: "protocol v3",
+			bridge: "protocol v4",
 		});
 		const overlay = new SettingsOverlay(model, service, ctx, diagnostics(), undefined, () => {
 			done = true;
@@ -193,7 +193,7 @@ describe("settings overlay disposal", () => {
 			baseline: "0.144.3",
 			provider: "openai-codex",
 			model: "test-model",
-			bridge: "protocol v3",
+			bridge: "protocol v4",
 		});
 		const overlay = new SettingsOverlay(model, service, ctx, diagnostics(), undefined, () => {});
 
@@ -215,7 +215,7 @@ describe("settings overlay disposal", () => {
 			baseline: "0.144.3",
 			provider: "openai-codex",
 			model: "test-model",
-			bridge: "protocol v3",
+			bridge: "protocol v4",
 		});
 		const overlay = new SettingsOverlay(model, service, ctx, diagnostics(), undefined, () => {});
 		model.moveCategory(1);
@@ -234,7 +234,7 @@ describe("settings overlay disposal", () => {
 			baseline: "0.144.3",
 			provider: "openai-codex",
 			model: "test-model",
-			bridge: "protocol v3",
+			bridge: "protocol v4",
 		});
 		const overlay = new SettingsOverlay(model, service, ctx, diagnostics(), undefined, () => {});
 
@@ -264,7 +264,7 @@ describe("settings overlay disposal", () => {
 			baseline: "0.144.3",
 			provider: "openai-codex",
 			model: "test-model",
-			bridge: "protocol v3",
+			bridge: "protocol v4",
 		});
 		const overlay = new SettingsOverlay(
 			model,
@@ -296,7 +296,7 @@ describe("settings overlay disposal", () => {
 			baseline: "0.144.3",
 			provider: "openai-codex",
 			model: "test-model",
-			bridge: "protocol v3",
+			bridge: "protocol v4",
 		});
 		const overlay = new SettingsOverlay(
 			model,
@@ -328,7 +328,7 @@ describe("settings overlay disposal", () => {
 			baseline: "0.144.3",
 			provider: "custom-codex",
 			model: "test-model",
-			bridge: "protocol v3",
+			bridge: "protocol v4",
 			activationModel: { provider: "custom-codex", api: "openai-responses" },
 		});
 		const overlay = new SettingsOverlay(model, service, ctx, diagnostics(), undefined, () => {});
@@ -371,7 +371,7 @@ describe("settings overlay disposal", () => {
 			baseline: "0.144.3",
 			provider: "custom-codex",
 			model: "test-model",
-			bridge: "protocol v3",
+			bridge: "protocol v4",
 			activationModel: { provider: "custom-codex", api: "openai-responses" },
 		});
 		const overlay = new SettingsOverlay(model, service, ctx, diagnostics(), undefined, () => {});

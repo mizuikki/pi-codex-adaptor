@@ -47,6 +47,9 @@ export class BundledCodexRuntime implements CodexRuntime {
 					request: options.request,
 					transportMode: options.transportMode,
 					providerSupportsWebsockets: options.providerSupportsWebsockets,
+					...(options.remoteCompactionV2Context === undefined
+						? {}
+						: { remoteCompactionV2Context: options.remoteCompactionV2Context }),
 				},
 				{
 					...(options.signal === undefined ? {} : { signal: options.signal }),
@@ -70,6 +73,9 @@ export class BundledCodexRuntime implements CodexRuntime {
 					implementation: options.implementation,
 					transportMode: options.transportMode,
 					providerSupportsWebsockets: options.providerSupportsWebsockets,
+					...(options.remoteCompactionV2Context === undefined
+						? {}
+						: { remoteCompactionV2Context: options.remoteCompactionV2Context }),
 				},
 				options.signal === undefined ? {} : { signal: options.signal },
 			);

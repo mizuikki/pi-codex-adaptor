@@ -56,8 +56,13 @@ reports persistence errors, so the adaptor verifies the new leaf and only then i
 snapshot. An indeterminate append poisons replay for that session instance until reload or
 replacement. Manual compaction remains Pi-owned: Pi writes the real `CompactionEntry`, while the
 adaptor supplies version `2` provider-bound details and restores them on reload. Neither path performs
-client-side decryption; protocol `3` limits the retained opaque item to the pinned native typed
-projection.
+client-side decryption; the pinned native typed projection limits the retained opaque item.
+
+When `remote_v2` is selected, the host sends the same Pi session id with a compact request and each
+later Responses request from that session. Compaction also declares its `auto` or `manual` trigger.
+The native bridge derives the request-scoped Codex session, thread, window, beta-feature, and turn
+metadata for both SSE and WebSocket transport. This context is transient transport state: it neither
+changes Pi's opaque checkpoint format nor creates bridge-owned durable session state.
 
 Pi owns the persistent approval policy and maps one validated snapshot to one explicit authorization
 value on each native request. The integration layer never infers bypass from UI availability and does

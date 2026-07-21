@@ -28,7 +28,9 @@ the shared typed SSE/WebSocket request path.
 RemoteCompactionV2 history installation is a project-owned narrow adapter because the official
 session implementation depends on complete core orchestration. It preserves the official 64k retained
 user-message token budget, official token truncation helpers, compaction trigger, exactly-one-output
-rule, and opaque `ResponseItem` handling; Pi remains the session owner.
+rule, and opaque `ResponseItem` handling; Pi remains the session owner. Bridge protocol v4 carries
+Pi's stable session id as transient context so native code can derive the Remote V2 session, window,
+and turn request metadata without importing the complete official session implementation.
 
 The locked Pi compatibility floor is the `0.80.6` package graph recorded in `package.json` and
 `bun.lock`. Public SDK and extension-runner checks were also inspected against the exact local host

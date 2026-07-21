@@ -1,6 +1,6 @@
 # Bridge Protocol
 
-Protocol version 3 is a bounded newline-delimited JSON channel between the TypeScript host and the
+Protocol version 4 is a bounded newline-delimited JSON channel between the TypeScript host and the
 single native `codex-bridge` process. Each line contains exactly one object and is limited to
 16 MiB, excluding the line terminator. The bridge advertises a maximum of 256 unacknowledged stream
 events and reports paused and resumed backpressure states.
@@ -10,7 +10,7 @@ non-secret client identity. The handshake returns protocol,
 official Codex, native target, project source, vendor tree, frame limit, and compiled capability
 identity. A protocol or official baseline mismatch is fatal and must not be downgraded.
 
-Protocol v3 requires an explicit host-owned authorization value on every `tools.execute` params
+Protocol v4 requires an explicit host-owned authorization value on every `tools.execute` params
 object: `authorization: "require_approval" | "preauthorized"`. The `session_write` control frame
 also requires the same field, including when `data` is empty. Missing or unknown values fail closed
 as invalid parameters; there is no implicit default and the field is not part of any model-visible
@@ -49,6 +49,10 @@ implementation's trigger is a native request-side detail. The Pi integration sto
 typed projection in versioned opaque checkpoint details, restores it on session reload, substitutes it
 for Pi's display-only summary on the next request, and passes it back without decryption, parsing, or
 trimming.
+When Remote V2 is active, both operations carry a host-owned `remoteCompactionV2Context` with the
+stable Pi session id; compaction also declares its `auto` or `manual` trigger. Native code derives the
+Codex session, thread, window, beta-feature, and turn metadata headers and `client_metadata` from that
+context. This preserves the server-side context required to replay opaque compaction output.
 Account rate-limit events are consumed and discarded at the native boundary.
 
 `models.resolve` accepts an exact `{ "modelId": string }` and is credential-free and network-free. It
@@ -145,8 +149,8 @@ preserved exactly; native code maps it to an effectively unbounded stream idle t
 between `86400001` and `2147483646`, zero, and any larger number remain invalid. Websocket connect
 timeouts stay finite-only within the same 24-hour bound and do not accept the disabled sentinel.
 
-The canonical v3 examples are [client-v3.jsonl](../fixtures/bridge-protocol/client-v3.jsonl) and
-[server-v3.jsonl](../fixtures/bridge-protocol/server-v3.jsonl). Rust contract tests decode every
+The canonical v4 examples are [client-v4.jsonl](../fixtures/bridge-protocol/client-v4.jsonl) and
+[server-v4.jsonl](../fixtures/bridge-protocol/server-v4.jsonl). Rust contract tests decode every
 recorded frame and enforce size, one-frame, unknown-field, opaque-event, required authorization,
 advertised approval order, `allow_session` rejection, zero-frame bypass behavior, and safe
 malformed-frame behavior.

@@ -9,7 +9,11 @@ import {
 	type ToolCall,
 } from "@earendil-works/pi-ai";
 
-import type { CodexProviderConnection, CodexRuntime } from "../../application/codex-runtime.ts";
+import {
+	type CodexProviderConnection,
+	type CodexRuntime,
+	remoteCompactionV2Context,
+} from "../../application/codex-runtime.ts";
 import {
 	CodexCompactionStore,
 	isSupportedStructuredResponseItem,
@@ -161,12 +165,17 @@ async function runResponse(
 			if (replacement !== undefined) request = asRequest(replacement);
 		}
 		const state = new ResponseState(output, stream, model);
+		const remoteV2Context = remoteCompactionV2Context(
+			snapshot.compaction.implementation,
+			options?.sessionId,
+		);
 		const result = await runtime.createResponse({
 			connection: dispatchConnection ?? connection,
 			request,
 			transportMode: dispatchConfig?.transport.mode ?? config.codex.transport.mode,
 			providerSupportsWebsockets:
 				dispatchProviderSupportsWebsockets ?? snapshot.providerSupportsWebsockets,
+			...(remoteV2Context === undefined ? {} : { remoteCompactionV2Context: remoteV2Context }),
 			...(options?.signal === undefined ? {} : { signal: options.signal }),
 			onEvent: (event) => state.accept(event),
 		});

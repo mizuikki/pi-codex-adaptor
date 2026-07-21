@@ -7,7 +7,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { sessionEntryToContextMessages } from "@earendil-works/pi-coding-agent";
 
-import type { CodexRuntime } from "../../application/codex-runtime.ts";
+import { type CodexRuntime, remoteCompactionV2Context } from "../../application/codex-runtime.ts";
 import {
 	CODEX_AUTO_COMPACTION_KIND,
 	type CodexAutoCompactionCheckpointV1,
@@ -215,12 +215,18 @@ async function createAutomaticCheckpoint(options: {
 	if (!deps.coordinator.begin(record.sessionId)) throw new Error(REPLAY_ERROR);
 	const input = segmentation.rewrittenInput;
 	try {
+		const remoteV2Context = remoteCompactionV2Context(
+			record.capabilities.compaction.implementation,
+			record.sessionId,
+			"auto",
+		);
 		const result = await deps.runtime.compact({
 			connection: record.connection,
 			request: compactRequest(payload, input),
 			implementation: record.capabilities.compaction.implementation ?? "compact_endpoint",
 			transportMode: record.config.codex.transport.mode,
 			providerSupportsWebsockets: record.capabilities.providerSupportsWebsockets,
+			...(remoteV2Context === undefined ? {} : { remoteCompactionV2Context: remoteV2Context }),
 			...(record.signal === undefined ? {} : { signal: record.signal }),
 		});
 		deps.guard.assertLive(record);
