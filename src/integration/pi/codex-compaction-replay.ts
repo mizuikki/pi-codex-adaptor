@@ -42,6 +42,7 @@ import {
 import type { CodexToolProfileCoordinator } from "./codex-tool-profile.ts";
 
 const REPLAY_ERROR = "OpenAI Codex automatic compaction cannot safely replay this request";
+type ProviderRequestOrigin = "agent" | "compaction_summary" | "branch_summary";
 export interface CodexCompactionReplayOptions {
 	readonly pi: ExtensionAPI;
 	readonly runtime: CodexRuntime;
@@ -128,6 +129,7 @@ async function handleBeforeProviderRequest(
 		if (!options.activation.isActive(ctx.model)) return event.payload;
 		throw new Error(REPLAY_ERROR);
 	}
+	const origin = providerRequestOrigin(event, record.sessionId);
 	options.guard.assertLive(record);
 	options.guard.assertRoute(record, ctx.sessionManager.getSessionId());
 	if (
@@ -151,6 +153,7 @@ async function handleBeforeProviderRequest(
 	) {
 		throw new Error(REPLAY_ERROR);
 	}
+	if (origin !== "agent") return options.guard.approve(record, payload);
 	if (options.store.isReplayInvalid(record.sessionId)) throw new Error(REPLAY_ERROR);
 	const input = responseInput(payload.input);
 	const identity = providerCompactionIdentity(record);
@@ -197,6 +200,29 @@ async function handleBeforeProviderRequest(
 	});
 	options.guard.approve(record, rewritten);
 	return rewritten;
+}
+
+function providerRequestOrigin(
+	event: BeforeProviderRequestEvent,
+	expectedSessionId: string,
+): ProviderRequestOrigin {
+	const attributed = event as BeforeProviderRequestEvent & {
+		readonly origin?: unknown;
+		readonly sessionId?: unknown;
+	};
+	if (attributed.origin === undefined && attributed.sessionId === undefined) return "agent";
+	if (
+		(attributed.origin === "agent" ||
+			attributed.origin === "compaction_summary" ||
+			attributed.origin === "branch_summary") &&
+		typeof attributed.sessionId === "string" &&
+		attributed.sessionId.length > 0 &&
+		attributed.sessionId.trim() === attributed.sessionId &&
+		attributed.sessionId === expectedSessionId
+	) {
+		return attributed.origin;
+	}
+	throw new Error(REPLAY_ERROR);
 }
 
 async function createAutomaticCheckpoint(options: {
@@ -409,6 +435,7 @@ function segmentProviderInput(options: {
 		readonly prefix: readonly unknown[];
 		readonly coveredEntryId?: string;
 		readonly output: readonly StructuredResponseItem[];
+		readonly retainedTail?: readonly StructuredResponseItem[];
 	}> = [];
 	if (checkpoint === undefined) {
 		candidates.push({ prefix: projectEntries(contextEntries), output: [] });
@@ -426,6 +453,7 @@ function segmentProviderInput(options: {
 			prefix: [...checkpoint.output, ...after],
 			coveredEntryId,
 			output: checkpoint.output,
+			retainedTail: after,
 		});
 	} else {
 		const index = contextEntries.findIndex((entry) => entry.id === checkpoint.entry.id);
@@ -435,6 +463,7 @@ function segmentProviderInput(options: {
 			prefix: [...checkpoint.output, ...after],
 			coveredEntryId: checkpoint.entry.id,
 			output: checkpoint.output,
+			retainedTail: after,
 		});
 	}
 	const matches = candidates
@@ -451,7 +480,10 @@ function segmentProviderInput(options: {
 	if (matches.length !== 1) return undefined;
 	const match = matches[0];
 	if (match === undefined) return undefined;
-	const liveTail = input.slice(match.prefix.length).map(cloneStructuredValue);
+	const liveTail = [
+		...(match.retainedTail ?? []).map(cloneStructuredValue),
+		...input.slice(match.prefix.length).map(cloneStructuredValue),
+	];
 	const rewrittenInput =
 		match.output.length === 0
 			? input.map(cloneStructuredValue)
@@ -463,8 +495,8 @@ function segmentProviderInput(options: {
 	};
 }
 
-function projectEntries(entries: readonly SessionEntry[]): readonly unknown[] {
-	const items: unknown[] = [];
+function projectEntries(entries: readonly SessionEntry[]): readonly StructuredResponseItem[] {
+	const items: StructuredResponseItem[] = [];
 	for (const entry of entries) {
 		if (entry.type === "custom") continue;
 		if (entry.type === "compaction") {
@@ -472,7 +504,13 @@ function projectEntries(entries: readonly SessionEntry[]): readonly unknown[] {
 			if (details?.version === 2) items.push(...details.output.map(cloneStructuredValue));
 			continue;
 		}
-		items.push(...responseItemsFromMessages(sessionEntryToContextMessages(entry)));
+		const projected = responseItemsFromMessages(sessionEntryToContextMessages(entry));
+		for (const item of projected) {
+			if (!isStructuredJsonValue(item) || !isSupportedStructuredResponseItem(item)) {
+				throw new Error(REPLAY_ERROR);
+			}
+			items.push(item);
+		}
 	}
 	return items;
 }

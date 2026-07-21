@@ -10,6 +10,7 @@ The adaptor's `package.json` and `bun.lock` pin the Pi packages to `0.80.6`. Run
 
 ```sh
 bun test tests/integration/automatic-compaction-continuation.test.ts
+bun test tests/integration/compaction-failure-ownership.test.ts
 bun test tests/unit/compaction.test.ts tests/unit/codex-compaction-replay.test.ts
 bun test tests/unit/codex-provider-request-guard.test.ts tests/unit/provider-session-router.test.ts
 bun run check:architecture
@@ -21,6 +22,23 @@ composition. It asserts inline rewrite, same-run completion, active-branch custo
 pre-abort behavior, partial append persistence, file reload, and replay poison state. For Remote V2,
 it also asserts that automatic compaction carries the routed session id and `auto` trigger and that the
 following Responses request carries the same session id.
+
+The failure-ownership harness uses public Pi `AgentSession`, `SessionManager`, extension-factory, and
+UI surfaces. It forces native compaction rejection for both manual and overflow entry points and
+installs a sentinel fallback stream. A characterization first proves that Pi invokes that stream and
+persists a textual compaction after a legacy handler exception is swallowed. The fixed-path
+assertions require zero fallback calls, no new Pi
+`CompactionEntry`, an unchanged branch and leaf, no adaptor store snapshot, an idle coordinator, no
+route-unavailable error, one fixed interactive notification, and identical terminal behavior with
+Pi's headless no-op UI.
+
+The focused failure regression is:
+
+```sh
+bun test tests/unit/compaction.test.ts tests/unit/provider-session-router.test.ts
+bun test tests/integration/compaction-failure-ownership.test.ts
+bun test tests/integration/automatic-compaction-continuation.test.ts
+```
 
 ## Exact local host
 

@@ -24,6 +24,7 @@ import {
 } from "../../src/application/compaction.ts";
 import type { ConfigurationService } from "../../src/application/configuration.ts";
 import { ProviderActivationPolicy } from "../../src/application/provider-activation.ts";
+import type { ResolveEffectiveCapabilities } from "../../src/application/resolve-effective-capabilities.ts";
 import { createDefaultConfig } from "../../src/domain/config.ts";
 import { registerCodexCompaction } from "../../src/integration/pi/codex-compaction.ts";
 import type {
@@ -34,6 +35,8 @@ import type {
 type EventHandler = (event: unknown, ctx: ExtensionContext) => unknown | Promise<unknown>;
 
 const OPAQUE = "synthetic-opaque-content";
+const COMPACTION_FAILURE_NOTIFICATION =
+	"OpenAI Codex compaction failed; the session context was left unchanged.";
 
 class FixtureRuntime implements CodexRuntime {
 	compaction: CompactResponseOptions | undefined;
@@ -154,17 +157,27 @@ function context(
 	options: {
 		tokens?: number;
 		authFailure?: boolean;
+		authHeaders?: Record<string, string>;
 		sessionId?: string;
 		compact?: ExtensionContext["compact"];
+		model?: Model<string> | undefined;
+		notifications?: Array<{ message: string; type: string | undefined }>;
+		notifyFailure?: boolean;
 	} = {},
 ): ExtensionContext {
 	return {
-		model,
+		model: Object.hasOwn(options, "model") ? options.model : model,
 		modelRegistry: {
 			getApiKeyAndHeaders: async () =>
 				options.authFailure === true
 					? { ok: false, error: "fixture authentication failure" }
-					: { ok: true, apiKey: fixtureToken(), headers: {} },
+					: { ok: true, apiKey: fixtureToken(), headers: options.authHeaders ?? {} },
+		},
+		ui: {
+			notify: (message: string, type?: string) => {
+				if (options.notifyFailure === true) throw new Error("synthetic UI failure");
+				options.notifications?.push({ message, type });
+			},
 		},
 		sessionManager: {
 			getSessionId: () => options.sessionId ?? "session-fixture",
@@ -223,6 +236,8 @@ function register(
 	config: ConfigurationService = configuration(),
 	store = new CodexCompactionStore(),
 	coordinator = new CodexCompactionCoordinator(),
+	profile: CodexToolProfileCoordinator = healthyProfile(),
+	capabilities?: ResolveEffectiveCapabilities,
 ): {
 	handlers: Map<string, EventHandler[]>;
 	store: CodexCompactionStore;
@@ -242,8 +257,8 @@ function register(
 		store,
 		new ProviderActivationPolicy(config),
 		coordinator,
-		undefined,
-		healthyProfile(),
+		capabilities,
+		profile,
 	);
 	return { handlers, store, coordinator };
 }
@@ -417,6 +432,8 @@ describe("Codex compaction contracts", () => {
 	test("serializes compaction operations per session", () => {
 		const coordinator = new CodexCompactionCoordinator();
 		expect(coordinator.beginExecution("session-a")).toBe(true);
+		coordinator.endPending("session-a", "cancel");
+		expect(coordinator.isBusy("session-a")).toBe(true);
 		expect(coordinator.beginExecution("session-a")).toBe(false);
 		expect(coordinator.isBusy("session-a")).toBe(true);
 		expect(coordinator.beginExecution("session-b")).toBe(true);
@@ -499,30 +516,281 @@ describe("manual Pi compaction", () => {
 		expect(runtime.compactCalls).toBe(1);
 	});
 
-	test("fails closed for malformed native output and auth failures", async () => {
+	test("terminally cancels malformed native output and authentication failures", async () => {
 		const malformed = new FixtureRuntime();
 		malformed.compactImpl = async () => ({
 			status: "completed",
 			result: { output: [{ type: "message" }] },
 		});
 		const malformedRegistration = register(malformed);
-		await expect(
-			malformedRegistration.handlers.get("session_before_compact")?.[0]?.(
+		const malformedNotifications: Array<{ message: string; type: string | undefined }> = [];
+		expect(
+			await malformedRegistration.handlers.get("session_before_compact")?.[0]?.(
 				compactEvent("manual"),
-				context(),
+				context({ notifications: malformedNotifications }),
 			),
-		).rejects.toThrow("Compaction output window is invalid");
+		).toEqual({ cancel: true });
 		expect(malformed.compactCalls).toBe(1);
+		expect(malformedRegistration.coordinator.isBusy("session-fixture")).toBe(false);
+		expect(malformedRegistration.store.getForSession("session-fixture")).toBeUndefined();
+		expect(malformedNotifications).toEqual([
+			{ message: COMPACTION_FAILURE_NOTIFICATION, type: "error" },
+		]);
 
 		const authRuntime = new FixtureRuntime();
 		const authRegistration = register(authRuntime);
-		await expect(
-			authRegistration.handlers.get("session_before_compact")?.[0]?.(
+		const authNotifications: Array<{ message: string; type: string | undefined }> = [];
+		expect(
+			await authRegistration.handlers.get("session_before_compact")?.[0]?.(
 				compactEvent("manual"),
-				context({ authFailure: true }),
+				context({ authFailure: true, notifications: authNotifications }),
 			),
-		).rejects.toThrow("authentication");
+		).toEqual({ cancel: true });
 		expect(authRuntime.compactCalls).toBe(0);
+		expect(authRegistration.coordinator.isBusy("session-fixture")).toBe(false);
+		expect(authNotifications).toEqual([
+			{ message: COMPACTION_FAILURE_NOTIFICATION, type: "error" },
+		]);
+	});
+
+	test("redacts native failures and preserves existing compaction state", async () => {
+		const runtime = new FixtureRuntime();
+		runtime.compactImpl = async () => {
+			throw new Error(
+				"synthetic https://private.invalid token-fixture session-fixture prompt-fixture",
+			);
+		};
+		const store = new CodexCompactionStore();
+		store.setManual(
+			"session-fixture",
+			"Synthetic stored summary",
+			createCodexCompactionDetails(identity(), [{ type: "compaction", encrypted_content: OPAQUE }]),
+			"stored-entry",
+		);
+		const before = structuredClone(store.getForSession("session-fixture"));
+		const registration = register(runtime, configuration(), store);
+		const notifications: Array<{ message: string; type: string | undefined }> = [];
+		const result = await registration.handlers.get("session_before_compact")?.[0]?.(
+			compactEvent("overflow"),
+			context({ notifications }),
+		);
+
+		expect(result).toEqual({ cancel: true });
+		expect(runtime.compactCalls).toBe(1);
+		expect(registration.coordinator.isBusy("session-fixture")).toBe(false);
+		expect(store.getForSession("session-fixture")).toEqual(before);
+		expect(notifications).toEqual([{ message: COMPACTION_FAILURE_NOTIFICATION, type: "error" }]);
+		expect(JSON.stringify(notifications)).not.toContain("private.invalid");
+		expect(JSON.stringify(notifications)).not.toContain("token-fixture");
+		expect(JSON.stringify(notifications)).not.toContain("prompt-fixture");
+	});
+
+	test("terminally cancels profile, capability, identity, and native status failures", async () => {
+		const cases: Array<{
+			name: string;
+			create: (notifications: Array<{ message: string; type: string | undefined }>) => {
+				registration: ReturnType<typeof register>;
+				runtime: FixtureRuntime;
+				ctx?: ExtensionContext;
+			};
+			expectedCalls: number;
+		}> = [
+			{
+				name: "profile",
+				create: () => {
+					const runtime = new FixtureRuntime();
+					return {
+						runtime,
+						registration: register(
+							runtime,
+							configuration(),
+							new CodexCompactionStore(),
+							new CodexCompactionCoordinator(),
+							{ ...healthyProfile(), isHealthy: () => false },
+						),
+					};
+				},
+				expectedCalls: 0,
+			},
+			{
+				name: "capability",
+				create: () => {
+					const runtime = new FixtureRuntime();
+					runtime.readDiagnostics = async () => {
+						throw new Error("synthetic capability failure");
+					};
+					return { runtime, registration: register(runtime) };
+				},
+				expectedCalls: 0,
+			},
+			{
+				name: "configuration",
+				create: () => {
+					const runtime = new FixtureRuntime();
+					const unavailableConfiguration = {
+						load: async () => {
+							throw new Error("synthetic configuration failure");
+						},
+					} as unknown as ConfigurationService;
+					return {
+						runtime,
+						registration: register(runtime, unavailableConfiguration),
+					};
+				},
+				expectedCalls: 0,
+			},
+			{
+				name: "identity",
+				create: (notifications) => {
+					const runtime = new FixtureRuntime();
+					return {
+						runtime,
+						registration: register(runtime),
+						ctx: context({
+							authHeaders: { "chatgpt-account-id": "mismatched-account" },
+							notifications,
+						}),
+					};
+				},
+				expectedCalls: 0,
+			},
+			{
+				name: "native status",
+				create: () => {
+					const runtime = new FixtureRuntime();
+					runtime.compactImpl = async () => ({ status: "failed", result: {} });
+					return { runtime, registration: register(runtime) };
+				},
+				expectedCalls: 1,
+			},
+		];
+
+		for (const failureCase of cases) {
+			const notifications: Array<{ message: string; type: string | undefined }> = [];
+			const {
+				registration,
+				runtime,
+				ctx = context({ notifications }),
+			} = failureCase.create(notifications);
+			const result = await registration.handlers.get("session_before_compact")?.[0]?.(
+				compactEvent("manual"),
+				ctx,
+			);
+			expect(result, failureCase.name).toEqual({ cancel: true });
+			expect(runtime.compactCalls, failureCase.name).toBe(failureCase.expectedCalls);
+			expect(registration.coordinator.isBusy("session-fixture"), failureCase.name).toBe(false);
+			expect(registration.store.getForSession("session-fixture"), failureCase.name).toBeUndefined();
+			expect(notifications, failureCase.name).toEqual([
+				{ message: COMPACTION_FAILURE_NOTIFICATION, type: "error" },
+			]);
+		}
+	});
+
+	test("keeps cancellation, inactive-provider, and notification failures non-throwing", async () => {
+		const runtime = new FixtureRuntime();
+		const registration = register(runtime);
+		const inactive = { ...model, provider: "fixture-inactive" };
+		expect(
+			await registration.handlers.get("session_before_compact")?.[0]?.(
+				compactEvent("manual"),
+				context({ model: inactive }),
+			),
+		).toBeUndefined();
+
+		const noModelNotifications: Array<{ message: string; type: string | undefined }> = [];
+		expect(
+			await registration.handlers.get("session_before_compact")?.[0]?.(
+				compactEvent("manual"),
+				context({ model: undefined, notifications: noModelNotifications }),
+			),
+		).toEqual({ cancel: true });
+		expect(noModelNotifications).toEqual([
+			{ message: COMPACTION_FAILURE_NOTIFICATION, type: "error" },
+		]);
+
+		const failedNotification = new FixtureRuntime();
+		failedNotification.compactImpl = async () => {
+			throw new Error("synthetic native failure");
+		};
+		const notificationRegistration = register(failedNotification);
+		expect(
+			await notificationRegistration.handlers.get("session_before_compact")?.[0]?.(
+				compactEvent("manual"),
+				context({ notifyFailure: true }),
+			),
+		).toEqual({ cancel: true });
+		expect(notificationRegistration.coordinator.isBusy("session-fixture")).toBe(false);
+	});
+
+	test("does not notify for native cancellation or a late result after abort", async () => {
+		const nativeAbort = new FixtureRuntime();
+		nativeAbort.compactImpl = async () => ({ status: "aborted", result: {} });
+		const nativeAbortRegistration = register(nativeAbort);
+		const nativeAbortNotifications: Array<{ message: string; type: string | undefined }> = [];
+		expect(
+			await nativeAbortRegistration.handlers.get("session_before_compact")?.[0]?.(
+				compactEvent("manual"),
+				context({ notifications: nativeAbortNotifications }),
+			),
+		).toEqual({ cancel: true });
+		expect(nativeAbortNotifications).toEqual([]);
+
+		const controller = new AbortController();
+		const lateRuntime = new FixtureRuntime();
+		lateRuntime.compactImpl = async () => {
+			controller.abort();
+			return {
+				status: "completed",
+				result: { output: [{ type: "compaction", encrypted_content: OPAQUE }] },
+			};
+		};
+		const lateRegistration = register(lateRuntime);
+		const lateNotifications: Array<{ message: string; type: string | undefined }> = [];
+		expect(
+			await lateRegistration.handlers.get("session_before_compact")?.[0]?.(
+				compactEvent("manual", 50_000, controller.signal),
+				context({ notifications: lateNotifications }),
+			),
+		).toEqual({ cancel: true });
+		expect(lateNotifications).toEqual([]);
+		expect(lateRegistration.store.getForSession("session-fixture")).toBeUndefined();
+		expect(lateRegistration.coordinator.isBusy("session-fixture")).toBe(false);
+	});
+
+	test("does not dispatch when cancellation wins before native execution", async () => {
+		const controller = new AbortController();
+		const runtime = new FixtureRuntime();
+		runtime.resolveTools = async () => {
+			controller.abort();
+			return {
+				modelTools: [],
+				dispatchTools: [],
+				localToolNames: [],
+				hostedToolNames: [],
+				shellSurface: "shell-command",
+				sessionSurface: "disabled",
+				webSurface: "unsupported",
+				imageGenerationSurface: "disabled",
+				capabilities: {
+					sessions: { status: "disabled", reason: "fixture" },
+					applyPatch: { status: "unavailable", reason: "fixture" },
+					viewImage: { status: "unavailable", reason: "fixture" },
+					imageGeneration: { status: "unavailable", reason: "fixture" },
+					webSearch: { status: "unavailable", reason: "fixture" },
+				},
+			};
+		};
+		const registration = register(runtime);
+		const notifications: Array<{ message: string; type: string | undefined }> = [];
+		expect(
+			await registration.handlers.get("session_before_compact")?.[0]?.(
+				compactEvent("manual", 50_000, controller.signal),
+				context({ notifications }),
+			),
+		).toEqual({ cancel: true });
+		expect(runtime.compactCalls).toBe(0);
+		expect(notifications).toEqual([]);
+		expect(registration.coordinator.isBusy("session-fixture")).toBe(false);
 	});
 
 	test("rejects concurrent manual operations and clears the coordinator after failure", async () => {
@@ -537,16 +805,95 @@ describe("manual Pi compaction", () => {
 					});
 			});
 		const { handlers, coordinator } = register(runtime);
-		const first = handlers.get("session_before_compact")?.[0]?.(compactEvent("manual"), context());
+		const notifications: Array<{ message: string; type: string | undefined }> = [];
+		const first = handlers.get("session_before_compact")?.[0]?.(
+			compactEvent("manual"),
+			context({ notifications }),
+		);
 		while (release === undefined) await Promise.resolve();
 		const second = await handlers.get("session_before_compact")?.[0]?.(
 			compactEvent("manual"),
-			context(),
+			context({ notifications }),
 		);
 		expect(second).toEqual({ cancel: true });
+		expect(notifications).toEqual([]);
 		expect(coordinator.isBusy("session-fixture")).toBe(true);
 		release?.();
 		await first;
 		expect(coordinator.isBusy("session-fixture")).toBe(false);
+	});
+
+	test("does not let early cancellation or setup failure release another execution", async () => {
+		const runtime = new FixtureRuntime();
+		let release: (() => void) | undefined;
+		runtime.compactImpl = () =>
+			new Promise((resolve) => {
+				release = () =>
+					resolve({
+						status: "completed",
+						result: { output: [{ type: "compaction", encrypted_content: OPAQUE }] },
+					});
+			});
+		let configurationLoads = 0;
+		const config = createDefaultConfig();
+		const service = {
+			load: async () => {
+				configurationLoads += 1;
+				if (configurationLoads > 1) throw new Error("synthetic configuration failure");
+				return config;
+			},
+		} as ConfigurationService;
+		const { handlers, coordinator } = register(runtime, service);
+		const notifications: Array<{ message: string; type: string | undefined }> = [];
+		const handler = handlers.get("session_before_compact")?.[0];
+		if (handler === undefined) throw new Error("compaction handler was not registered");
+		const first = handler(compactEvent("manual"), context({ notifications }));
+		while (release === undefined) await Promise.resolve();
+
+		expect(await handler(compactEvent("threshold"), context({ notifications }))).toEqual({
+			cancel: true,
+		});
+		const aborted = new AbortController();
+		aborted.abort();
+		expect(
+			await handler(compactEvent("manual", 50_000, aborted.signal), context({ notifications })),
+		).toEqual({ cancel: true });
+		expect(await handler(compactEvent("manual"), context({ notifications }))).toEqual({
+			cancel: true,
+		});
+		expect(coordinator.isBusy("session-fixture")).toBe(true);
+		expect(runtime.compactCalls).toBe(1);
+		expect(notifications).toEqual([{ message: COMPACTION_FAILURE_NOTIFICATION, type: "error" }]);
+
+		release();
+		await first;
+		expect(coordinator.isBusy("session-fixture")).toBe(false);
+	});
+
+	test("keeps failure cleanup scoped to the owning session", async () => {
+		const runtime = new FixtureRuntime();
+		runtime.compactImpl = async () => {
+			throw new Error("synthetic native failure");
+		};
+		const coordinator = new CodexCompactionCoordinator();
+		expect(coordinator.beginExecution("session-other")).toBe(true);
+		const registration = register(
+			runtime,
+			configuration(),
+			new CodexCompactionStore(),
+			coordinator,
+		);
+		const notifications: Array<{ message: string; type: string | undefined }> = [];
+
+		expect(
+			await registration.handlers.get("session_before_compact")?.[0]?.(
+				compactEvent("manual"),
+				context({ sessionId: "session-owner", notifications }),
+			),
+		).toEqual({ cancel: true });
+		expect(coordinator.isBusy("session-owner")).toBe(false);
+		expect(coordinator.isBusy("session-other")).toBe(true);
+		expect(notifications).toEqual([{ message: COMPACTION_FAILURE_NOTIFICATION, type: "error" }]);
+		coordinator.end("session-other", "cancel");
 	});
 });

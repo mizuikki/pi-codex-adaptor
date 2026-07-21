@@ -238,6 +238,10 @@ class SessionFixture {
 		this.leafId = entry.id;
 	}
 
+	appendUser(id: string, content: string): void {
+		this.appendMessage(id, { role: "user", content, timestamp: 4 });
+	}
+
 	branch(): SessionEntry[] {
 		const path: SessionEntry[] = [];
 		let current = this.leafId === null ? undefined : this.byId.get(this.leafId);
@@ -324,10 +328,15 @@ interface Harness {
 	run(
 		includeLiveTail?: boolean,
 		onPayloadTail?: (payload: Record<string, unknown>) => unknown,
+		attribution?: {
+			origin: "agent" | "compaction_summary" | "branch_summary";
+			sessionId: string;
+		},
 	): Promise<unknown[]>;
 	runtime: FixtureRuntime;
 	session: SessionFixture;
 	store: CodexCompactionStore;
+	coordinator: CodexCompactionCoordinator;
 	guard: CodexProviderRequestGuard;
 }
 
@@ -342,7 +351,12 @@ function harness(options: { session?: SessionFixture } = {}): Harness {
 	const session = options.session ?? new SessionFixture();
 	let hook:
 		| ((
-				event: { type: "before_provider_request"; payload: unknown },
+				event: {
+					type: "before_provider_request";
+					payload: unknown;
+					origin?: "agent" | "compaction_summary" | "branch_summary";
+					sessionId?: string;
+				},
 				ctx: ExtensionContext,
 		  ) => unknown)
 		| undefined;
@@ -367,8 +381,9 @@ function harness(options: { session?: SessionFixture } = {}): Harness {
 		runtime,
 		session,
 		store,
+		coordinator,
 		guard,
-		run: async (includeLiveTail = true, onPayloadTail) => {
+		run: async (includeLiveTail = true, onPayloadTail, attribution) => {
 			const signal = new AbortController().signal;
 			const ctx = makeContext(session, signal);
 			const streamSimple = createCodexStreamSimple(
@@ -393,7 +408,14 @@ function harness(options: { session?: SessionFixture } = {}): Harness {
 					signal,
 					onPayload: async (payload) => {
 						if (hook === undefined) throw new Error("synthetic hook was not registered");
-						const transformed = await hook({ type: "before_provider_request", payload }, ctx);
+						const transformed = await hook(
+							{
+								type: "before_provider_request",
+								payload,
+								...attribution,
+							},
+							ctx,
+						);
 						return onPayloadTail === undefined
 							? transformed
 							: onPayloadTail(transformed as Record<string, unknown>);
@@ -443,9 +465,40 @@ test("leaves Pi-native fallback payloads unchanged without an adaptor request re
 });
 
 describe("active-branch Codex compaction replay", () => {
+	test("approves attributed auxiliary payloads unchanged without automatic checkpoint replay", async () => {
+		for (const origin of ["compaction_summary", "branch_summary"] as const) {
+			const value = harness();
+			const events = await value.run(true, undefined, { origin, sessionId: SESSION_ID });
+
+			expect(events.at(-1), origin).toMatchObject({ type: "done" });
+			expect(value.runtime.compactCalls, origin).toBe(0);
+			expect(value.runtime.responseCalls, origin).toBe(1);
+			expect(
+				value.session.entries.map((entry) => entry.type),
+				origin,
+			).toEqual(["message", "message", "message"]);
+			expect(value.store.getForSession(SESSION_ID), origin).toBeUndefined();
+			expect(value.guard.activeRecordCount, origin).toBe(0);
+		}
+	});
+
+	test("rejects attributed requests whose event session does not match the provider route", async () => {
+		const value = harness();
+		const events = await value.run(true, undefined, {
+			origin: "compaction_summary",
+			sessionId: "mismatched-session",
+		});
+
+		expect(events.at(-1)).toMatchObject({ type: "error" });
+		expect(value.runtime.compactCalls).toBe(0);
+		expect(value.runtime.responseCalls).toBe(0);
+		expect(value.store.getForSession(SESSION_ID)).toBeUndefined();
+		expect(value.guard.activeRecordCount).toBe(0);
+	});
+
 	test("compacts inline before the request, appends a custom checkpoint, and naturally continues", async () => {
 		const value = harness();
-		const events = await value.run(true);
+		const events = await value.run(true, undefined, { origin: "agent", sessionId: SESSION_ID });
 		expect(events.at(-1)).toMatchObject({ type: "done" });
 		expect(value.runtime.compactCalls).toBe(1);
 		expect(value.runtime.responseCalls).toBe(1);
@@ -606,12 +659,28 @@ describe("active-branch Codex compaction replay", () => {
 			manualDetails,
 			"manual-entry-1",
 		);
-		const manualEvents = await manual.run(false);
+		manual.coordinator.beginExecution(SESSION_ID);
+		manual.session.appendUser("user-after-compaction", "summarize the completed work");
+		const manualEvents = await manual.run(false, (payload) => payload, {
+			origin: "agent",
+			sessionId: SESSION_ID,
+		});
+		manual.coordinator.end(SESSION_ID, "cancel");
 		expect(manualEvents.at(-1)).toMatchObject({ type: "done" });
 		expect(manual.runtime.compactCalls).toBe(0);
-		expect((manual.runtime.responseRequests[0] as { input: unknown[] }).input[0]).toMatchObject({
-			encrypted_content: "synthetic-manual-opaque",
-		});
+		expect((manual.runtime.responseRequests[0] as { input: unknown[] }).input).toEqual([
+			{ type: "compaction", encrypted_content: "synthetic-manual-opaque" },
+			{
+				type: "function_call_output",
+				call_id: "call-fixture",
+				output: "fixture output",
+			},
+			{
+				type: "message",
+				role: "user",
+				content: [{ type: "input_text", text: "summarize the completed work" }],
+			},
+		]);
 	});
 
 	test("rejects malformed checkpoints and identity conflicts before compact or Responses", async () => {

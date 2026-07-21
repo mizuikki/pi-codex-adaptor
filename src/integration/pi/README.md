@@ -21,3 +21,18 @@ select exactly one lease from Pi's stream `sessionId`. Shutdown releases the lea
 its profile, capability, compaction, activation, and runtime state. Missing, stale, or ambiguous
 routes fail locally without provider side effects. Session identifiers are transient map keys and
 must never appear in errors, diagnostics, logs, or persisted data.
+
+Activated compaction uses one ownership decision for both manual and overflow events:
+
+| Outcome | Pi handler result | Notification | Persistence |
+| --- | --- | --- | --- |
+| Provider inactive | `undefined` | none | Pi owns its normal path |
+| Threshold, explicit abort, native abort, or contention | `{ cancel: true }` | none | none |
+| Validated native opaque output | `{ compaction: ... }` | none | Pi writes the real `CompactionEntry` |
+| Setup, dispatch, status, or output failure | `{ cancel: true }` | fixed redacted error | none |
+
+Once activation claims the event, failure is terminal cancellation and cannot fall through to Pi's
+session-unattributed default summarizer. The process router remains strict. A Pi auxiliary request path
+must provide trusted session attribution, explicit request provenance, the request-scoped abort signal,
+and matching approval semantics. Newer hosts with that contract are accepted without automatic
+checkpoint replay; the locked legacy host remains fail-closed.
