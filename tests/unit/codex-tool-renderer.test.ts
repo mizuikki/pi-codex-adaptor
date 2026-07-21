@@ -607,6 +607,60 @@ describe("codex tool renderer contract", () => {
 		expect(failed).toContain("[error]");
 	});
 
+	test("summarizes sh/bash -c wrappers and preserves action plus exit suffix when clipped", () => {
+		const unwrapped = plainStacked(
+			"command",
+			{ cmd: "bash -lc 'rg --files src'" },
+			{
+				content: [{ type: "text", text: "src/a.ts" }],
+				details: { status: "completed", output: "src/a.ts", exit_code: 0 },
+			},
+			{ expanded: false, isPartial: false },
+		);
+		expect(unwrapped[0]).toBe(`${CODEX_TOOL_MARKER} *Ran rg --files src*`);
+
+		const nested = plainStacked(
+			"command",
+			{ command: "sh -c 'bash -c \"true\"'" },
+			{
+				content: [],
+				details: { status: "completed", output: "", exit_code: 0, wall_time_seconds: 0.1 },
+			},
+			{ expanded: false, isPartial: false },
+		);
+		expect(nested[0]).toBe(`${CODEX_TOOL_MARKER} *Ran true (0.1s)*`);
+
+		const longPayload = `rg --files ${"x".repeat(80)}`;
+		const failed = plainStacked(
+			"command",
+			{ cmd: `sh -c '${longPayload}'` },
+			{
+				content: [],
+				details: { status: "completed", output: "", exit_code: 1 },
+			},
+			{ expanded: false, isPartial: false },
+			36,
+		);
+		const header = failed[0] ?? "";
+		expect(header.startsWith(`${CODEX_TOOL_MARKER} *Command failed `)).toBe(true);
+		expect(header).toContain("(exit 1)");
+		// Wrapper is gone; only the effective command body is clipped.
+		expect(header).not.toContain("sh -c");
+		expect(header).toContain("rg --");
+
+		// Do not unwrap non-shell -c forms.
+		const python = plainStacked(
+			"command",
+			{ cmd: "python -c 'print(1)'" },
+			{
+				content: [],
+				details: { status: "completed", output: "1", exit_code: 0 },
+			},
+			{ expanded: false, isPartial: false },
+		);
+		expect(python[0]).toContain("python -c");
+	});
+
 	test("covers every presentation kind with deterministic running labels", () => {
 		const cases: Array<[CodexToolPresentationKind, unknown, string]> = [
 			["command", { cmd: "ls" }, "Running ls"],

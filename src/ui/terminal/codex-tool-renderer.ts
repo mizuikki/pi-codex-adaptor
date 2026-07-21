@@ -1,6 +1,6 @@
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
-import { truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 
 /** Managed-tool presentation kinds. One kind per registered Codex tool family. */
 export type CodexToolPresentationKind =
@@ -69,11 +69,18 @@ type DetailRow = {
 	kind: "output" | "muted";
 };
 
+type HeaderModel = {
+	state: TerminalState;
+	/** Flat title used when structured fields are absent. */
+	title: string;
+	/** Optional structured command title: clip only the summary body. */
+	action?: string;
+	summary?: string;
+	suffix?: string;
+};
+
 type PresentationModel = {
-	header?: {
-		state: TerminalState;
-		title: string;
-	};
+	header?: HeaderModel;
 	details: DetailRow[];
 	theme: ThemeLike;
 };
@@ -99,7 +106,7 @@ export function createCodexToolRenderer(
 				}
 				return present(
 					{
-						header: { state: "running", title: runningTitle(kind, args) },
+						header: runningHeader(kind, args),
 						details: [],
 						theme,
 					},
@@ -108,7 +115,10 @@ export function createCodexToolRenderer(
 			} catch {
 				return present(
 					{
-						header: { state: "running", title: safeFallbackTitle(kind, true) },
+						header: {
+							state: "running",
+							title: safeFallbackTitle(kind, true),
+						},
 						details: [],
 						theme,
 					},
@@ -122,7 +132,7 @@ export function createCodexToolRenderer(
 				if (options.isPartial) {
 					return present(
 						{
-							header: { state: "running", title: runningTitle(kind, args) },
+							header: runningHeader(kind, args),
 							details: partialDetailRows(kind, result, options, args),
 							theme,
 						},
@@ -133,10 +143,7 @@ export function createCodexToolRenderer(
 				const state = resolveTerminalState(details, result, context?.isError === true);
 				return present(
 					{
-						header: {
-							state,
-							title: terminalTitle(kind, args, details, state),
-						},
+						header: terminalHeader(kind, args, details, state),
 						details: terminalDetailRows(kind, result, options, args, details),
 						theme,
 					},
@@ -199,7 +206,7 @@ class CodexToolPresentationComponent implements Component {
 		const header = this.model.header;
 		if (header !== undefined) {
 			const titleBudget = Math.max(1, safeWidth - HEADER_PREFIX_COLS);
-			const title = truncateToWidth(header.title, titleBudget, "...");
+			const title = formatHeaderTitle(header, titleBudget);
 			const markerColor = markerThemeColor(header.state);
 			const marker = this.model.theme.fg(markerColor, CODEX_TOOL_MARKER);
 			const styledTitle = this.model.theme.fg("toolTitle", this.model.theme.bold(title));
@@ -251,10 +258,29 @@ function markerThemeColor(state: TerminalState): string {
 	}
 }
 
+function runningHeader(kind: CodexToolPresentationKind, args: unknown): HeaderModel {
+	if (kind === "command") {
+		return commandHeader("running", args, {});
+	}
+	return { state: "running", title: runningTitle(kind, args) };
+}
+
+function terminalHeader(
+	kind: CodexToolPresentationKind,
+	args: unknown,
+	details: NativeToolPresentationDetails,
+	state: TerminalState,
+): HeaderModel {
+	if (kind === "command") {
+		return commandHeader(state, args, details);
+	}
+	return { state, title: terminalTitle(kind, args, details, state) };
+}
+
 function runningTitle(kind: CodexToolPresentationKind, args: unknown): string {
 	switch (kind) {
 		case "command":
-			return withSummary("Running", commandSummary(args));
+			return commandHeader("running", args, {}).title;
 		case "session-input":
 			return sessionRunningTitle(args);
 		case "patch":
@@ -278,7 +304,7 @@ function terminalTitle(
 ): string {
 	switch (kind) {
 		case "command":
-			return commandTerminalTitle(args, details, state);
+			return commandHeader(state, args, details).title;
 		case "session-input":
 			return sessionTerminalTitle(args, details, state);
 		case "patch":
@@ -310,23 +336,86 @@ function terminalTitle(
 	}
 }
 
-function commandTerminalTitle(
-	args: unknown,
-	details: NativeToolPresentationDetails,
+/**
+ * Build a command header that keeps action words and exit/duration suffixes intact while
+ * clipping only the command body. Presentation-only: never executes shell text.
+ */
+function commandHeader(
 	state: TerminalState,
-): string {
-	const summary = commandSummary(args);
-	const duration = formatDuration(details.wall_time_seconds);
+	args: unknown,
+	details: Pick<NativeToolPresentationDetails, "wall_time_seconds" | "exit_code" | "exitCode">,
+): HeaderModel {
 	const exit = exitCodeOf(details);
-	if (state === "timed_out") return withSummary("Command timed out", summary);
-	if (state === "aborted") return withSummary("Command aborted", summary);
-	if (state === "failed") {
-		const exitSuffix = exit === undefined ? "" : ` (exit ${exit})`;
-		return `${withSummary("Command failed", summary)}${exitSuffix}`;
+	const duration = formatDuration(details.wall_time_seconds);
+	let action: string;
+	let suffix = "";
+	if (state === "running") {
+		action = "Running";
+	} else if (state === "timed_out") {
+		action = "Command timed out";
+	} else if (state === "aborted") {
+		action = "Command aborted";
+	} else if (state === "failed") {
+		action = "Command failed";
+		if (exit !== undefined) suffix = ` (exit ${exit})`;
+	} else if (state === "unknown") {
+		action = "Command finished";
+	} else {
+		action = "Ran";
+		if (duration !== undefined) suffix = ` (${duration})`;
 	}
-	if (state === "unknown") return withSummary("Command finished", summary);
-	const durationSuffix = duration === undefined ? "" : ` (${duration})`;
-	return `${withSummary("Ran", summary)}${durationSuffix}`;
+	const reserved = action.length + (suffix.length > 0 ? suffix.length + 1 : 1);
+	const bodyBudget = Math.max(12, DEFAULT_SUMMARY_LIMIT + 24 - Math.min(reserved, 48));
+	const summary = commandSummary(args, bodyBudget);
+	return {
+		state: state === "running" ? "running" : state,
+		title: `${action} ${summary}${suffix}`,
+		action,
+		summary,
+		suffix,
+	};
+}
+
+/** Clip header text; for structured command headers, preserve action + suffix. */
+function formatHeaderTitle(header: HeaderModel, titleBudget: number): string {
+	const action = header.action;
+	const summary = header.summary;
+	if (action === undefined || summary === undefined) {
+		return truncatePlain(header.title, titleBudget);
+	}
+	const suffix = header.suffix ?? "";
+	const prefix = `${action} `;
+	const fixed = visibleWidth(prefix) + visibleWidth(suffix);
+	if (fixed >= titleBudget) {
+		// Extreme narrow width: keep the action/state words first.
+		return truncatePlain(`${action}${suffix}`, titleBudget);
+	}
+	const bodyBudget = Math.max(1, titleBudget - fixed);
+	const body = truncatePlain(summary, bodyBudget);
+	return `${prefix}${body}${suffix}`;
+}
+
+/**
+ * Plain-text column truncation for titles we fully re-style afterward.
+ * Avoids pi-tui truncateToWidth ANSI resets that would break outer theme colors.
+ */
+function truncatePlain(text: string, maxCols: number): string {
+	if (maxCols <= 0) return "";
+	if (visibleWidth(text) <= maxCols) return text;
+	const ellipsis = "...";
+	if (maxCols <= ellipsis.length) return ellipsis.slice(0, maxCols);
+	// Commands are overwhelmingly printable ASCII; slice by code units is enough.
+	if (/^[\x20-\x7e]*$/.test(text)) {
+		return `${text.slice(0, maxCols - ellipsis.length)}${ellipsis}`;
+	}
+	// Non-ASCII: use width-aware truncation, then drop any helper ANSI sequences.
+	return stripAnsi(truncateToWidth(text, maxCols, ellipsis));
+}
+
+function stripAnsi(value: string): string {
+	// ESC is built at runtime so the source regex stays free of control characters.
+	const csi = new RegExp(`${String.fromCharCode(27)}[[0-9;]*m`, "g");
+	return value.replace(csi, "");
 }
 
 function sessionRunningTitle(args: unknown): string {
@@ -634,15 +723,117 @@ function exitCodeOf(details: NativeToolPresentationDetails): number | undefined 
 	return undefined;
 }
 
-function commandSummary(args: unknown): string {
+function commandSummary(args: unknown, limit = DEFAULT_SUMMARY_LIMIT): string {
+	const raw = rawCommandFromArgs(args);
+	if (raw === undefined) return "command";
+	return clipSummary(presentCommandText(raw), limit);
+}
+
+function rawCommandFromArgs(args: unknown): string | undefined {
 	const value = record(args);
-	if (typeof value?.cmd === "string" && value.cmd.length > 0) {
-		return clipSummary(value.cmd, DEFAULT_SUMMARY_LIMIT);
+	if (typeof value?.cmd === "string" && value.cmd.length > 0) return value.cmd;
+	if (typeof value?.command === "string" && value.command.length > 0) return value.command;
+	return undefined;
+}
+
+/**
+ * Presentation-only command cleanup for titles.
+ * Collapses whitespace and unwraps limited `sh`/`bash -c` wrappers at most twice.
+ * Does not execute commands or parse full shell grammar.
+ */
+function presentCommandText(command: string): string {
+	let current = collapseWs(command);
+	for (let depth = 0; depth < 2; depth += 1) {
+		const unwrapped = unwrapShellDashC(current);
+		if (unwrapped === undefined) break;
+		const next = collapseWs(unwrapped);
+		if (next === current) break;
+		current = next;
 	}
-	if (typeof value?.command === "string" && value.command.length > 0) {
-		return clipSummary(value.command, DEFAULT_SUMMARY_LIMIT);
+	return current;
+}
+
+/**
+ * Unwrap a leading `sh -c` / `bash -lc` style wrapper when the form is simple.
+ * Returns undefined when the text is not a recognized single wrapper.
+ */
+function unwrapShellDashC(command: string): string | undefined {
+	const tokens = tokenizeShellPresentation(command);
+	if (tokens.length < 3) return undefined;
+	const shell = tokens[0];
+	if (shell === undefined || !isShOrBashToken(shell)) return undefined;
+
+	let cIndex = -1;
+	for (let index = 1; index < tokens.length; index += 1) {
+		const token = tokens[index];
+		if (token === undefined) return undefined;
+		if (token === "-c" || isShortFlagTokenWithC(token)) {
+			cIndex = index;
+			break;
+		}
+		// Only short ASCII flags may appear before -c.
+		if (!/^-[a-zA-Z]+$/.test(token)) return undefined;
 	}
-	return "command";
+	if (cIndex < 0 || cIndex + 1 >= tokens.length) return undefined;
+	const payload = tokens
+		.slice(cIndex + 1)
+		.join(" ")
+		.trim();
+	return payload.length > 0 ? payload : undefined;
+}
+
+function isShOrBashToken(token: string): boolean {
+	// Accept sh/bash with an optional absolute or relative path prefix.
+	// Avoid "/*" inside the regex literal (it would start a block comment).
+	return /^(?:(?:\/+|\.\/)?(?:(?:usr\/)?bin\/)?)?(?:ba)?sh$/.test(token);
+}
+
+function isShortFlagTokenWithC(token: string): boolean {
+	// bash -lc / bash -cl combine login and -c into one token.
+	return /^-[a-zA-Z]*c[a-zA-Z]*$/.test(token) && token.includes("c");
+}
+
+/**
+ * Lightweight presentation tokenizer: splits on whitespace and treats simple
+ * single/double quotes as one token (content only). Not a shell parser.
+ */
+function tokenizeShellPresentation(input: string): string[] {
+	const tokens: string[] = [];
+	let index = 0;
+	const text = input.trim();
+	while (index < text.length) {
+		while (index < text.length && /\s/.test(text[index] ?? "")) index += 1;
+		if (index >= text.length) break;
+		const ch = text[index];
+		if (ch === "'" || ch === '"') {
+			const quote = ch;
+			index += 1;
+			let body = "";
+			while (index < text.length && text[index] !== quote) {
+				if (quote === '"' && text[index] === "\\" && index + 1 < text.length) {
+					body += text[index + 1] ?? "";
+					index += 2;
+					continue;
+				}
+				body += text[index] ?? "";
+				index += 1;
+			}
+			if (index < text.length && text[index] === quote) index += 1;
+			tokens.push(body);
+			continue;
+		}
+		let body = "";
+		while (index < text.length && !/\s/.test(text[index] ?? "")) {
+			body += text[index] ?? "";
+			index += 1;
+		}
+		tokens.push(body);
+	}
+	return tokens;
+}
+
+function collapseWs(value: string): string {
+	return value.replaceAll(/\s+/g, " ").trim();
 }
 
 function pathSummary(args: unknown): string {
