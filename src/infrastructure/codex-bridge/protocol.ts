@@ -459,7 +459,7 @@ export function decodeServerFrame(frame: string | Uint8Array): ServerMessage {
 	}
 
 	if (!serverMessageValidator.Check(value)) {
-		throw new BridgeProtocolError("invalid_frame", "Bridge frame does not match protocol v3");
+		throw new BridgeProtocolError("invalid_frame", "Bridge frame does not match protocol v4");
 	}
 
 	return value;
@@ -467,7 +467,7 @@ export function decodeServerFrame(frame: string | Uint8Array): ServerMessage {
 
 export function encodeClientMessage(message: ClientMessage): Uint8Array {
 	if (!clientMessageValidator.Check(message)) {
-		throw new BridgeProtocolError("invalid_frame", "Client frame does not match protocol v3");
+		throw new BridgeProtocolError("invalid_frame", "Client frame does not match protocol v4");
 	}
 
 	let payload: Uint8Array;

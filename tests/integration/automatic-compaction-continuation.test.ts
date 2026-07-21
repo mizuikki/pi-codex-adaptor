@@ -75,11 +75,14 @@ class IntegrationRuntime implements CodexRuntime {
 	responseCalls = 0;
 	compactRequests: unknown[] = [];
 	responseRequests: unknown[] = [];
+	compactContexts: CompactResponseOptions["remoteCompactionV2Context"][] = [];
+	responseContexts: CreateResponseOptions["remoteCompactionV2Context"][] = [];
 	onCompact: (() => void) | undefined;
 	onResponse: (() => void) | undefined;
 	async createResponse(options: CreateResponseOptions): Promise<CreateResponseResult> {
 		this.responseCalls += 1;
 		this.responseRequests.push(structuredClone(options.request));
+		this.responseContexts.push(structuredClone(options.remoteCompactionV2Context));
 		this.onResponse?.();
 		return { status: "completed", result: { responseId: "integration-response" } };
 	}
@@ -87,6 +90,7 @@ class IntegrationRuntime implements CodexRuntime {
 	async compact(options: CompactResponseOptions): Promise<CreateResponseResult> {
 		this.compactCalls += 1;
 		this.compactRequests.push(structuredClone(options.request));
+		this.compactContexts.push(structuredClone(options.remoteCompactionV2Context));
 		this.onCompact?.();
 		return {
 			status: "completed",
@@ -326,6 +330,10 @@ describe("public Pi automatic compaction continuation harness", () => {
 			{ type: "compaction", encrypted_content: OPAQUE },
 			{ type: "custom_tool_call_output", call_id: "integration-call", output: { marker: "live" } },
 		]);
+		expect(result.runtime.compactContexts).toEqual([
+			{ sessionId: "integration-session", compactionTrigger: "auto" },
+		]);
+		expect(result.runtime.responseContexts).toEqual([{ sessionId: "integration-session" }]);
 	});
 
 	test("shows the public append failure boundary and poisons the extension instance", async () => {

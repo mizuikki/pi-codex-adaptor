@@ -22,7 +22,7 @@ pub fn build_compacted_history(
 }
 
 fn is_retained_for_remote_compaction_v2(item: &ResponseItem) -> bool {
-    matches!(item, ResponseItem::Message { role, .. } if role == "user")
+    matches!(item, ResponseItem::Message { role, .. } if matches!(role.as_str(), "user" | "developer" | "system"))
 }
 
 fn truncate_retained_messages_for_remote_compaction(
@@ -129,7 +129,7 @@ mod tests {
     }
 
     #[test]
-    fn retains_user_messages_before_the_official_compaction_item() {
+    fn retains_context_messages_before_the_official_compaction_item() {
         let output = ResponseItem::Compaction {
             id: None,
             encrypted_content: "opaque".to_owned(),
@@ -142,8 +142,9 @@ mod tests {
             ],
             output,
         );
-        assert_eq!(history.len(), 2);
-        assert!(matches!(&history[0], ResponseItem::Message { role, .. } if role == "user"));
-        assert!(matches!(history[1], ResponseItem::Compaction { .. }));
+        assert_eq!(history.len(), 3);
+        assert!(matches!(&history[0], ResponseItem::Message { role, .. } if role == "developer"));
+        assert!(matches!(&history[1], ResponseItem::Message { role, .. } if role == "user"));
+        assert!(matches!(history[2], ResponseItem::Compaction { .. }));
     }
 }

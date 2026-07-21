@@ -18,7 +18,9 @@ bun run check:architecture
 The integration harness uses public `SessionManager` methods, public `ExtensionAPI.appendEntry`,
 `before_provider_request`, the real adaptor compaction registration, and the real provider dispatcher
 composition. It asserts inline rewrite, same-run completion, active-branch custom-entry parentage,
-pre-abort behavior, partial append persistence, file reload, and replay poison state.
+pre-abort behavior, partial append persistence, file reload, and replay poison state. For Remote V2,
+it also asserts that automatic compaction carries the routed session id and `auto` trigger and that the
+following Responses request carries the same session id.
 
 ## Exact local host
 

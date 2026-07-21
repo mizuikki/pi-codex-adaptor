@@ -39,7 +39,7 @@ tool or delegate after a request may have started.
 
 - Background sessions are executable on the bundled shell-command catalog without changing official
   generated schemas or implementing process behavior in TypeScript.
-- Bridge protocol v3 requires explicit session policy and executor evidence in `tools.resolve`.
+- Bridge protocol v4 requires explicit session policy and executor evidence in `tools.resolve`.
 - The release gate resolves every bundled visible API model through the real native model and tool
   resolvers and rejects unreachable default capabilities.
 - Raw nullable model metadata is not capability evidence; derived auto-compaction values come from

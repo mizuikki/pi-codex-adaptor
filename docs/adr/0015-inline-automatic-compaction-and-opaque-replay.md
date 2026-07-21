@@ -30,8 +30,10 @@ JSON, discriminated `jwt_account | credential` bindings, deep cloning, exact non
 across credential refresh. No client-side decryption or plaintext summary conversion occurs.
 
 The pinned bridge's typed native boundary is the losslessness limit. Canonical aliases normalize and
-unknown SSE fields dropped by native deserialization are not claimed as retained. Protocol `3`, Pi
-router `1`, config schema `2`, native vendor state, and release metadata remain unchanged.
+unknown SSE fields dropped by native deserialization are not claimed as retained. Bridge protocol v4
+carries the transient Pi session context required by Remote V2 for the compact request and later
+Responses requests; native derives the Codex session, window, and turn metadata from it. Pi router
+`1`, config schema `2`, native vendor state, and release metadata remain unchanged.
 
 ## Consequences
 

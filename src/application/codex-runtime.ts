@@ -53,6 +53,7 @@ export interface CreateResponseOptions {
 	request: unknown;
 	transportMode: "auto" | "sse";
 	providerSupportsWebsockets: boolean;
+	remoteCompactionV2Context?: CodexRemoteCompactionV2Context;
 	signal?: AbortSignal;
 	onEvent(event: unknown): void | Promise<void>;
 }
@@ -68,7 +69,31 @@ export interface CompactResponseOptions {
 	implementation: "remote_v2" | "compact_endpoint";
 	transportMode: "auto" | "sse";
 	providerSupportsWebsockets: boolean;
+	remoteCompactionV2Context?: CodexRemoteCompactionV2Context;
 	signal?: AbortSignal;
+}
+
+/**
+ * Stable Pi session identity used by Codex Remote Compaction V2 requests.
+ *
+ * Remote V2 compaction output is opaque. The same identity must accompany the
+ * compaction request and later Responses requests that replay that output.
+ */
+export interface CodexRemoteCompactionV2Context {
+	readonly sessionId: string;
+	readonly compactionTrigger?: "auto" | "manual";
+}
+
+export function remoteCompactionV2Context(
+	implementation: "remote_v2" | "compact_endpoint" | null | undefined,
+	sessionId: string | undefined,
+	compactionTrigger?: CodexRemoteCompactionV2Context["compactionTrigger"],
+): CodexRemoteCompactionV2Context | undefined {
+	if (implementation !== "remote_v2" || sessionId === undefined) return undefined;
+	return {
+		sessionId,
+		...(compactionTrigger === undefined ? {} : { compactionTrigger }),
+	};
 }
 
 /** Authorization selected by Pi for one native request. */

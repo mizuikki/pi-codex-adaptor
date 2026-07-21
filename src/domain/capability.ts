@@ -122,7 +122,7 @@ export function parseModelResolution(
 	};
 }
 
-/** Build protocol-v3 native resolver input from product policy and verified bridge evidence. */
+/** Build protocol-v4 native resolver input from product policy and verified bridge evidence. */
 export function buildToolsResolveParams(
 	resolution: ResolvedModelCapability,
 	options: ToolsResolveHostOptions,

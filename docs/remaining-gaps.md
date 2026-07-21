@@ -6,7 +6,7 @@ equivalent to the official contract.
 
 The core shell surface is complete for this baseline: shell-command models retain bounded commands
 and receive the exact pinned managed-session contracts when background sessions are enabled. This is
-covered by protocol-v3 resolver, execution, Pi lifecycle, and bundled-catalog reachability tests and
+covered by protocol-v4 resolver, execution, Pi lifecycle, and bundled-catalog reachability tests and
 is therefore not tracked as a remaining gap.
 
 ## P1
@@ -54,7 +54,7 @@ host-owned limits remain explicit rather than being treated as product guarantee
 - Pi swallows a later `before_provider_request` hook exception without exposing whether the callback
   chain had an error. The guard rejects replacement or effective mutation of an approved request, but
   cannot detect a swallowed exception that leaves the same approved object unchanged.
-- Protocol `3` cancellation is cooperative. A local abort after a compact or Responses invocation
+- Bridge protocol v4 cancellation is cooperative. A local abort after a compact or Responses invocation
   does not prove whether the remote server accepted a frame.
 - Bare `AgentSession.dispose()` does not emit `session_shutdown`. In-flight records check their signal
   and clean up in `finally`; a stale weak router lease may remain ambiguous until public release or

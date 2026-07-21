@@ -3,7 +3,7 @@
 `pi-codex-adaptor` is a Pi extension that will adapt the public OpenAI Codex `0.144.3`
 protocol and selected runtime modules without running a second agent inside Pi.
 
-The repository is under active implementation. Protocol v3, the native baseline handshake, official
+The repository is under active implementation. Protocol v4, the native baseline handshake, official
 Responses SSE/WebSocket transport with connect fallback, compact endpoint, and exact model metadata
 resolution are implemented. The versioned configuration store, prompt-approved or preauthorized Unified Exec sessions,
 and `/codex` settings overlay are available. The extension registers the native bridge stream for

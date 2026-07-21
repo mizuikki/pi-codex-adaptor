@@ -67,7 +67,7 @@ describe("capability resolution", () => {
 		expect(selectCompactionImplementation(completeProviderContract("custom"))).toBe("remote_v2");
 	});
 
-	test("builds protocol-v3 resolver inputs from verified bridge evidence", () => {
+	test("builds protocol-v4 resolver inputs from verified bridge evidence", () => {
 		const resolution = parseModelResolution(
 			{
 				model: { slug: "fixture-model", use_responses_lite: false },
