@@ -435,6 +435,7 @@ function segmentProviderInput(options: {
 		readonly prefix: readonly unknown[];
 		readonly coveredEntryId?: string;
 		readonly output: readonly StructuredResponseItem[];
+		readonly retainedTail?: readonly StructuredResponseItem[];
 	}> = [];
 	if (checkpoint === undefined) {
 		candidates.push({ prefix: projectEntries(contextEntries), output: [] });
@@ -452,6 +453,7 @@ function segmentProviderInput(options: {
 			prefix: [...checkpoint.output, ...after],
 			coveredEntryId,
 			output: checkpoint.output,
+			retainedTail: after,
 		});
 	} else {
 		const index = contextEntries.findIndex((entry) => entry.id === checkpoint.entry.id);
@@ -461,6 +463,7 @@ function segmentProviderInput(options: {
 			prefix: [...checkpoint.output, ...after],
 			coveredEntryId: checkpoint.entry.id,
 			output: checkpoint.output,
+			retainedTail: after,
 		});
 	}
 	const matches = candidates
@@ -477,7 +480,10 @@ function segmentProviderInput(options: {
 	if (matches.length !== 1) return undefined;
 	const match = matches[0];
 	if (match === undefined) return undefined;
-	const liveTail = input.slice(match.prefix.length).map(cloneStructuredValue);
+	const liveTail = [
+		...(match.retainedTail ?? []).map(cloneStructuredValue),
+		...input.slice(match.prefix.length).map(cloneStructuredValue),
+	];
 	const rewrittenInput =
 		match.output.length === 0
 			? input.map(cloneStructuredValue)
@@ -489,8 +495,8 @@ function segmentProviderInput(options: {
 	};
 }
 
-function projectEntries(entries: readonly SessionEntry[]): readonly unknown[] {
-	const items: unknown[] = [];
+function projectEntries(entries: readonly SessionEntry[]): readonly StructuredResponseItem[] {
+	const items: StructuredResponseItem[] = [];
 	for (const entry of entries) {
 		if (entry.type === "custom") continue;
 		if (entry.type === "compaction") {
@@ -498,7 +504,13 @@ function projectEntries(entries: readonly SessionEntry[]): readonly unknown[] {
 			if (details?.version === 2) items.push(...details.output.map(cloneStructuredValue));
 			continue;
 		}
-		items.push(...responseItemsFromMessages(sessionEntryToContextMessages(entry)));
+		const projected = responseItemsFromMessages(sessionEntryToContextMessages(entry));
+		for (const item of projected) {
+			if (!isStructuredJsonValue(item) || !isSupportedStructuredResponseItem(item)) {
+				throw new Error(REPLAY_ERROR);
+			}
+			items.push(item);
+		}
 	}
 	return items;
 }

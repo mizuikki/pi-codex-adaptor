@@ -238,6 +238,10 @@ class SessionFixture {
 		this.leafId = entry.id;
 	}
 
+	appendUser(id: string, content: string): void {
+		this.appendMessage(id, { role: "user", content, timestamp: 4 });
+	}
+
 	branch(): SessionEntry[] {
 		const path: SessionEntry[] = [];
 		let current = this.leafId === null ? undefined : this.byId.get(this.leafId);
@@ -332,6 +336,7 @@ interface Harness {
 	runtime: FixtureRuntime;
 	session: SessionFixture;
 	store: CodexCompactionStore;
+	coordinator: CodexCompactionCoordinator;
 	guard: CodexProviderRequestGuard;
 }
 
@@ -376,6 +381,7 @@ function harness(options: { session?: SessionFixture } = {}): Harness {
 		runtime,
 		session,
 		store,
+		coordinator,
 		guard,
 		run: async (includeLiveTail = true, onPayloadTail, attribution) => {
 			const signal = new AbortController().signal;
@@ -653,12 +659,28 @@ describe("active-branch Codex compaction replay", () => {
 			manualDetails,
 			"manual-entry-1",
 		);
-		const manualEvents = await manual.run(false);
+		manual.coordinator.beginExecution(SESSION_ID);
+		manual.session.appendUser("user-after-compaction", "summarize the completed work");
+		const manualEvents = await manual.run(false, (payload) => payload, {
+			origin: "agent",
+			sessionId: SESSION_ID,
+		});
+		manual.coordinator.end(SESSION_ID, "cancel");
 		expect(manualEvents.at(-1)).toMatchObject({ type: "done" });
 		expect(manual.runtime.compactCalls).toBe(0);
-		expect((manual.runtime.responseRequests[0] as { input: unknown[] }).input[0]).toMatchObject({
-			encrypted_content: "synthetic-manual-opaque",
-		});
+		expect((manual.runtime.responseRequests[0] as { input: unknown[] }).input).toEqual([
+			{ type: "compaction", encrypted_content: "synthetic-manual-opaque" },
+			{
+				type: "function_call_output",
+				call_id: "call-fixture",
+				output: "fixture output",
+			},
+			{
+				type: "message",
+				role: "user",
+				content: [{ type: "input_text", text: "summarize the completed work" }],
+			},
+		]);
 	});
 
 	test("rejects malformed checkpoints and identity conflicts before compact or Responses", async () => {
