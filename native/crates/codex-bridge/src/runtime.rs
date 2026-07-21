@@ -4505,7 +4505,7 @@ mod tests {
 
     #[tokio::test]
     async fn falls_back_from_official_websocket_connect_to_sse() {
-        let (base_url, server) = spawn_websocket_fallback_server().await;
+        let (base_url, _websocket_request, server) = spawn_websocket_fallback_server().await;
         let connection = api::connect(&fixture_connection(base_url))
             .expect("fixture API connection should build");
         let request = serde_json::from_value(fixture_response_request())
@@ -4535,6 +4535,78 @@ mod tests {
             }
         }
         assert!(completed);
+        server.await.expect("fallback fixture server should join");
+    }
+
+    #[tokio::test]
+    async fn remote_v2_websocket_fallback_sends_codex_session_context() {
+        let (base_url, websocket_request, server) = spawn_websocket_fallback_server().await;
+        let connection = api::connect(&fixture_connection(base_url))
+            .expect("fixture API connection should build");
+        let request = serde_json::from_value(fixture_response_request())
+            .expect("fixture response request should be typed");
+        let websocket_connect_timeout = connection.websocket_connect_timeout;
+        let context = RemoteCompactionV2Context {
+            session_id: "remote-v2-session".to_owned(),
+            compaction_trigger: None,
+        };
+        let mut response = start_response_stream(
+            request,
+            ResponsesTransportMode::Auto,
+            true,
+            connection,
+            websocket_connect_timeout,
+            RemoteCompactionV2RequestMetadata {
+                context: Some(&context),
+                kind: RemoteCompactionV2RequestKind::Turn,
+            },
+            "responses_sse",
+        )
+        .await
+        .expect("SSE fallback should connect");
+
+        let mut completed = false;
+        while let Some(event) = response.rx_event.recv().await {
+            if matches!(
+                event.expect("fallback event should parse"),
+                codex_api::ResponseEvent::Completed { .. }
+            ) {
+                completed = true;
+                break;
+            }
+        }
+        assert!(completed);
+
+        let request = websocket_request
+            .await
+            .expect("websocket request should be captured");
+        assert_eq!(
+            fixture_header(&request, "session-id"),
+            Some("remote-v2-session")
+        );
+        assert_eq!(
+            fixture_header(&request, "thread-id"),
+            Some("remote-v2-session")
+        );
+        assert_eq!(
+            fixture_header(&request, "x-client-request-id"),
+            Some("remote-v2-session")
+        );
+        assert_eq!(
+            fixture_header(&request, "x-codex-beta-features"),
+            Some("remote_compaction_v2")
+        );
+        assert_eq!(
+            fixture_header(&request, "x-codex-window-id"),
+            Some("remote-v2-session")
+        );
+        let turn: Value = serde_json::from_str(
+            fixture_header(&request, "x-codex-turn-metadata")
+                .expect("websocket request should include turn metadata"),
+        )
+        .expect("websocket turn metadata should be JSON");
+        assert_eq!(turn["request_kind"], "turn");
+        assert_eq!(turn["session_id"], "remote-v2-session");
         server.await.expect("fallback fixture server should join");
     }
 
@@ -8659,13 +8731,18 @@ mod tests {
         (format!("http://{address}/v1"), hits, server)
     }
 
-    async fn spawn_websocket_fallback_server() -> (String, tokio::task::JoinHandle<()>) {
+    async fn spawn_websocket_fallback_server() -> (
+        String,
+        oneshot::Receiver<String>,
+        tokio::task::JoinHandle<()>,
+    ) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("fallback listener should bind");
         let address = listener
             .local_addr()
             .expect("fallback listener should have an address");
+        let (sender, receiver) = oneshot::channel();
         let server = tokio::spawn(async move {
             let (mut websocket, _) = listener
                 .accept()
@@ -8676,7 +8753,10 @@ mod tests {
                 .read(&mut request)
                 .await
                 .expect("websocket probe should be readable");
-            assert!(String::from_utf8_lossy(&request[..length]).starts_with("GET /v1/responses"));
+            let websocket_request = String::from_utf8(request[..length].to_vec())
+                .expect("websocket request should be UTF-8");
+            assert!(websocket_request.starts_with("GET /v1/responses"));
+            let _ = sender.send(websocket_request);
             websocket
                 .write_all(
                     b"HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
@@ -8712,7 +8792,7 @@ mod tests {
                 .await
                 .expect("SSE fallback response should close");
         });
-        (format!("http://{address}/v1"), server)
+        (format!("http://{address}/v1"), receiver, server)
     }
 
     #[tokio::test]
