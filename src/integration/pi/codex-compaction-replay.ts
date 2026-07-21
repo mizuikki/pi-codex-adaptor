@@ -42,6 +42,7 @@ import {
 import type { CodexToolProfileCoordinator } from "./codex-tool-profile.ts";
 
 const REPLAY_ERROR = "OpenAI Codex automatic compaction cannot safely replay this request";
+type ProviderRequestOrigin = "agent" | "compaction_summary" | "branch_summary";
 export interface CodexCompactionReplayOptions {
 	readonly pi: ExtensionAPI;
 	readonly runtime: CodexRuntime;
@@ -128,6 +129,7 @@ async function handleBeforeProviderRequest(
 		if (!options.activation.isActive(ctx.model)) return event.payload;
 		throw new Error(REPLAY_ERROR);
 	}
+	const origin = providerRequestOrigin(event, record.sessionId);
 	options.guard.assertLive(record);
 	options.guard.assertRoute(record, ctx.sessionManager.getSessionId());
 	if (
@@ -151,6 +153,7 @@ async function handleBeforeProviderRequest(
 	) {
 		throw new Error(REPLAY_ERROR);
 	}
+	if (origin !== "agent") return options.guard.approve(record, payload);
 	if (options.store.isReplayInvalid(record.sessionId)) throw new Error(REPLAY_ERROR);
 	const input = responseInput(payload.input);
 	const identity = providerCompactionIdentity(record);
@@ -197,6 +200,29 @@ async function handleBeforeProviderRequest(
 	});
 	options.guard.approve(record, rewritten);
 	return rewritten;
+}
+
+function providerRequestOrigin(
+	event: BeforeProviderRequestEvent,
+	expectedSessionId: string,
+): ProviderRequestOrigin {
+	const attributed = event as BeforeProviderRequestEvent & {
+		readonly origin?: unknown;
+		readonly sessionId?: unknown;
+	};
+	if (attributed.origin === undefined && attributed.sessionId === undefined) return "agent";
+	if (
+		(attributed.origin === "agent" ||
+			attributed.origin === "compaction_summary" ||
+			attributed.origin === "branch_summary") &&
+		typeof attributed.sessionId === "string" &&
+		attributed.sessionId.length > 0 &&
+		attributed.sessionId.trim() === attributed.sessionId &&
+		attributed.sessionId === expectedSessionId
+	) {
+		return attributed.origin;
+	}
+	throw new Error(REPLAY_ERROR);
 }
 
 async function createAutomaticCheckpoint(options: {

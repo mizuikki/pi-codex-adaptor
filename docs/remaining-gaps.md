@@ -59,3 +59,9 @@ host-owned limits remain explicit rather than being treated as product guarantee
 - Bare `AgentSession.dispose()` does not emit `session_shutdown`. In-flight records check their signal
   and clean up in `finally`; a stale weak router lease may remain ambiguous until public release or
   eventual weak pruning.
+- The locked Pi `0.80.6` host does not expose the complete auxiliary request attribution contract.
+  Newer hosts must provide a non-empty `SessionManager` session id, explicit origin, request-scoped abort
+  signal, and payload approval semantics for manual/overflow summaries, turn-prefix summaries, and branch
+  summaries. The adaptor accepts those attributed auxiliary requests without checkpoint replay; legacy
+  hosts still fail closed rather than inferring a router lease. Activated Codex compaction failures
+  remain terminal on every host.

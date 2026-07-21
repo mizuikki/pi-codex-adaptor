@@ -37,6 +37,8 @@ import { selectCodexToolSurface } from "./codex-tool-surface.ts";
 import { resolveProviderConnection } from "./provider-connection.ts";
 
 const COMPACTION_SUMMARY = "Context compacted by the OpenAI Codex Responses API.";
+const CODEX_COMPACTION_FAILED =
+	"OpenAI Codex compaction failed; the session context was left unchanged.";
 
 export function registerCodexCompaction(
 	pi: ExtensionAPI,
@@ -55,8 +57,6 @@ export function registerCodexCompaction(
 	});
 	pi.on("model_select", () => {});
 	pi.on("session_compact", (event, ctx) => {
-		const sessionId = ctx.sessionManager.getSessionId();
-		coordinator.end(sessionId, "success");
 		acceptCompaction(event, ctx, store);
 	});
 	pi.on("session_shutdown", (_event, ctx) => {
@@ -107,49 +107,50 @@ async function compactForPi(
 	const sessionId = ctx.sessionManager.getSessionId();
 	const model = ctx.model;
 	if (model === undefined) {
-		state.coordinator.end(sessionId, "error");
-		throw new Error("OpenAI Codex compaction requires an active model");
+		state.coordinator.endPending(sessionId, "error");
+		notifyCompactionFailure(ctx);
+		return { cancel: true };
 	}
 	if (!state.activation.isActive(model)) return undefined;
-	if (event.signal.aborted) return { cancel: true };
+	if (event.signal.aborted) {
+		state.coordinator.endPending(sessionId, "cancel");
+		return { cancel: true };
+	}
 	// Pi's post-run threshold event aborts the active retry path. Inline automatic
 	// compaction is owned by before_provider_request; overflow remains Pi-owned.
-	if (event.reason === "threshold") return { cancel: true };
+	if (event.reason === "threshold") {
+		return { cancel: true };
+	}
 
-	let connection: Awaited<ReturnType<typeof resolveProviderConnection>>;
+	let ownsExecution = false;
 	try {
-		connection = await resolveProviderConnection(
+		const connection = await resolveProviderConnection(
 			ctx,
 			state.activation,
 			"Codex compaction is inactive for the selected provider and API",
 		);
-	} catch (error) {
-		state.coordinator.end(sessionId, "error");
-		throw error;
-	}
-	const config = await state.configuration.load();
-	if (config.codex.compaction.mode === "off") {
-		state.coordinator.end(sessionId, "cancel");
-		return { cancel: true };
-	}
-	const capabilityKey = capabilityCacheKey({
-		modelId: model.id,
-		providerId: model.provider,
-		config,
-		contextWindow: model.contextWindow,
-	});
-	if (!state.profile.isHealthy(capabilityKey)) {
-		state.coordinator.end(sessionId, "error");
-		throw new Error("Codex tool profile is unavailable for the selected capability");
-	}
-	const capabilitySnapshot = await state.capabilities.resolve({
-		modelId: model.id,
-		providerId: model.provider,
-		config,
-		contextWindow: model.contextWindow,
-	});
-	if (!state.coordinator.beginExecution(sessionId)) return { cancel: true };
-	try {
+		const config = await state.configuration.load();
+		if (config.codex.compaction.mode === "off") {
+			state.coordinator.endPending(sessionId, "cancel");
+			return { cancel: true };
+		}
+		const capabilityKey = capabilityCacheKey({
+			modelId: model.id,
+			providerId: model.provider,
+			config,
+			contextWindow: model.contextWindow,
+		});
+		if (!state.profile.isHealthy(capabilityKey)) {
+			throw new Error("Codex tool profile is unavailable for the selected capability");
+		}
+		const capabilitySnapshot = await state.capabilities.resolve({
+			modelId: model.id,
+			providerId: model.provider,
+			config,
+			contextWindow: model.contextWindow,
+		});
+		if (!state.coordinator.beginExecution(sessionId)) return { cancel: true };
+		ownsExecution = true;
 		if (event.signal.aborted) {
 			state.coordinator.end(sessionId, "cancel");
 			return { cancel: true };
@@ -217,9 +218,24 @@ async function compactForPi(
 				details,
 			},
 		};
-	} catch (error) {
-		state.coordinator.end(sessionId, "error");
-		throw error;
+	} catch {
+		if (event.signal.aborted) {
+			if (ownsExecution) state.coordinator.end(sessionId, "cancel");
+			else state.coordinator.endPending(sessionId, "cancel");
+			return { cancel: true };
+		}
+		if (ownsExecution) state.coordinator.end(sessionId, "error");
+		else state.coordinator.endPending(sessionId, "error");
+		notifyCompactionFailure(ctx);
+		return { cancel: true };
+	}
+}
+
+function notifyCompactionFailure(ctx: ExtensionContext): void {
+	try {
+		ctx.ui.notify(CODEX_COMPACTION_FAILED, "error");
+	} catch {
+		// UI availability is not part of compaction correctness.
 	}
 }
 

@@ -58,6 +58,13 @@ replacement. Manual compaction remains Pi-owned: Pi writes the real `CompactionE
 adaptor supplies version `2` provider-bound details and restores them on reload. Neither path performs
 client-side decryption; the pinned native typed projection limits the retained opaque item.
 
+Activation is also the manual and overflow failure-ownership boundary. Once the selected provider
+activates Codex compaction, every setup, native, status, or output-validation failure returns terminal
+cancellation to Pi, clears the session coordinator, and writes no compaction state. The handler does
+not throw into Pi's session-unattributed default summarizer. Explicit abort, native abort, threshold
+cancellation, and coordinator contention remain non-error cancellation paths; inactive providers
+remain Pi-owned.
+
 When `remote_v2` is selected, the host sends the same Pi session id with a compact request and each
 later Responses request from that session. Compaction also declares its `auto` or `manual` trigger.
 The native bridge derives the request-scoped Codex session, thread, window, beta-feature, and turn

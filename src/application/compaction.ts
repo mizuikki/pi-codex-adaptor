@@ -550,6 +550,11 @@ export class CodexCompactionCoordinator {
 		if (state !== undefined) state.phase = "idle";
 	}
 
+	endPending(sessionId: string, _outcome: CompactionCycleOutcome): void {
+		const state = this.#sessions.get(sessionId);
+		if (state?.phase === "pending") state.phase = "idle";
+	}
+
 	dispose(sessionId: string): void {
 		this.#sessions.delete(sessionId);
 	}
