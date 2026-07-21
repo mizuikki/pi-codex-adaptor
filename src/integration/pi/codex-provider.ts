@@ -29,6 +29,7 @@ import {
 import { isStrictJsonValue, isStrictPlainRecord } from "../../application/structured-json.ts";
 import { CapabilityError } from "../../domain/capability.ts";
 import type { CodexConfig } from "../../domain/config.ts";
+import { toPiProviderErrorMessage } from "./codex-provider-error.ts";
 import {
 	type CodexProviderRequestGuard,
 	type CodexProviderRequestRecord,
@@ -195,7 +196,7 @@ async function runResponse(
 		stream.end();
 	} catch (error) {
 		output.stopReason = options?.signal?.aborted === true ? "aborted" : "error";
-		output.errorMessage = safeErrorMessage(error);
+		output.errorMessage = toPiProviderErrorMessage(error);
 		stream.push({ type: "error", reason: output.stopReason, error: output });
 		stream.end();
 	} finally {
@@ -866,16 +867,4 @@ function asRequest(value: unknown): Record<string, unknown> {
 		throw new Error("OpenAI Codex provider payload is invalid");
 	}
 	return request;
-}
-
-function safeErrorMessage(error: unknown): string {
-	if (error instanceof DOMException && error.name === "AbortError") return "Request aborted";
-	if (error instanceof CapabilityError) return error.reason;
-	if (
-		error instanceof Error &&
-		["BridgeConnectionError", "BridgeRemoteError", "ConfigurationError"].includes(error.name)
-	) {
-		return error.message;
-	}
-	return "OpenAI Codex request failed";
 }

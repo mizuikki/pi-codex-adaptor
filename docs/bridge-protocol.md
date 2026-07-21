@@ -141,6 +141,12 @@ rejected frame, parser snippets, or credential-bearing fragments; invalid JSON a
 map to stable `invalid_frame` protocol messages. Protocol fixtures contain no credentials, user
 paths, account data, prompts, or compaction payloads.
 
+`BridgeError.retryable` is required on every error frame. It is a native-owned advisory signal for
+safe host consumption: the TypeScript bridge client preserves it on `BridgeRemoteError`, and the Pi
+integration may map a true value into a fixed redacted assistant message recognized by Pi's public
+retry classifier. The field does not schedule a retry in the bridge client, adaptor, or native
+process, and it is not an instruction for auxiliary host workflows to retry.
+
 Provider connection `timeoutMs` is the stream idle timeout for selected Responses transport. Finite
 values must fall in `[1, 86400000]` (24 hours). Omission uses the native five-minute default. The
 only accepted value above that bound is `2147483647`, which is Pi's disabled HTTP idle-timeout

@@ -36,3 +36,11 @@ session-unattributed default summarizer. The process router remains strict. A Pi
 must provide trusted session attribution, explicit request provenance, the request-scoped abort signal,
 and matching approval semantics. Newer hosts with that contract are accepted without automatic
 checkpoint replay; the locked legacy host remains fail-closed.
+
+Provider stream failures map through `toPiProviderErrorMessage`. A protocol-decoded
+`BridgeRemoteError` with `retryable: true` becomes the fixed redacted text
+`OpenAI provider service unavailable` so Pi's public classifier can apply its host-owned agent-turn
+retry policy. Non-retryable bridge, connection, configuration, capability, and abort errors keep
+their existing safe messages. The adaptor never retains upstream error details for that mapping and
+never implements a local retry loop; auxiliary compaction and branch-summary callers receive the same
+safe mapping but keep their own host-owned failure handling.

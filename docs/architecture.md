@@ -65,6 +65,15 @@ not throw into Pi's session-unattributed default summarizer. Explicit abort, nat
 cancellation, and coordinator contention remain non-error cancellation paths; inactive providers
 remain Pi-owned.
 
+Provider failure ownership is split across three layers. Native bridge code classifies transport and
+provider failures and exposes a bounded, redacted `retryable` bit on protocol v4 `BridgeError`.
+`src/integration/pi` maps only a trusted `BridgeRemoteError.retryable` fact into Pi's string-only
+assistant error surface using a fixed non-sensitive marker; it does not retry, reconnect, or issue a
+second `createResponse` call. For normal agent turns, Pi alone decides whether to remove the failed
+assistant message and restart the turn under its existing retry settings. Auxiliary compaction-summary
+and branch-summary requests may use the same stream mapping, but their host-owned workflows handle
+failure without entering the AgentSession agent-turn retry loop.
+
 When `remote_v2` is selected, the host sends the same Pi session id with a compact request and each
 later Responses request from that session. Compaction also declares its `auto` or `manual` trigger.
 The native bridge derives the request-scoped Codex session, thread, window, beta-feature, and turn
