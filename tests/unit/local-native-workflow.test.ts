@@ -6,6 +6,8 @@ import { resolve } from "node:path";
 import {
 	parseLocalNativeOptions,
 	replaceArtifactDirectory,
+	requireCleanGitWorktree,
+	requireUnchangedGitHead,
 	resolveLocalNativePaths,
 } from "../../scripts/prepare-local-native.ts";
 
@@ -63,6 +65,18 @@ describe("local native workflow", () => {
 			assembledArtifact: resolve("/repo", "native", "artifacts", "x86_64-pc-windows-msvc"),
 			installedArtifact: resolve("/repo", "native", "bin", "x86_64-pc-windows-msvc"),
 		});
+	});
+
+	test("requires a clean worktree before accepting a source commit", () => {
+		expect(() => requireCleanGitWorktree("")).not.toThrow();
+		expect(() => requireCleanGitWorktree(" M src/runtime.ts\n")).toThrow(/clean Git worktree/);
+		expect(() => requireCleanGitWorktree("?? local-note.txt\n")).toThrow(/clean Git worktree/);
+	});
+
+	test("rejects a source commit that changes during local artifact preparation", () => {
+		const sourceCommit = "a".repeat(40);
+		expect(() => requireUnchangedGitHead(sourceCommit, sourceCommit)).not.toThrow();
+		expect(() => requireUnchangedGitHead(sourceCommit, "b".repeat(40))).toThrow(/Git HEAD changed/);
 	});
 
 	test("installs a verified artifact and removes the previous directory", async () => {

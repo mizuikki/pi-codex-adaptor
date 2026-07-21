@@ -132,7 +132,7 @@ async function main(): Promise<void> {
 		return;
 	}
 	const options = parseLocalNativeOptions(process.argv.slice(2));
-	const sourceCommit = await gitHead();
+	const sourceCommit = await cleanGitHead();
 	const paths = resolveLocalNativePaths(repositoryRoot, options);
 
 	if (!options.checkOnly) {
@@ -143,6 +143,7 @@ async function main(): Promise<void> {
 			"--target",
 			options.target,
 		]);
+		await requireCurrentSourceCommit(sourceCommit);
 		await run([
 			process.execPath,
 			"scripts/assemble-native-artifact.ts",
@@ -155,9 +156,11 @@ async function main(): Promise<void> {
 		]);
 		await replaceArtifactDirectory(paths.assembledArtifact, paths.installedArtifact, async () => {
 			await verifyLocalArtifact(options.target, sourceCommit);
+			await requireCurrentSourceCommit(sourceCommit);
 		});
 	} else {
 		await verifyLocalArtifact(options.target, sourceCommit);
+		await requireCurrentSourceCommit(sourceCommit);
 	}
 
 	console.log(
@@ -221,6 +224,43 @@ async function gitHead(): Promise<string> {
 	return sourceCommit;
 }
 
+export function requireCleanGitWorktree(status: string): void {
+	if (status.trim().length !== 0) {
+		throw new Error(
+			"Local native artifact requires a clean Git worktree; commit or stash changes before running native:local",
+		);
+	}
+}
+
+export function requireUnchangedGitHead(expected: string, actual: string): void {
+	if (actual !== expected) {
+		throw new Error("Git HEAD changed while preparing the local native artifact; retry the build");
+	}
+}
+
+async function cleanGitHead(): Promise<string> {
+	const initialHead = await gitHead();
+	requireCleanGitWorktree(await gitWorktreeStatus());
+	const confirmedHead = await gitHead();
+	requireUnchangedGitHead(initialHead, confirmedHead);
+	return confirmedHead;
+}
+
+async function requireCurrentSourceCommit(sourceCommit: string): Promise<void> {
+	requireUnchangedGitHead(sourceCommit, await cleanGitHead());
+}
+
+async function gitWorktreeStatus(): Promise<string> {
+	const child = Bun.spawn(["git", "status", "--porcelain=v1", "--untracked-files=normal"], {
+		cwd: repositoryRoot,
+		stderr: "pipe",
+		stdout: "pipe",
+	});
+	const [exitCode, stdout] = await Promise.all([child.exited, new Response(child.stdout).text()]);
+	if (exitCode !== 0) throw new Error("Git worktree state is unavailable");
+	return stdout;
+}
+
 async function run(command: string[]): Promise<void> {
 	const child = Bun.spawn(command, {
 		cwd: repositoryRoot,
@@ -248,6 +288,7 @@ function printHelp(): void {
 	console.log(`Usage: bun run native:local -- [options]
 
 Build, assemble, transactionally install, and verify the local native bridge.
+The Git worktree must remain clean and at one commit throughout the command.
 
 Options:
   --debug            Build and install the debug profile instead of release

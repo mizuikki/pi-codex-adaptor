@@ -58,9 +58,10 @@ bun ci
 bun run native:local
 ```
 
-The command infers the host target, embeds the current Git commit, assembles the executable and
-`native-artifact.json`, transactionally replaces `native/bin/<target>/`, and verifies the checksum
-and executable identity. A failed verification restores the previous installed artifact.
+The command requires a clean Git worktree and an unchanged `HEAD`, then infers the host target,
+embeds that Git commit, assembles the executable and `native-artifact.json`, transactionally replaces
+`native/bin/<target>/`, and verifies the checksum and executable identity. A failed verification
+restores the previous installed artifact.
 
 ```sh
 bun run native:local -- --debug

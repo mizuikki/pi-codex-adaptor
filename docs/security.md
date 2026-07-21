@@ -80,7 +80,8 @@ atomic patch commit checks remain mandatory. Preauthorization for an unsupported
   supplemental instruction describing the session contract.
 - Vendor synchronization uses immutable commits, an explicit allowlist, file hashes, replayable
   patches, license inventory, and a deterministic tree hash.
-- Native artifacts and the final npm tarball must carry checksums and source provenance.
+- Native artifacts and the final npm tarball must carry checksums and source provenance. Local native
+  builds require a clean Git worktree and unchanged `HEAD` through install verification.
 - Runtime loading of a packaged sidecar verifies `native-artifact.json` and the executable digest
   before spawn; mismatches fail closed.
 - Diagnostics export requires a user confirmation and contains only the allowlisted bridge identity,
