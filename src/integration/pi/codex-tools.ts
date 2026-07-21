@@ -1,5 +1,4 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
 import type { TSchema } from "typebox";
 import type {
 	CodexApprovalRequest,
@@ -18,6 +17,7 @@ import type { ApprovalPolicy, CodexConfig } from "../../domain/config.ts";
 import type { PlanUpdate } from "../../domain/plan.ts";
 import { resolveProviderActivation } from "../../domain/provider-activation.ts";
 import { requestCodexApproval } from "../../ui/terminal/approval-prompt.ts";
+import { createCodexToolRenderer } from "../../ui/terminal/codex-tool-renderer.ts";
 import { APPROVAL_BYPASS_WARNING } from "../../ui/terminal/settings-model.ts";
 import { responseItemsFromMessages } from "./codex-provider.ts";
 import { formatCodexStatus } from "./codex-status.ts";
@@ -235,14 +235,9 @@ function registerStandaloneWebTool(
 		promptSnippet: "Search the web",
 		parameters: contract.parameters as TSchema,
 		renderShell: "self",
-		renderCall: (args, theme) =>
-			new Text(
-				theme.fg("toolTitle", theme.bold(`web.run ${compactText(JSON.stringify(args), 72)}`)),
-				0,
-				0,
-			),
-		renderResult: (result, options, theme) => renderToolResult(result, options, theme),
-		execute: async (_toolCallId, params, signal, _onUpdate, ctx) => {
+		...createCodexToolRenderer("web"),
+		execute: async (_toolCallId, params, signal, onUpdate, ctx) => {
+			notifyToolRunning(onUpdate);
 			const config = await configuration.load();
 			const connection = await resolveProviderConnection(
 				ctx,
@@ -295,13 +290,9 @@ function registerImageGenerationTool(
 		promptSnippet: "Generate an image",
 		parameters: contract.parameters as TSchema,
 		renderShell: "self",
-		renderCall: (args, theme) =>
-			new Text(
-				theme.fg("toolTitle", theme.bold(`image_gen ${compactText(JSON.stringify(args), 72)}`)),
-				0,
-				0,
-			),
-		execute: async (_toolCallId, params, signal, _onUpdate, ctx) => {
+		...createCodexToolRenderer("image-generation"),
+		execute: async (_toolCallId, params, signal, onUpdate, ctx) => {
+			notifyToolRunning(onUpdate);
 			const config = await configuration.load();
 			const connection = await resolveProviderConnection(
 				ctx,
@@ -336,9 +327,9 @@ function registerPlanTool(pi: ExtensionAPI, activation: ProviderActivationPolicy
 		promptSnippet: "Track multi-step work with an explicit plan",
 		parameters: contract.parameters as TSchema,
 		renderShell: "self",
-		renderCall: (_args, theme) => new Text(theme.fg("toolTitle", theme.bold("update_plan")), 0, 0),
-		renderResult: (result, options, theme) => renderToolResult(result, options, theme),
-		execute: async (_toolCallId, params, _signal, _onUpdate, ctx) => {
+		...createCodexToolRenderer("plan"),
+		execute: async (_toolCallId, params, _signal, onUpdate, ctx) => {
+			notifyToolRunning(onUpdate);
 			assertProviderActive(
 				ctx,
 				activation,
@@ -391,29 +382,14 @@ function registerNativeTool(
 							: "Inspect an image file",
 		parameters: parameters as TSchema,
 		renderShell: "self",
-		renderCall: (args, theme) => {
-			const value = record(args);
-			const summary =
-				typeof value?.command === "string"
-					? value.command
-					: typeof value?.input === "string"
-						? value.input
-						: typeof value?.path === "string"
-							? value.path
-							: "";
-			return new Text(
-				theme.fg("toolTitle", theme.bold(`${name} ${compactText(summary, 72)}`)),
-				0,
-				0,
-			);
-		},
-		renderResult: (result, options, theme) => renderToolResult(result, options, theme),
+		...createCodexToolRenderer(presentationKindFor(name)),
 		execute: async (_toolCallId, params, signal, onUpdate, ctx) => {
 			assertProviderActive(
 				ctx,
 				activation,
 				"Codex tools are inactive for the selected provider and API",
 			);
+			notifyToolRunning(onUpdate);
 			const config = await configuration.load();
 			let streamedOutput = "";
 			const result = await runtime.executeTool({
@@ -577,22 +553,32 @@ function renderPlan(update: PlanUpdate): string[] {
 	return lines;
 }
 
-function renderToolResult(
-	result: { content: readonly { type: string; text?: string }[]; details?: unknown },
-	options: { expanded: boolean; isPartial: boolean },
-	theme: { fg(color: string, text: string): string },
-): Text {
-	if (options.isPartial) return new Text(theme.fg("warning", "[running]"), 0, 0);
-	const details = record(result.details);
-	const status = typeof details?.status === "string" ? details.status : "completed";
-	const label = status === "completed" ? "[ok]" : `[${status}]`;
-	const color = status === "completed" ? "success" : "error";
-	const content = result.content.find((item) => item.type === "text");
-	const output = typeof content?.text === "string" ? content.text : "";
-	let text = theme.fg(color, label);
-	if (output.length > 0) text += theme.fg("dim", ` ${compactText(output, 88)}`);
-	if (options.expanded && output.length > 0) text += `\n${boundedOutput(output)}`;
-	return new Text(text, 0, 0);
+/** Publish an empty running partial so the result slot owns the running header after execution starts. */
+function notifyToolRunning(
+	onUpdate:
+		| ((result: { content: { type: "text"; text: string }[]; details: { status: string } }) => void)
+		| undefined,
+): void {
+	onUpdate?.({
+		content: [{ type: "text", text: "" }],
+		details: { status: "running" },
+	});
+}
+
+function presentationKindFor(
+	name: NativeManagedTool,
+): "command" | "session-input" | "patch" | "view-image" {
+	switch (name) {
+		case "exec_command":
+		case "shell_command":
+			return "command";
+		case "write_stdin":
+			return "session-input";
+		case "apply_patch":
+			return "patch";
+		case "view_image":
+			return "view-image";
+	}
 }
 
 function buildNativeToolArguments(
@@ -693,23 +679,6 @@ function pickStringArray(source: Record<string, unknown>, key: string): Record<s
 	if (!Array.isArray(value)) return {};
 	const items = value.filter((entry): entry is string => typeof entry === "string");
 	return items.length === value.length ? { [key]: items } : {};
-}
-
-function compactText(value: string, limit: number): string {
-	const normalized = value.replaceAll(/\s+/g, " ").trim();
-	return normalized.length <= limit
-		? normalized
-		: `${normalized.slice(0, Math.max(0, limit - 3))}...`;
-}
-
-function boundedOutput(value: string): string {
-	const lines = value.split("\n");
-	if (lines.length <= 12) return lines.map((line) => `  ${line}`).join("\n");
-	const head = lines.slice(0, 6);
-	const tail = lines.slice(-6);
-	return [...head, `  ... ${lines.length - 12} lines omitted ...`, ...tail]
-		.map((line) => (line.startsWith("  ") ? line : `  ${line}`))
-		.join("\n");
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {

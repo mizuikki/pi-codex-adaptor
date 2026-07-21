@@ -654,7 +654,9 @@ describe("Pi core tool activation", () => {
 			onApproval: expect.any(Function),
 		});
 		expect(runtime.approvalDecision).toBe("decline");
-		expect(updates).toHaveLength(1);
+		// Running seed partial plus streamed output delta.
+		expect(updates.length).toBeGreaterThanOrEqual(2);
+		expect(updates[0]).toMatchObject({ details: { status: "running" } });
 		expect(command?.content).toEqual([
 			{
 				type: "text",
@@ -1083,5 +1085,115 @@ describe("Pi core tool activation", () => {
 
 		expect(active).toEqual(toolsAfterShutdown);
 		expect(status.get("codex-adaptor")).toBe(statusAfterShutdown);
+	});
+
+	test("binds every managed registration to a compact presentation renderer", () => {
+		const tools = new Map<string, ToolDefinition>();
+		registerCodexTools(
+			{
+				registerTool: (tool: ToolDefinition) => tools.set(tool.name, tool),
+				on: () => {},
+				getActiveTools: () => [],
+				setActiveTools: () => {},
+			} as never,
+			new FixtureRuntime(),
+			configuration(),
+			new ProviderActivationPolicy(configuration()),
+		);
+
+		const expected = {
+			exec_command: "Running",
+			shell_command: "Running",
+			write_stdin: "Waiting",
+			apply_patch: "Applying patch",
+			view_image: "Viewing",
+			"image_gen.imagegen": "Generating image",
+			"web.run": "Searching web",
+			update_plan: "Updating plan",
+		} as const;
+
+		const theme = {
+			fg: (_color: string, text: string) => text,
+			bold: (text: string) => text,
+		};
+		const context = {
+			args: {},
+			toolCallId: "call-fixture",
+			invalidate: () => {},
+			lastComponent: undefined,
+			state: {},
+			cwd: "/workspace",
+			executionStarted: false,
+			argsComplete: true,
+			isPartial: true,
+			expanded: false,
+			showImages: false,
+			isError: false,
+		};
+
+		for (const [name, fragment] of Object.entries(expected)) {
+			const tool = tools.get(name);
+			expect(tool?.renderShell).toBe("self");
+			expect(typeof tool?.renderCall).toBe("function");
+			expect(typeof tool?.renderResult).toBe("function");
+			const args =
+				name === "exec_command"
+					? { cmd: "fixture" }
+					: name === "shell_command"
+						? { command: "fixture" }
+						: name === "write_stdin"
+							? { session_id: 1, chars: "" }
+							: name === "view_image"
+								? { path: "fixture.png" }
+								: name === "web.run"
+									? { search_query: [{ q: "fixture" }] }
+									: name === "update_plan"
+										? { plan: [] }
+										: name === "image_gen.imagegen"
+											? { prompt: "hidden-prompt" }
+											: { input: "hidden-patch" };
+			const call = tool?.renderCall?.(args as never, theme as never, context as never);
+			const text =
+				call
+					?.render(120)
+					.map((line) => line.trimEnd())
+					.join("\n") ?? "";
+			expect(text).toContain(fragment);
+			expect(text).not.toContain("hidden-prompt");
+			expect(text).not.toContain("hidden-patch");
+			expect(text).not.toContain("{");
+		}
+
+		// Terminal command display hides model-visible metadata while execute content stays unchanged.
+		const command = tools.get("exec_command");
+		const terminalContext = { ...context, isPartial: false, executionStarted: true };
+		const callEmpty = command?.renderCall?.(
+			{ cmd: "fixture command" } as never,
+			theme as never,
+			terminalContext as never,
+		);
+		expect(callEmpty?.render(80)).toEqual([]);
+		const result = command?.renderResult?.(
+			{
+				content: [
+					{
+						type: "text",
+						text: 'fixture output\n{"status":"completed","exit_code":0}',
+					},
+				],
+				details: { status: "completed", output: "fixture output", exit_code: 0 },
+			} as never,
+			{ expanded: false, isPartial: false },
+			theme as never,
+			{ ...terminalContext, args: { cmd: "fixture command" } } as never,
+		);
+		const resultText =
+			result
+				?.render(120)
+				.map((line) => line.trimEnd())
+				.join("\n") ?? "";
+		expect(resultText).toContain("Ran fixture command");
+		expect(resultText).toContain("fixture output");
+		expect(resultText).not.toContain('"exit_code"');
 	});
 });
