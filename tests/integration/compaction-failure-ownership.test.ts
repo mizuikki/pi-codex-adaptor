@@ -8,6 +8,7 @@ import {
 import {
 	AgentSession,
 	DefaultResourceLoader,
+	ModelRuntime,
 	SessionManager,
 	SettingsManager,
 } from "@earendil-works/pi-coding-agent";
@@ -241,6 +242,8 @@ async function createHarness(
 		streamFn: fallbackStream,
 		sessionId: sessionManager.getSessionId(),
 	});
+	const modelRuntime = await ModelRuntime.create({ modelsPath: null, allowModelNetwork: false });
+	modelRuntime.registerProvider(model.provider, { apiKey: token() });
 	const notifications: Array<{ message: string; type: string | undefined }> = [];
 	const extensionErrors: string[] = [];
 	const session = new AgentSession({
@@ -251,13 +254,7 @@ async function createHarness(
 		}),
 		cwd: "<synthetic-cwd>",
 		resourceLoader: resourceLoader as never,
-		modelRegistry: {
-			getApiKeyAndHeaders: async () => ({ ok: true, apiKey: token(), headers: {} }),
-			isUsingOAuth: () => false,
-			registerProvider: () => {},
-			unregisterProvider: () => {},
-			getAll: () => [model],
-		} as never,
+		modelRuntime,
 		baseToolsOverride: {},
 	});
 	await session.bindExtensions({

@@ -55,7 +55,7 @@ describe("redacted diagnostics", () => {
 			},
 			{
 				adaptorVersion: "0.0.0",
-				piVersion: "0.80.6",
+				piVersion: "0.81.1",
 				os: "linux",
 				arch: "x64",
 				binaryChecksum: CHECKSUM,
@@ -90,7 +90,7 @@ describe("redacted diagnostics", () => {
 				supportedApis: ["openai-responses", "openai-codex-responses"],
 			},
 			adaptor: { version: "0.0.0" },
-			pi: { version: "0.80.6" },
+			pi: { version: "0.81.1" },
 			runtime: { os: "linux", arch: "x64" },
 			bridge: {
 				bridgeProtocolVersion: 3,

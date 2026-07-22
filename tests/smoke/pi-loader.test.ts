@@ -8,7 +8,7 @@ const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..")
 const piCli = resolve(repositoryRoot, "node_modules/@earendil-works/pi-coding-agent/dist/cli.js");
 
 describe("Pi extension loading", () => {
-	test("loads the extension through Pi 0.80.6 without network or credentials", async () => {
+	test("loads the extension through Pi 0.81.1 without network or credentials", async () => {
 		const piHome = await mkdtemp(resolve(tmpdir(), "pi-codex-adaptor-smoke-"));
 
 		try {

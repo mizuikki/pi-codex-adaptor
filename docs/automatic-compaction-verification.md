@@ -6,7 +6,7 @@ provider output.
 
 ## Locked dependency graph
 
-The adaptor's `package.json` and `bun.lock` pin the Pi packages to `0.80.6`. Run from the repository:
+The adaptor's `package.json` and `bun.lock` pin the Pi packages to `0.81.1`. Run from the repository:
 
 ```sh
 bun test tests/integration/automatic-compaction-continuation.test.ts
@@ -40,25 +40,36 @@ bun test tests/integration/compaction-failure-ownership.test.ts
 bun test tests/integration/automatic-compaction-continuation.test.ts
 ```
 
-## Exact local host
+## Synchronized local host
 
-The local host verification target was checked with:
+The synchronized Pi `0.81.1` local fork is verified in an isolated consumer. The harness archives the
+selected commit, installs dependencies with lifecycle scripts disabled, builds the necessary `tui`, `ai`,
+`agent`, and `coding-agent` workspaces, packs those tarballs into a temporary adaptor copy, confirms
+that all four package imports resolve inside that copy, and runs loader plus focused request and
+compaction suites. Pi intentionally omits generated model JSON from Git, so the harness copies the
+already-generated data from the selected checkout and validates it against the archived source with Pi's
+offline build. It does not reuse this checkout's `node_modules` or `bun.lock` resolutions, or query
+model catalogs or providers.
 
 ```sh
-PI_HOST_CHECKOUT=/path/to/pi
-git -C "$PI_HOST_CHECKOUT" rev-parse HEAD
-git -C "$PI_HOST_CHECKOUT" rev-parse v0.80.10
-(cd "$PI_HOST_CHECKOUT" && bun test packages/coding-agent/test/extensions-runner.test.ts)
+SYNC_PI_DIR=/path/to/pi
+SYNC_PI_COMMIT=ae166c1366239363ccc1cab1906f8a5b4e07c6f0
+bun run test:pi-fork -- --pi-dir "$SYNC_PI_DIR" --pi-ref "$SYNC_PI_COMMIT"
 ```
 
-The recorded local host commit is
-`01aade936f90d64cc5ab5fbfb3269ea3a72e3c7a`; the upstream tag resolves to
-`8dc78834cde4e329284cf505f9e3f99763df5529`. The host commit is not the tag. The host runner tests
-verify public hook sequencing and swallowed-hook-error behavior; the focused host ownership tests
-passed, while the complete host runner file currently has four unrelated extension-order assertions
-failing at this post-tag commit. The adaptor integration test runs against the locked dependency
-graph because the package imports the pinned `0.80.6` dependency surface. Results from these two
-environments are reported separately.
+The recorded synchronized commit is `ae166c1366239363ccc1cab1906f8a5b4e07c6f0`. The harness prints
+that resolved commit and the SHA-256 of every packed Pi workspace tarball as the compatibility proof.
+The Pi `0.81.1` attribution contract supplies the same non-empty session id, explicit `agent`,
+`compaction_summary`, or `branch_summary` origin, and request-scoped abort signal to the provider hook.
+The adaptor accepts authenticated auxiliary requests unchanged and only applies automatic checkpoint
+replay to normal agent requests.
+
+## Historical 0.80.6 host inspection
+
+The earlier local-host observation used commit `01aade936f90d64cc5ab5fbfb3269ea3a72e3c7a`; the
+upstream `v0.80.10` tag then resolved to `8dc78834cde4e329284cf505f9e3f99763df5529`. This historical
+host was post-tag and lacked the complete auxiliary request attribution contract. Its focused runner
+checks and separate extension-order failures are not evidence for the locked `0.81.1` graph.
 
 ## Observable residuals
 
