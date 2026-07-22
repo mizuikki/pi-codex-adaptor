@@ -216,7 +216,11 @@ export class SettingsOverlay {
 	handleInput(data: string): void {
 		if (this.#disposed) return;
 		const effect = this.#model.handleKey(data);
-		void this.#applyEffect(effect);
+		void this.#applyEffect(effect).catch(() => {
+			if (!this.#disposed) {
+				this.#model.markError("Codex settings action could not be completed", "write-error");
+			}
+		});
 	}
 
 	invalidate(): void {}

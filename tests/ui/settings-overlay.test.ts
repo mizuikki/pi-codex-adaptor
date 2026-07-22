@@ -575,6 +575,26 @@ describe("settings overlay Pi dialog handoff", () => {
 		expect(invalid.model.state).toBe("validation-error");
 	});
 
+	test("restores a live overlay after a rejected dialog", async () => {
+		const events: string[] = [];
+		const { model, overlay } = createOverlayForDialog({
+			dialog: async () => {
+				events.push("input");
+				throw new Error("dialog fixture rejection");
+			},
+		});
+		overlay.attachOverlayHandle(createOverlayHandle(events));
+		for (let index = 0; index < 3; index += 1) model.moveFocus(1);
+
+		overlay.handleInput("\r");
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(events).toEqual(["hide", "input", "show", "focus"]);
+		expect(model.draft.activation.providers).toEqual(["openai-codex"]);
+		expect(model.state).toBe("write-error");
+		expect(model.message).toBe("[error] Codex settings action could not be completed");
+	});
+
 	test("does not restore a disposed overlay or apply a pending dialog value", async () => {
 		let resolveInput: ((value: boolean | string | undefined) => void) | undefined;
 		const pending = new Promise<boolean | string | undefined>((resolve) => {
