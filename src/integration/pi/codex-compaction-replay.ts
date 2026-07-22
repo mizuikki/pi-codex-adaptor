@@ -5,7 +5,7 @@ import type {
 	ExtensionContext,
 	SessionEntry,
 } from "@earendil-works/pi-coding-agent";
-import { sessionEntryToContextMessages } from "@earendil-works/pi-coding-agent";
+import { convertToLlm, sessionEntryToContextMessages } from "@earendil-works/pi-coding-agent";
 
 import { type CodexRuntime, remoteCompactionV2Context } from "../../application/codex-runtime.ts";
 import {
@@ -505,8 +505,8 @@ function projectProviderEntries(
 	entries: readonly SessionEntry[],
 ): readonly StructuredResponseItem[] {
 	// Once an automatic snapshot supersedes a manual one, buildCodexRequest no longer
-	// canonicalizes Pi's older compaction marker. Match that raw provider projection;
-	// the automatic checkpoint output replaces the covered prefix after validation.
+	// canonicalizes Pi's older compaction marker. Match the model-facing projection
+	// after Pi converts that marker to a user message, then replace the covered prefix.
 	return projectEntries(entries, false);
 }
 
@@ -517,14 +517,12 @@ function projectEntries(
 	const items: StructuredResponseItem[] = [];
 	for (const entry of entries) {
 		if (entry.type === "custom") continue;
-		if (entry.type === "compaction") {
-			if (replayManualCompaction) {
-				const details = parseCodexCompactionDetails(entry.details);
-				if (details?.version === 2) items.push(...details.output.map(cloneStructuredValue));
-			}
+		if (entry.type === "compaction" && replayManualCompaction) {
+			const details = parseCodexCompactionDetails(entry.details);
+			if (details?.version === 2) items.push(...details.output.map(cloneStructuredValue));
 			continue;
 		}
-		const projected = responseItemsFromMessages(sessionEntryToContextMessages(entry));
+		const projected = responseItemsFromMessages(convertToLlm(sessionEntryToContextMessages(entry)));
 		for (const item of projected) {
 			if (!isStructuredJsonValue(item) || !isSupportedStructuredResponseItem(item)) {
 				throw new Error(REPLAY_ERROR);

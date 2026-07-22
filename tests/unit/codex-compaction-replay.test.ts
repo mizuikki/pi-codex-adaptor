@@ -3,6 +3,7 @@ import type { Context, Model } from "@earendil-works/pi-ai";
 import {
 	type BeforeProviderRequestEvent,
 	buildContextEntries as buildPiContextEntries,
+	convertToLlm,
 	type ExtensionContext,
 	type SessionEntry,
 	sessionEntryToContextMessages,
@@ -445,7 +446,9 @@ function harness(options: { session?: SessionFixture } = {}): Harness {
 				model,
 				{
 					systemPrompt: "synthetic system",
-					messages: session.messages(includeLiveTail),
+					messages: convertToLlm(
+						session.messages(includeLiveTail) as Parameters<typeof convertToLlm>[0],
+					),
 					tools: [],
 				} as unknown as Context,
 				{
