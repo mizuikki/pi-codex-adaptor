@@ -12,7 +12,7 @@ The repository skeleton is developed with:
 | Node.js development runtime | `24.18.0` |
 | npm CLI | `12.0.1` |
 | Rust | `1.95.0` |
-| Pi packages | `0.80.6` |
+| Pi packages | `0.81.1` |
 | TypeBox | `1.3.6` |
 
 Before the first release, installation and loading will be tested on the candidate Node.js floor,

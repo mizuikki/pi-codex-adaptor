@@ -59,7 +59,8 @@
     "release": "bun scripts/publish-package.ts",
     "check:architecture": "bun scripts/check-architecture.ts",
     "test:integration": "bun test tests/integration",
-    "test:smoke": "bun test tests/smoke"
+    "test:smoke": "bun test tests/smoke",
+    "test:pi-fork": "bun scripts/test-pi-fork.ts"
   },
   "peerDependencies": {
     "@earendil-works/pi-agent-core": "*",
@@ -70,10 +71,10 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.3",
-    "@earendil-works/pi-agent-core": "0.80.6",
-    "@earendil-works/pi-ai": "0.80.6",
-    "@earendil-works/pi-coding-agent": "0.80.6",
-    "@earendil-works/pi-tui": "0.80.6",
+    "@earendil-works/pi-agent-core": "0.81.1",
+    "@earendil-works/pi-ai": "0.81.1",
+    "@earendil-works/pi-coding-agent": "0.81.1",
+    "@earendil-works/pi-tui": "0.81.1",
     "@openai/codex": "0.144.3",
     "@openai/codex-sdk": "0.144.3",
     "@types/bun": "1.3.14",

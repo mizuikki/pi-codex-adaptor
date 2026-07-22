@@ -11,7 +11,7 @@ import {
 	streamSimpleOpenAICodexResponses,
 	streamSimpleOpenAIResponses,
 } from "@earendil-works/pi-ai/compat";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ProviderConfig } from "@earendil-works/pi-coding-agent";
 
 import type { CodexRuntime } from "../../application/codex-runtime.ts";
 import { CodexCompactionStore } from "../../application/compaction.ts";
@@ -35,6 +35,8 @@ export type StreamSimpleDispatcher = (
 	context: Context,
 	options?: SimpleStreamOptions,
 ) => AssistantMessageEventStream;
+
+type LegacyProviderRegistration = (providerId: string, config: ProviderConfig) => void;
 
 export function createCodexProviderDispatchers(
 	runtime: CodexRuntime,
@@ -64,7 +66,7 @@ export function createCodexProviderDispatchers(
 }
 
 export function registerCodexProviderRoutes(
-	registerProvider: ExtensionAPI["registerProvider"],
+	registerProvider: LegacyProviderRegistration,
 	handlers: {
 		readonly codexResponses: StreamSimpleDispatcher;
 		readonly openAiResponses: StreamSimpleDispatcher;
@@ -87,8 +89,8 @@ export function registerCodexProviderRoutes(
 }
 
 export function reconcileCodexProviderRoutes(
-	registerProvider: ExtensionAPI["registerProvider"],
-	unregisterProvider: ExtensionAPI["unregisterProvider"] | undefined,
+	registerProvider: LegacyProviderRegistration,
+	unregisterProvider: ((providerId: string) => void) | undefined,
 	handlers: {
 		readonly codexResponses: StreamSimpleDispatcher;
 		readonly openAiResponses: StreamSimpleDispatcher;

@@ -32,14 +32,14 @@ rule, and opaque `ResponseItem` handling; Pi remains the session owner. Bridge p
 Pi's stable session id as transient context so native code can derive the Remote V2 session, window,
 and turn request metadata without importing the complete official session implementation.
 
-The locked Pi compatibility floor is the `0.80.6` package graph recorded in `package.json` and
-`bun.lock`. Public SDK and extension-runner checks were also inspected against the exact local host
-commit `01aade936f90d64cc5ab5fbfb3269ea3a72e3c7a`; that commit is a post-tag host and must not be
-reported as the upstream `v0.80.10` tag (`8dc78834cde4e329284cf505f9e3f99763df5529`). The
-provider-hook, public session-tree, append-boundary, and response-item conversion assertions are
-maintained in the adaptor's integration and contract tests; the local-host command and result are
-recorded in `docs/automatic-compaction-verification.md`. No Pi source or Codex vendor file is
-modified by this feature.
+The locked Pi compatibility baseline is the `0.81.1` package graph recorded in `package.json` and
+`bun.lock`. The synchronized local-fork proof archives commit
+`ae166c1366239363ccc1cab1906f8a5b4e07c6f0`, packs the four consumed Pi workspaces, and validates
+them from an isolated adaptor copy. Provider-hook, public session-tree, append-boundary, auxiliary
+request attribution, and response-item conversion assertions are maintained in the adaptor's focused
+integration and contract tests; the exact local-fork command and result are recorded in
+`docs/automatic-compaction-verification.md`. The prior `0.80.6` host observation remains historical
+in that verification record. No Pi source or Codex vendor file is modified by this feature.
 
 An upstream baseline change is always a dedicated pull request. It must update source identity, Rust
 toolchain, official conformance packages, Cargo dependency set, schemas, fixtures, licenses,
