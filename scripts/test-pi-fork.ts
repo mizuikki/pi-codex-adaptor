@@ -225,12 +225,12 @@ async function findTarball(tarballDirectory: string, packageName: string): Promi
 
 async function commandOutput(command: string, args: readonly string[]): Promise<string> {
 	const child = Bun.spawn([command, ...args], { stderr: "pipe", stdout: "pipe" });
-	const [exitCode, stdout, stderr] = await Promise.all([
+	const [exitCode, stdout] = await Promise.all([
 		child.exited,
 		new Response(child.stdout).text(),
 		new Response(child.stderr).text(),
 	]);
-	if (exitCode !== 0) throw new Error(`${command} failed: ${stderr.trim()}`);
+	if (exitCode !== 0) throw new Error(`${basename(command)} exited with status ${exitCode}`);
 	return stdout.trim();
 }
 
@@ -242,11 +242,11 @@ async function run(
 	const spawnOptions = {
 		...(options.cwd === undefined ? {} : { cwd: options.cwd }),
 		...(options.env === undefined ? {} : { env: options.env }),
-		stderr: "inherit",
+		stderr: "pipe",
 		stdout: "inherit",
 	} as const;
 	const child = Bun.spawn([command, ...args], spawnOptions);
-	const exitCode = await child.exited;
+	const [exitCode] = await Promise.all([child.exited, new Response(child.stderr).text()]);
 	if (exitCode !== 0) throw new Error(`${basename(command)} exited with status ${exitCode}`);
 }
 
