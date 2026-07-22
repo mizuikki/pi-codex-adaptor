@@ -43,10 +43,13 @@ bun test tests/integration/automatic-compaction-continuation.test.ts
 ## Synchronized local host
 
 The synchronized Pi `0.81.1` local fork is verified in an isolated consumer. The harness archives the
-selected commit, installs and builds its dependencies without lifecycle scripts, packs the `tui`, `ai`,
-`agent`, and `coding-agent` workspaces, installs those tarballs into a temporary adaptor copy, confirms
+selected commit, installs dependencies with lifecycle scripts disabled, builds the necessary `tui`, `ai`,
+`agent`, and `coding-agent` workspaces, packs those tarballs into a temporary adaptor copy, confirms
 that all four package imports resolve inside that copy, and runs loader plus focused request and
-compaction suites. It does not reuse this checkout's `node_modules` or `bun.lock` resolutions.
+compaction suites. Pi intentionally omits generated model JSON from Git, so the harness copies the
+already-generated data from the selected checkout and validates it against the archived source with Pi's
+offline build. It does not reuse this checkout's `node_modules` or `bun.lock` resolutions, or query
+model catalogs or providers.
 
 ```sh
 SYNC_PI_DIR=/path/to/pi

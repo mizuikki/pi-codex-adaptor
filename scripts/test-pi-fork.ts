@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -45,6 +45,7 @@ async function main(): Promise<void> {
 		const tarballDirectory = resolve(tempRoot, "tarballs");
 		const projectDirectory = resolve(tempRoot, "project");
 		await archivePiFork(options.piDir, forkCommit, forkDirectory, tempRoot);
+		await copyGeneratedPiModelData(options.piDir, forkDirectory);
 		await buildAndPackPi(forkDirectory, tarballDirectory);
 		await copyProject(projectDirectory, tempRoot);
 		await installForkConsumer(projectDirectory, tarballDirectory);
@@ -120,12 +121,22 @@ async function archivePiFork(
 	await run("tar", ["-xf", archive, "-C", forkDirectory]);
 }
 
+async function copyGeneratedPiModelData(piDir: string, forkDirectory: string): Promise<void> {
+	// Pi intentionally omits generated model JSON from Git. Copy the local generated data, then
+	// build:offline validates that it matches the archived commit without querying provider catalogs.
+	await cp(
+		resolve(piDir, "packages/ai/src/providers/data"),
+		resolve(forkDirectory, "packages/ai/src/providers/data"),
+		{ recursive: true },
+	);
+}
+
 async function buildAndPackPi(forkDirectory: string, tarballDirectory: string): Promise<void> {
 	console.log("Installing and packing the archived Pi workspaces.");
 	await mkdir(tarballDirectory, { recursive: true });
 	await run("npm", ["ci", "--ignore-scripts", "--prefix", forkDirectory]);
 	await run("npm", ["run", "build", "--prefix", resolve(forkDirectory, "packages/tui")]);
-	await run("npm", ["run", "build", "--prefix", resolve(forkDirectory, "packages/ai")]);
+	await run("npm", ["run", "build:offline", "--prefix", resolve(forkDirectory, "packages/ai")]);
 	await run("npm", ["run", "build", "--prefix", resolve(forkDirectory, "packages/agent")]);
 	await run("npm", ["run", "build", "--prefix", resolve(forkDirectory, "packages/coding-agent")]);
 
