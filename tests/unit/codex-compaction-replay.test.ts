@@ -24,13 +24,17 @@ import type { ConfigurationService } from "../../src/application/configuration.t
 import { ProviderActivationPolicy } from "../../src/application/provider-activation.ts";
 import { ResolveEffectiveCapabilities } from "../../src/application/resolve-effective-capabilities.ts";
 import { createDefaultConfig } from "../../src/domain/config.ts";
-import { registerCodexCompactionReplay } from "../../src/integration/pi/codex-compaction-replay.ts";
+import {
+	providerCompactionIdentityFromValues,
+	registerCodexCompactionReplay,
+} from "../../src/integration/pi/codex-compaction-replay.ts";
 import {
 	createCodexStreamSimple,
 	encodeResponseItemSignature,
 } from "../../src/integration/pi/codex-provider.ts";
 import { CodexProviderRequestGuard } from "../../src/integration/pi/codex-provider-request-guard.ts";
 import type { CodexToolProfileCoordinator } from "../../src/integration/pi/codex-tool-profile.ts";
+import { createProviderConnection } from "../../src/integration/pi/provider-connection.ts";
 
 const OPAQUE = "synthetic-opaque-content";
 const SESSION_ID = "session-replay-fixture";
@@ -164,8 +168,10 @@ class FixtureRuntime implements CodexRuntime {
 class SessionFixture {
 	readonly entries: SessionEntry[] = [];
 	readonly byId = new Map<string, SessionEntry>();
+	#customEntryIndex = 0;
 	leafId: string | null = null;
 	appendThrows = false;
+	contextTokens = 95_001;
 
 	constructor() {
 		this.appendMessage("user-1", {
@@ -208,9 +214,10 @@ class SessionFixture {
 	}
 
 	appendEntry(customType: string, data: unknown): void {
+		this.#customEntryIndex += 1;
 		const entry: SessionEntry = {
 			type: "custom",
-			id: "auto-entry-1",
+			id: `auto-entry-${this.#customEntryIndex}`,
 			parentId: this.leafId,
 			timestamp: new Date(0).toISOString(),
 			customType,
@@ -240,6 +247,41 @@ class SessionFixture {
 
 	appendUser(id: string, content: string): void {
 		this.appendMessage(id, { role: "user", content, timestamp: 4 });
+	}
+
+	appendToolContinuation(): void {
+		this.appendMessage("assistant-after-auto", {
+			role: "assistant",
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			content: [
+				{
+					type: "toolCall",
+					id: "call-after-auto",
+					name: "fixture_tool",
+					arguments: { value: "after-auto" },
+				},
+			],
+			usage: {
+				input: 1,
+				output: 1,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 2,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "toolUse",
+			timestamp: 5,
+		});
+		this.appendMessage("tool-after-auto", {
+			role: "toolResult",
+			toolCallId: "call-after-auto",
+			toolName: "fixture_tool",
+			content: [{ type: "text", text: "fixture continuation output" }],
+			isError: false,
+			timestamp: 6,
+		});
 	}
 
 	branch(): SessionEntry[] {
@@ -316,7 +358,11 @@ function makeContext(session: SessionFixture, signal: AbortSignal): ExtensionCon
 			getLeafId: () => session.leafId,
 			getLeafEntry: () => (session.leafId === null ? undefined : session.byId.get(session.leafId)),
 		},
-		getContextUsage: () => ({ tokens: 95_001, contextWindow: 100_000, percent: 95 }),
+		getContextUsage: () => ({
+			tokens: session.contextTokens,
+			contextWindow: 100_000,
+			percent: session.contextTokens / 1_000,
+		}),
 		getSystemPrompt: () => "synthetic system",
 		modelRegistry: {
 			getApiKeyAndHeaders: async () => ({ ok: true, apiKey: fixtureToken(), headers: {} }),
@@ -566,6 +612,79 @@ describe("active-branch Codex compaction replay", () => {
 		expect(value.runtime.compactCalls).toBe(1);
 		expect(value.runtime.responseCalls).toBe(2);
 		expect((value.runtime.responseRequests[1] as { input: unknown[] }).input).toEqual([
+			{
+				type: "compaction",
+				id: "synthetic-compaction-item",
+				encrypted_content: OPAQUE,
+				internal_chat_message_metadata_passthrough: { turn_id: "synthetic-turn" },
+			},
+		]);
+	});
+
+	test("continues automatic compaction after an earlier manual compaction and reloads it", async () => {
+		const session = new SessionFixture();
+		const value = harness({ session });
+		const connection = createProviderConnection(model, { apiKey: fixtureToken() });
+		const identity = providerCompactionIdentityFromValues({
+			sessionId: SESSION_ID,
+			model,
+			connection,
+		});
+		if (identity === undefined) throw new Error("fixture identity unavailable");
+		const manualOutput = [{ type: "compaction", encrypted_content: "synthetic-manual-opaque" }];
+		const manualDetails = createCodexCompactionDetails(identity, manualOutput);
+		session.appendCompaction(manualDetails);
+		session.appendUser("user-after-manual", "continue after the manual checkpoint");
+		value.store.setManual(
+			SESSION_ID,
+			"Synthetic manual compaction",
+			manualDetails,
+			"manual-entry-1",
+		);
+
+		const first = await value.run(true);
+		expect(first.at(-1)).toMatchObject({ type: "done" });
+		expect(value.runtime.compactCalls).toBe(1);
+		expect(value.store.getForSession(SESSION_ID)?.source).toBe("automatic");
+
+		session.appendToolContinuation();
+		const second = await value.run(false);
+
+		expect(second.at(-1)).toMatchObject({ type: "done" });
+		expect(value.runtime.compactCalls).toBe(2);
+		expect(value.runtime.responseCalls).toBe(2);
+		expect((value.runtime.responseRequests[1] as { input: unknown[] }).input).toEqual([
+			{
+				type: "compaction",
+				id: "synthetic-compaction-item",
+				encrypted_content: OPAQUE,
+				internal_chat_message_metadata_passthrough: { turn_id: "synthetic-turn" },
+			},
+			{
+				type: "function_call",
+				name: "fixture_tool",
+				arguments: '{"value":"after-auto"}',
+				call_id: "call-after-auto",
+			},
+			{
+				type: "function_call_output",
+				call_id: "call-after-auto",
+				output: "fixture continuation output",
+			},
+		]);
+
+		const automatic = value.store.getForSession(SESSION_ID);
+		if (automatic?.source !== "automatic") {
+			throw new Error("automatic checkpoint was not installed");
+		}
+		const reloaded = harness({ session });
+		reloaded.store.setAutomatic(SESSION_ID, automatic.checkpoint, automatic.entryId);
+		session.contextTokens = 1_000;
+		const resumed = await reloaded.run(false);
+
+		expect(resumed.at(-1)).toMatchObject({ type: "done" });
+		expect(reloaded.runtime.compactCalls).toBe(0);
+		expect((reloaded.runtime.responseRequests[0] as { input: unknown[] }).input).toEqual([
 			{
 				type: "compaction",
 				id: "synthetic-compaction-item",

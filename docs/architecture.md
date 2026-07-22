@@ -49,7 +49,9 @@ ids, projects `buildContextEntries()` through Pi's exported `sessionEntryToConte
 structurally matches the resulting input to the exact provider payload. It replays the latest
 provider-bound opaque checkpoint or performs one native compact call before returning the rewritten
 payload. The live tail is cloned from the hook payload, so in-flight provider items that Pi has not
-persisted are not reconstructed from session entries.
+persisted are not reconstructed from session entries. When an automatic checkpoint supersedes an
+older manual checkpoint, replay matches the provider's raw projection, where Pi's manual display
+marker is omitted, before replacing the covered prefix with the newer automatic output.
 
 Automatic checkpoints are Pi custom entries. `appendEntry` advances Pi's active branch before it
 reports persistence errors, so the adaptor verifies the new leaf and only then installs its in-memory
