@@ -7,6 +7,11 @@ At 100 columns or more, navigation and settings use two columns. From 60 through
 become a top tab row over a single settings column. Below 60 columns, section selection and content
 use separate screens. Resize preserves the section, focus, scroll position, and draft.
 
+When a setting opens a Pi-owned confirmation or text-input dialog, the settings overlay temporarily
+hides so the host editor control remains visible. After submission or cancellation, the same live
+overlay is restored and focused with its draft and navigation state intact. Disposing the overlay
+aborts the dialog handoff and does not restore it.
+
 Settings are edited as a draft and saved as one validated transaction. `Ctrl+S` validates and writes
 atomically. Leaving with unsaved changes offers Continue editing, Discard changes, and Save, with
 Continue editing selected by default. `R` opens an explicit reset-to-defaults confirmation with Cancel
