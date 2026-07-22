@@ -4237,6 +4237,22 @@ mod tests {
         if cfg!(windows) { 15_000 } else { 5_000 }
     }
 
+    async fn wait_for_file_contents(path: &Path, expected: &str) {
+        tokio::time::timeout(Duration::from_millis(process_test_timeout_ms()), async {
+            loop {
+                if matches!(
+                    tokio::fs::read_to_string(path).await,
+                    Ok(contents) if contents == expected
+                ) {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("file should contain the expected contents before timeout");
+    }
+
     async fn run_server(input: &str) -> Vec<ServerMessage> {
         let (mut input_client, input_server) = tokio::io::duplex(MAX_FRAME_BYTES + 2);
         let (output_server, mut output_client) = tokio::io::duplex(MAX_FRAME_BYTES + 2);
@@ -8031,20 +8047,7 @@ mod tests {
             .expect("join")
             .expect("session write should complete");
         assert_eq!(result["sessionId"], session_id);
-        tokio::time::timeout(Duration::from_millis(process_test_timeout_ms()), async {
-            loop {
-                if marker.exists() {
-                    break;
-                }
-                tokio::time::sleep(Duration::from_millis(20)).await;
-            }
-        })
-        .await
-        .expect("approved session_write should mutate the process");
-        let contents = tokio::fs::read_to_string(&marker)
-            .await
-            .expect("marker should be readable");
-        assert_eq!(contents, secret);
+        wait_for_file_contents(&marker, secret).await;
         sessions
             .remove(session_id.parse().expect("numeric session"))
             .await

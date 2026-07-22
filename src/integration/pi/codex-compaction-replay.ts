@@ -5,7 +5,7 @@ import type {
 	ExtensionContext,
 	SessionEntry,
 } from "@earendil-works/pi-coding-agent";
-import { sessionEntryToContextMessages } from "@earendil-works/pi-coding-agent";
+import { convertToLlm, sessionEntryToContextMessages } from "@earendil-works/pi-coding-agent";
 
 import { type CodexRuntime, remoteCompactionV2Context } from "../../application/codex-runtime.ts";
 import {
@@ -438,14 +438,14 @@ function segmentProviderInput(options: {
 		readonly retainedTail?: readonly StructuredResponseItem[];
 	}> = [];
 	if (checkpoint === undefined) {
-		candidates.push({ prefix: projectEntries(contextEntries), output: [] });
+		candidates.push({ prefix: projectCanonicalEntries(contextEntries), output: [] });
 	} else if (checkpoint.source === "automatic" && checkpoint.checkpoint !== undefined) {
 		const coveredEntryId = checkpoint.checkpoint.coveredEntryId;
 		const coveredIndex = contextEntries.findIndex((entry) => entry.id === coveredEntryId);
 		if (coveredIndex < 0) return undefined;
-		const after = projectEntries(contextEntries.slice(coveredIndex + 1));
+		const after = projectProviderEntries(contextEntries.slice(coveredIndex + 1));
 		candidates.push({
-			prefix: projectEntries(contextEntries.slice(0, coveredIndex + 1)),
+			prefix: projectProviderEntries(contextEntries.slice(0, coveredIndex + 1)),
 			coveredEntryId,
 			output: checkpoint.output,
 		});
@@ -458,7 +458,7 @@ function segmentProviderInput(options: {
 	} else {
 		const index = contextEntries.findIndex((entry) => entry.id === checkpoint.entry.id);
 		if (index < 0) return undefined;
-		const after = projectEntries(contextEntries.slice(index + 1));
+		const after = projectCanonicalEntries(contextEntries.slice(index + 1));
 		candidates.push({
 			prefix: [...checkpoint.output, ...after],
 			coveredEntryId: checkpoint.entry.id,
@@ -495,16 +495,34 @@ function segmentProviderInput(options: {
 	};
 }
 
-function projectEntries(entries: readonly SessionEntry[]): readonly StructuredResponseItem[] {
+function projectCanonicalEntries(
+	entries: readonly SessionEntry[],
+): readonly StructuredResponseItem[] {
+	return projectEntries(entries, true);
+}
+
+function projectProviderEntries(
+	entries: readonly SessionEntry[],
+): readonly StructuredResponseItem[] {
+	// Once an automatic snapshot supersedes a manual one, buildCodexRequest no longer
+	// canonicalizes Pi's older compaction marker. Match the model-facing projection
+	// after Pi converts that marker to a user message, then replace the covered prefix.
+	return projectEntries(entries, false);
+}
+
+function projectEntries(
+	entries: readonly SessionEntry[],
+	replayManualCompaction: boolean,
+): readonly StructuredResponseItem[] {
 	const items: StructuredResponseItem[] = [];
 	for (const entry of entries) {
 		if (entry.type === "custom") continue;
-		if (entry.type === "compaction") {
+		if (entry.type === "compaction" && replayManualCompaction) {
 			const details = parseCodexCompactionDetails(entry.details);
 			if (details?.version === 2) items.push(...details.output.map(cloneStructuredValue));
 			continue;
 		}
-		const projected = responseItemsFromMessages(sessionEntryToContextMessages(entry));
+		const projected = responseItemsFromMessages(convertToLlm(sessionEntryToContextMessages(entry)));
 		for (const item of projected) {
 			if (!isStructuredJsonValue(item) || !isSupportedStructuredResponseItem(item)) {
 				throw new Error(REPLAY_ERROR);
