@@ -1,7 +1,11 @@
 import { describe, expect, test } from "bun:test";
+import type { OverlayHandle } from "@earendil-works/pi-tui";
 import { CodexCompactionCoordinator } from "../../src/application/compaction.ts";
 import type { ConfigurationService } from "../../src/application/configuration.ts";
-import type { DiagnosticsSnapshot } from "../../src/application/diagnostics.ts";
+import type {
+	DiagnosticsExporter,
+	DiagnosticsSnapshot,
+} from "../../src/application/diagnostics.ts";
 import type { ResolveEffectiveCapabilities } from "../../src/application/resolve-effective-capabilities.ts";
 import { type CodexConfig, createDefaultConfig } from "../../src/domain/config.ts";
 import { SettingsModel } from "../../src/ui/terminal/settings-model.ts";
@@ -45,13 +49,21 @@ function createService(config: CodexConfig = createDefaultConfig()) {
 
 function createCtx(options?: {
 	confirm?: boolean;
+	input?: string;
 	provider?: string;
 	api?: string;
 	compact?: (options?: { onComplete?: () => void; onError?: (error: Error) => void }) => void;
+	dialog?: (
+		kind: "confirm" | "input",
+		signal: AbortSignal | undefined,
+	) => Promise<boolean | string | undefined>;
+	overlayHandle?: OverlayHandle;
 }) {
 	const notifications: string[] = [];
+	const dialogSignals: AbortSignal[] = [];
 	let compactCalls = 0;
 	let customCalls = 0;
+	let customOverlay: SettingsOverlay | undefined;
 	const ctx = {
 		hasUI: true,
 		mode: "tui",
@@ -79,14 +91,34 @@ function createCtx(options?: {
 			async select() {
 				return undefined;
 			},
-			async confirm() {
-				return options?.confirm ?? false;
+			async confirm(_title: string, _message: string, dialogOptions?: { signal?: AbortSignal }) {
+				dialogSignals.push(dialogOptions?.signal as AbortSignal);
+				const result =
+					options?.dialog === undefined
+						? undefined
+						: await options.dialog("confirm", dialogOptions?.signal);
+				return typeof result === "boolean" ? result : (options?.confirm ?? false);
 			},
-			async input() {
-				return undefined;
+			async input(_title: string, _placeholder?: string, dialogOptions?: { signal?: AbortSignal }) {
+				dialogSignals.push(dialogOptions?.signal as AbortSignal);
+				const result =
+					options?.dialog === undefined
+						? undefined
+						: await options.dialog("input", dialogOptions?.signal);
+				return typeof result === "string" ? result : options?.input;
 			},
-			async custom() {
+			async custom(
+				factory: (
+					tui: undefined,
+					theme: undefined,
+					keybindings: undefined,
+					done: (result: undefined) => void,
+				) => SettingsOverlay,
+				customOptions?: { onHandle?: (handle: OverlayHandle) => void },
+			) {
 				customCalls += 1;
+				customOverlay = factory(undefined, undefined, undefined, () => {});
+				if (options?.overlayHandle !== undefined) customOptions?.onHandle?.(options.overlayHandle);
 				return undefined;
 			},
 		},
@@ -97,12 +129,53 @@ function createCtx(options?: {
 		get customCalls() {
 			return customCalls;
 		},
+		get customOverlay() {
+			return customOverlay;
+		},
+		dialogSignals,
 	};
 	return ctx as unknown as ConstructorParameters<typeof SettingsOverlay>[2] & {
 		notifications: string[];
 		compactCalls: number;
 		customCalls: number;
+		customOverlay: SettingsOverlay | undefined;
+		dialogSignals: AbortSignal[];
 	};
+}
+
+function createOverlayHandle(events: string[]): OverlayHandle {
+	return {
+		hide() {},
+		setHidden(hidden: boolean) {
+			events.push(hidden ? "hide" : "show");
+		},
+		isHidden() {
+			return false;
+		},
+		focus() {
+			events.push("focus");
+		},
+		unfocus() {},
+		isFocused() {
+			return false;
+		},
+	};
+}
+
+function createOverlayForDialog(
+	options: Parameters<typeof createCtx>[0] = {},
+	exporter?: DiagnosticsExporter,
+) {
+	const service = createService();
+	const ctx = createCtx(options);
+	const model = new SettingsModel(createDefaultConfig(), {
+		baseline: "0.144.3",
+		provider: "openai-codex",
+		model: "test-model",
+		bridge: "protocol v4",
+	});
+	const overlay = new SettingsOverlay(model, service, ctx, diagnostics(), exporter, () => {});
+	return { ctx, model, overlay };
 }
 
 describe("settings overlay disposal", () => {
@@ -384,5 +457,145 @@ describe("settings overlay disposal", () => {
 
 		expect(model.state).toBe("write-error");
 		expect(model.rows().find((row) => row.id === "route")?.value).toBe(inactive);
+	});
+});
+
+describe("settings overlay Pi dialog handoff", () => {
+	test("attaches the custom overlay handle to its matching settings overlay", async () => {
+		const events: string[] = [];
+		const ctx = createCtx({
+			overlayHandle: createOverlayHandle(events),
+			input: "provider-a",
+		});
+
+		await openSettingsOverlay(ctx, createService());
+		ctx.customOverlay?.handleInput("j");
+		ctx.customOverlay?.handleInput("j");
+		ctx.customOverlay?.handleInput("j");
+		ctx.customOverlay?.handleInput("\r");
+		await Promise.resolve();
+		await Promise.resolve();
+
+		expect(events).toEqual(["hide", "show", "focus"]);
+		expect(ctx.dialogSignals).toHaveLength(1);
+		expect(ctx.dialogSignals[0]?.aborted).toBe(false);
+	});
+
+	test.each([
+		{
+			name: "manual compaction confirmation",
+			response: true,
+			activate: (model: SettingsModel, overlay: SettingsOverlay) => {
+				model.moveCategory(1);
+				model.moveCategory(1);
+				overlay.handleInput("c");
+			},
+		},
+		{
+			name: "auto compact token limit input",
+			response: "128000",
+			activate: (model: SettingsModel, overlay: SettingsOverlay) => {
+				model.moveCategory(1);
+				model.moveCategory(1);
+				for (let index = 0; index < 5; index += 1) model.moveFocus(1);
+				overlay.handleInput("\r");
+			},
+		},
+		{
+			name: "active provider ids input",
+			response: "provider-a, provider-b",
+			activate: (model: SettingsModel, overlay: SettingsOverlay) => {
+				for (let index = 0; index < 3; index += 1) model.moveFocus(1);
+				overlay.handleInput("\r");
+			},
+		},
+	])("hides and restores around $name", async ({ response, activate }) => {
+		const events: string[] = [];
+		const { ctx, model, overlay } = createOverlayForDialog({
+			dialog: async (kind, signal) => {
+				events.push(kind);
+				expect(signal?.aborted).toBe(false);
+				return response;
+			},
+		});
+		overlay.attachOverlayHandle(createOverlayHandle(events));
+
+		activate(model, overlay);
+		await Promise.resolve();
+		await Promise.resolve();
+
+		expect(events).toEqual(["hide", response === true ? "confirm" : "input", "show", "focus"]);
+		expect(ctx.dialogSignals).toHaveLength(1);
+		expect(ctx.dialogSignals[0]).toBeInstanceOf(AbortSignal);
+	});
+
+	test("hands diagnostics dialogs off independently", async () => {
+		const events: string[] = [];
+		const responses = [true, "/diagnostics.json"];
+		const exporter: DiagnosticsExporter = {
+			async export() {
+				return { path: "/diagnostics.json", sha256: "0".repeat(64) };
+			},
+		};
+		const { ctx, model, overlay } = createOverlayForDialog(
+			{
+				dialog: async (kind) => {
+					events.push(kind);
+					return responses.shift();
+				},
+			},
+			exporter,
+		);
+		overlay.attachOverlayHandle(createOverlayHandle(events));
+		model.moveCategory(1);
+		model.moveCategory(1);
+		model.moveCategory(1);
+		overlay.handleInput("e");
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(events).toEqual(["hide", "confirm", "show", "focus", "hide", "input", "show", "focus"]);
+		expect(ctx.dialogSignals).toHaveLength(2);
+	});
+
+	test("preserves cancellation, validation, and no-handle behavior", async () => {
+		const cancellation = createOverlayForDialog();
+		for (let index = 0; index < 3; index += 1) cancellation.model.moveFocus(1);
+		cancellation.overlay.handleInput("\r");
+		await Promise.resolve();
+		expect(cancellation.model.draft.activation.providers).toEqual(["openai-codex"]);
+		expect(cancellation.ctx.dialogSignals).toHaveLength(1);
+
+		const invalid = createOverlayForDialog({ input: "0" });
+		invalid.model.moveCategory(1);
+		invalid.model.moveCategory(1);
+		for (let index = 0; index < 5; index += 1) invalid.model.moveFocus(1);
+		invalid.overlay.handleInput("\r");
+		await Promise.resolve();
+		await Promise.resolve();
+		expect(invalid.model.state).toBe("validation-error");
+	});
+
+	test("does not restore a disposed overlay or apply a pending dialog value", async () => {
+		let resolveInput: ((value: boolean | string | undefined) => void) | undefined;
+		const pending = new Promise<boolean | string | undefined>((resolve) => {
+			resolveInput = resolve;
+		});
+		const events: string[] = [];
+		const { ctx, model, overlay } = createOverlayForDialog({
+			dialog: async () => pending,
+		});
+		overlay.attachOverlayHandle(createOverlayHandle(events));
+		for (let index = 0; index < 3; index += 1) model.moveFocus(1);
+		overlay.handleInput("\r");
+		await Promise.resolve();
+		overlay.dispose();
+		resolveInput?.("provider-a");
+		await Promise.resolve();
+		await Promise.resolve();
+
+		expect(events).toEqual(["hide"]);
+		expect(ctx.dialogSignals[0]?.aborted).toBe(true);
+		expect(model.disposed).toBe(true);
+		expect(model.draft.activation.providers).toEqual(["openai-codex"]);
 	});
 });

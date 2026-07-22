@@ -1,5 +1,6 @@
 import { resolve } from "node:path";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import type { OverlayHandle } from "@earendil-works/pi-tui";
 import type { CodexRuntime } from "../../application/codex-runtime.ts";
 import type { CodexCompactionCoordinator } from "../../application/compaction.ts";
 import type { ConfigurationService } from "../../application/configuration.ts";
@@ -95,10 +96,25 @@ export async function openSettingsOverlay(
 					modelAutoCompactTokenLimit: effective.compaction.modelThreshold,
 				}),
 	});
+	let overlay: SettingsOverlay | undefined;
 	await ctx.ui.custom(
-		(_tui, _theme, _keybindings, done) =>
-			new SettingsOverlay(model, service, ctx, snapshot, exporter, done, coordinator, resolver),
-		{ overlay: true },
+		(_tui, _theme, _keybindings, done) => {
+			overlay = new SettingsOverlay(
+				model,
+				service,
+				ctx,
+				snapshot,
+				exporter,
+				done,
+				coordinator,
+				resolver,
+			);
+			return overlay;
+		},
+		{
+			overlay: true,
+			onHandle: (handle) => overlay?.attachOverlayHandle(handle),
+		},
 	);
 }
 
@@ -171,6 +187,7 @@ export class SettingsOverlay {
 	#disposed = false;
 	#taskGeneration = 0;
 	readonly #abortControllers = new Set<AbortController>();
+	#overlayHandle: OverlayHandle | undefined;
 
 	constructor(
 		model: SettingsModel,
@@ -203,6 +220,10 @@ export class SettingsOverlay {
 	}
 
 	invalidate(): void {}
+
+	attachOverlayHandle(handle: OverlayHandle): void {
+		if (!this.#disposed) this.#overlayHandle = handle;
+	}
 
 	dispose(): void {
 		if (this.#disposed) return;
@@ -315,9 +336,12 @@ export class SettingsOverlay {
 				this.#ctx.ui.notify("OpenAI Codex compaction is disabled", "warning");
 				return;
 			}
-			const confirmed = await this.#ctx.ui.confirm(
-				"Compact Codex context",
-				"Compact the current session using the configured OpenAI Codex compaction path?",
+			const confirmed = await this.#withOverlayHidden(() =>
+				this.#ctx.ui.confirm(
+					"Compact Codex context",
+					"Compact the current session using the configured OpenAI Codex compaction path?",
+					{ signal },
+				),
 			);
 			if (this.#disposed || signal.aborted || !confirmed) return;
 			const sessionId = this.#ctx.sessionManager.getSessionId();
@@ -344,7 +368,9 @@ export class SettingsOverlay {
 			const compaction = this.#model.draft.codex.compaction;
 			const current =
 				compaction.mode === "auto" ? String(compaction.autoCompactTokenLimit) : "model";
-			const value = await this.#ctx.ui.input("Auto compact token limit", current);
+			const value = await this.#withOverlayHidden(() =>
+				this.#ctx.ui.input("Auto compact token limit", current, { signal }),
+			);
 			if (this.#disposed || signal.aborted || value === undefined) return;
 			const trimmed = value.trim();
 			if (trimmed === "model") {
@@ -366,7 +392,9 @@ export class SettingsOverlay {
 	async #editProviders(): Promise<void> {
 		await this.#runTask(async (signal) => {
 			const current = this.#model.draft.activation.providers.join(", ");
-			const value = await this.#ctx.ui.input("Active Pi provider ids", current);
+			const value = await this.#withOverlayHidden(() =>
+				this.#ctx.ui.input("Active Pi provider ids", current, { signal }),
+			);
 			if (this.#disposed || signal.aborted || value === undefined) return;
 			const providers = value.split(",").map((provider) => provider.trim());
 			if (
@@ -390,14 +418,20 @@ export class SettingsOverlay {
 				this.#ctx.ui.notify("Diagnostics export is unavailable", "warning");
 				return;
 			}
-			const confirmed = await this.#ctx.ui.confirm(
-				"Export Codex diagnostics",
-				"Export adaptor and bridge metadata only. Messages, credentials, and compaction data are excluded.",
+			const confirmed = await this.#withOverlayHidden(() =>
+				this.#ctx.ui.confirm(
+					"Export Codex diagnostics",
+					"Export adaptor and bridge metadata only. Messages, credentials, and compaction data are excluded.",
+					{ signal },
+				),
 			);
 			if (this.#disposed || signal.aborted || !confirmed) return;
-			const path = await this.#ctx.ui.input(
-				"Diagnostics export path",
-				resolve(this.#ctx.cwd, "pi-codex-adaptor-diagnostics.json"),
+			const path = await this.#withOverlayHidden(() =>
+				this.#ctx.ui.input(
+					"Diagnostics export path",
+					resolve(this.#ctx.cwd, "pi-codex-adaptor-diagnostics.json"),
+					{ signal },
+				),
 			);
 			if (this.#disposed || signal.aborted || path === undefined || path.trim().length === 0) {
 				return;
@@ -429,6 +463,20 @@ export class SettingsOverlay {
 			this.#abortControllers.delete(controller);
 			if (generation !== this.#taskGeneration || this.#disposed) {
 				// Drop late updates after disposal or a newer generation.
+			}
+		}
+	}
+
+	async #withOverlayHidden<T>(prompt: () => Promise<T>): Promise<T> {
+		const handle = this.#overlayHandle;
+		if (handle === undefined) return await prompt();
+		handle.setHidden(true);
+		try {
+			return await prompt();
+		} finally {
+			if (!this.#disposed) {
+				handle.setHidden(false);
+				handle.focus();
 			}
 		}
 	}

@@ -13,6 +13,10 @@ The `/codex` settings overlay, pure application view models, and UI-owned approv
 Resize preserves category, focus, draft, and dialog state. Rendering stays monochrome-safe: no ANSI
 color codes, textual status labels such as `[modified]`, `[ok]`, `[error]`, and `[disabled]`.
 
+Pi-owned confirmation and text-input dialogs temporarily hide the settings overlay, then restore and
+focus the same live overlay after submission or cancellation. Disposal aborts the handoff without
+restoring the overlay.
+
 ## Keyboard
 
 Contextual shortcuts appear in the footer. Full help opens with `?`.
