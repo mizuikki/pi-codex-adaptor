@@ -44,3 +44,17 @@ retry policy. Non-retryable bridge, connection, configuration, capability, and a
 their existing safe messages. The adaptor never retains upstream error details for that mapping and
 never implements a local retry loop; auxiliary compaction and branch-summary callers receive the same
 safe mapping but keep their own host-owned failure handling.
+
+Message projection accepts a complete contiguous Pi message sequence, not one session entry at a
+time. `responseItemsFromMessages()` first pairs tool calls and results and inserts the following
+request-local error output for any unresolved call:
+
+```text
+Tool result was not recorded. The tool may have partially executed; inspect state before retrying.
+```
+
+The normal Responses request, manual compaction input, automatic checkpoint replay, and standalone
+web conversation context are the four current consumers. New consumers must provide a complete
+sequence or define an explicit opaque-checkpoint boundary before projection. The normalizer never
+mutates Pi messages or session JSONL, never replays a tool, and treats interrupted tool side effects
+as unknown. Complete histories pass through without synthetic outputs.

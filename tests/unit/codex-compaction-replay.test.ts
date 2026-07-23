@@ -29,6 +29,7 @@ import {
 	providerCompactionIdentityFromValues,
 	registerCodexCompactionReplay,
 } from "../../src/integration/pi/codex-compaction-replay.ts";
+import { INTERRUPTED_TOOL_RESULT_TEXT } from "../../src/integration/pi/codex-message-normalization.ts";
 import {
 	createCodexStreamSimple,
 	encodeResponseItemSignature,
@@ -285,6 +286,38 @@ class SessionFixture {
 		});
 	}
 
+	appendInterruptedContinuation(): void {
+		this.appendMessage("assistant-interrupted", {
+			role: "assistant",
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			content: [
+				{
+					type: "toolCall",
+					id: "call-interrupted",
+					name: "fixture_tool",
+					arguments: { value: "interrupted" },
+				},
+			],
+			usage: {
+				input: 1,
+				output: 1,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 2,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "toolUse",
+			timestamp: 7,
+		});
+		this.appendMessage("user-after-interruption", {
+			role: "user",
+			content: "resume interrupted work",
+			timestamp: 8,
+		});
+	}
+
 	branch(): SessionEntry[] {
 		const path: SessionEntry[] = [];
 		let current = this.leafId === null ? undefined : this.byId.get(this.leafId);
@@ -514,6 +547,60 @@ test("leaves Pi-native fallback payloads unchanged without an adaptor request re
 });
 
 describe("active-branch Codex compaction replay", () => {
+	test("batches cross-entry call/result pairs without introducing a duplicate output", async () => {
+		const value = harness();
+		value.session.contextTokens = 1_000;
+		const events = await value.run(false);
+
+		expect(events.at(-1)).toMatchObject({ type: "done" });
+		expect(value.runtime.compactCalls).toBe(0);
+		expect(value.runtime.responseCalls).toBe(1);
+		expect((value.runtime.responseRequests[0] as { input: unknown[] }).input).toEqual([
+			{
+				type: "message",
+				role: "user",
+				content: [{ type: "input_text", text: "fixture prompt" }],
+			},
+			{
+				type: "function_call",
+				name: "fixture_tool",
+				arguments: '{"value":"synthetic"}',
+				call_id: "call-fixture",
+			},
+			{ type: "function_call_output", call_id: "call-fixture", output: "fixture output" },
+		]);
+	});
+
+	test("keeps interrupted provider-ledger and active-branch projections structurally equal", async () => {
+		const session = new SessionFixture();
+		session.appendInterruptedContinuation();
+		session.contextTokens = 1_000;
+		const value = harness({ session });
+		const events = await value.run(false);
+
+		expect(events.at(-1)).toMatchObject({ type: "done" });
+		expect(value.runtime.compactCalls).toBe(0);
+		expect(value.runtime.responseCalls).toBe(1);
+		expect((value.runtime.responseRequests[0] as { input: unknown[] }).input.slice(-3)).toEqual([
+			{
+				type: "function_call",
+				name: "fixture_tool",
+				arguments: '{"value":"interrupted"}',
+				call_id: "call-interrupted",
+			},
+			{
+				type: "function_call_output",
+				call_id: "call-interrupted",
+				output: INTERRUPTED_TOOL_RESULT_TEXT,
+			},
+			{
+				type: "message",
+				role: "user",
+				content: [{ type: "input_text", text: "resume interrupted work" }],
+			},
+		]);
+	});
+
 	test("approves attributed auxiliary payloads unchanged without automatic checkpoint replay", async () => {
 		for (const origin of ["compaction_summary", "branch_summary"] as const) {
 			const value = harness();

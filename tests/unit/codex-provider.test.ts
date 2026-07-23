@@ -25,9 +25,14 @@ import { type CodexConfig, createDefaultConfig } from "../../src/domain/config.t
 import { BridgeRemoteError } from "../../src/infrastructure/codex-bridge/client.ts";
 import { providerCompactionIdentityFromValues } from "../../src/integration/pi/codex-compaction-replay.ts";
 import {
+	INTERRUPTED_TOOL_RESULT_TEXT,
+	normalizeCodexContextMessages,
+} from "../../src/integration/pi/codex-message-normalization.ts";
+import {
 	createCodexStreamSimple as createCodexStreamSimpleAdapter,
 	decodeResponseItemSignature,
 	encodeResponseItemSignature,
+	responseItemsFromMessages,
 } from "../../src/integration/pi/codex-provider.ts";
 import type {
 	CodexToolProfileCoordinator,
@@ -331,7 +336,397 @@ function createFixtureStream(
 	);
 }
 
+function assistantWithCalls(
+	calls: ReadonlyArray<{
+		id: string;
+		name: string;
+		arguments?: Record<string, unknown>;
+		thoughtSignature?: string;
+	}>,
+	stopReason: "toolUse" | "stop" | "error" | "aborted" = "toolUse",
+): Record<string, unknown> {
+	return {
+		role: "assistant",
+		api: model.api,
+		provider: model.provider,
+		model: model.id,
+		content: calls.map((call) => ({
+			type: "toolCall",
+			id: call.id,
+			name: call.name,
+			arguments: call.arguments ?? {},
+			...(call.thoughtSignature === undefined ? {} : { thoughtSignature: call.thoughtSignature }),
+		})),
+		usage: {
+			input: 0,
+			output: 0,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 0,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		},
+		stopReason,
+		timestamp: 1,
+	};
+}
+
+function toolResult(
+	toolCallId: string,
+	toolName: string,
+	text = "synthetic output",
+): Record<string, unknown> {
+	return {
+		role: "toolResult",
+		toolCallId,
+		toolName,
+		content: [{ type: "text", text }],
+		isError: false,
+		timestamp: 2,
+	};
+}
+
+describe("interrupted tool-call normalization", () => {
+	test("preserves a complete history by identity and at the structured item boundary", () => {
+		const messages = [
+			assistantWithCalls([
+				{ id: "ordinary-call", name: "fixture_tool" },
+				{ id: "patch-call", name: "apply_patch", arguments: { input: "synthetic patch" } },
+			]),
+			toolResult("ordinary-call", "fixture_tool", "ordinary result"),
+			toolResult("patch-call", "apply_patch", "patch result"),
+		] as const;
+		const before = structuredClone(messages);
+
+		expect(normalizeCodexContextMessages(messages)).toBe(messages);
+		expect(responseItemsFromMessages(messages)).toEqual([
+			{
+				type: "function_call",
+				name: "fixture_tool",
+				arguments: "{}",
+				call_id: "ordinary-call",
+			},
+			{
+				type: "custom_tool_call",
+				name: "apply_patch",
+				input: "synthetic patch",
+				call_id: "patch-call",
+			},
+			{ type: "function_call_output", call_id: "ordinary-call", output: "ordinary result" },
+			{ type: "custom_tool_call_output", call_id: "patch-call", output: "patch result" },
+		]);
+		expect(messages).toEqual(before);
+	});
+
+	test("inserts one deterministic fixed error before a user boundary and at end of sequence", () => {
+		const call = assistantWithCalls([{ id: "missing-call", name: "fixture_tool" }]);
+		const user = { role: "user", content: "synthetic continuation", timestamp: 2 };
+		const withUser = [call, user] as const;
+		const source = structuredClone(withUser);
+		const expectedOutput = {
+			type: "function_call_output",
+			call_id: "missing-call",
+			output: INTERRUPTED_TOOL_RESULT_TEXT,
+		};
+
+		expect(responseItemsFromMessages(withUser)).toEqual([
+			{
+				type: "function_call",
+				name: "fixture_tool",
+				arguments: "{}",
+				call_id: "missing-call",
+			},
+			expectedOutput,
+			{
+				type: "message",
+				role: "user",
+				content: [{ type: "input_text", text: "synthetic continuation" }],
+			},
+		]);
+		expect(responseItemsFromMessages([call])).toEqual([
+			{
+				type: "function_call",
+				name: "fixture_tool",
+				arguments: "{}",
+				call_id: "missing-call",
+			},
+			expectedOutput,
+		]);
+		expect(responseItemsFromMessages(withUser)).toEqual(responseItemsFromMessages(withUser));
+		expect(withUser).toEqual(source);
+	});
+
+	test("repairs only missing members of parallel ordinary, namespace, and custom batches", () => {
+		const messages = [
+			assistantWithCalls([
+				{ id: "ordinary-call", name: "fixture_tool" },
+				{ id: "namespace-call", name: "fixture.search" },
+				{ id: "patch-call", name: "apply_patch", arguments: { input: "synthetic patch" } },
+			]),
+			toolResult("namespace-call", "fixture.search", "namespace result"),
+			{ role: "custom", customType: "synthetic", content: "continue", timestamp: 3 },
+		] as const;
+		const items = responseItemsFromMessages(messages);
+
+		expect(
+			items.filter((item) => (item as { call_id?: string }).call_id === "namespace-call"),
+		).toEqual([
+			{
+				type: "function_call",
+				namespace: "fixture",
+				name: "search",
+				arguments: "{}",
+				call_id: "namespace-call",
+			},
+			{ type: "function_call_output", call_id: "namespace-call", output: "namespace result" },
+		]);
+		expect(items).toContainEqual({
+			type: "function_call_output",
+			call_id: "ordinary-call",
+			output: INTERRUPTED_TOOL_RESULT_TEXT,
+		});
+		expect(items).toContainEqual({
+			type: "custom_tool_call_output",
+			call_id: "patch-call",
+			output: INTERRUPTED_TOOL_RESULT_TEXT,
+		});
+		const allMissing = responseItemsFromMessages([
+			assistantWithCalls([
+				{ id: "first-missing", name: "fixture_tool" },
+				{ id: "second-missing", name: "fixture_tool" },
+			]),
+		]);
+		expect(
+			allMissing
+				.filter((item) => (item as { type?: string }).type === "function_call_output")
+				.map((item) => (item as { call_id?: string }).call_id),
+		).toEqual(["first-missing", "second-missing"]);
+	});
+
+	test("flushes every raw Pi user-like boundary and ignores excluded bash boundaries", () => {
+		const boundaries = [
+			{ role: "custom", customType: "synthetic", content: "continue", timestamp: 2 },
+			{
+				role: "bashExecution",
+				command: "synthetic command",
+				output: "synthetic output",
+				exitCode: 0,
+				timestamp: 2,
+			},
+			{ role: "branchSummary", summary: "synthetic summary", fromId: "entry", timestamp: 2 },
+			{ role: "compactionSummary", summary: "synthetic summary", tokensBefore: 1, timestamp: 2 },
+			assistantWithCalls([], "stop"),
+		] as const;
+
+		for (const boundary of boundaries) {
+			const normalized = normalizeCodexContextMessages([
+				assistantWithCalls([{ id: "missing-call", name: "fixture_tool" }]),
+				boundary,
+			]);
+			expect((normalized[1] as { role?: string }).role).toBe("toolResult");
+			expect(normalized[2]).toBe(boundary);
+		}
+
+		const excluded = {
+			role: "bashExecution",
+			command: "synthetic command",
+			output: "synthetic output",
+			excludeFromContext: true,
+			timestamp: 2,
+		};
+		const result = toolResult("complete-call", "fixture_tool");
+		const normalized = normalizeCodexContextMessages([
+			assistantWithCalls([{ id: "complete-call", name: "fixture_tool" }]),
+			excluded,
+			result,
+		]);
+		expect(normalized[1]).toBe(excluded);
+		expect(normalized[2]).toBe(result);
+		expect(normalized).toHaveLength(3);
+	});
+
+	test("excludes aborted and error assistants before tracking partial calls", () => {
+		for (const stopReason of ["aborted", "error"] as const) {
+			const incomplete = assistantWithCalls(
+				[{ id: "partial-call", name: "fixture_tool" }],
+				stopReason,
+			);
+			expect(
+				responseItemsFromMessages([
+					assistantWithCalls([{ id: "earlier-call", name: "fixture_tool" }]),
+					incomplete,
+				]),
+			).toEqual([
+				{
+					type: "function_call",
+					name: "fixture_tool",
+					arguments: "{}",
+					call_id: "earlier-call",
+				},
+				{
+					type: "function_call_output",
+					call_id: "earlier-call",
+					output: INTERRUPTED_TOOL_RESULT_TEXT,
+				},
+			]);
+		}
+	});
+
+	test("fails closed on duplicate ids, signed-id conflicts, and output-kind conflicts", () => {
+		const sourceSecret = "source-content-must-not-appear";
+		const conflicts = [
+			assistantWithCalls([
+				{ id: "duplicate-call", name: "fixture_tool" },
+				{ id: "duplicate-call", name: "fixture_tool", arguments: { secret: sourceSecret } },
+			]),
+			assistantWithCalls([
+				{
+					id: "visible-call",
+					name: "fixture_tool",
+					thoughtSignature: encodeResponseItemSignature({
+						type: "function_call",
+						name: "fixture_tool",
+						arguments: "{}",
+						call_id: "signed-call",
+					}),
+				},
+			]),
+			[
+				assistantWithCalls([{ id: "kind-call", name: "apply_patch" }]),
+				toolResult("kind-call", "fixture_tool", sourceSecret),
+			],
+		] as const;
+
+		for (const conflict of conflicts) {
+			try {
+				normalizeCodexContextMessages(Array.isArray(conflict) ? conflict : [conflict]);
+				throw new Error("expected normalization failure");
+			} catch (error) {
+				expect(error).toBeInstanceOf(Error);
+				expect((error as Error).message).toBe("OpenAI Codex message history is invalid");
+				expect((error as Error).message).not.toContain(sourceSecret);
+			}
+		}
+	});
+
+	test("does not apply host image or cross-model transformations", () => {
+		const image = { type: "image", data: "synthetic-image", mimeType: "image/png" };
+		const messages = [
+			{ role: "user", content: [image], timestamp: 1 },
+			assistantWithCalls([{ id: "signed-call", name: "fixture_tool" }]),
+			toolResult("signed-call", "fixture_tool"),
+		] as const;
+		expect(normalizeCodexContextMessages(messages)).toBe(messages);
+		expect(messages[0].content[0] as unknown).toBe(image);
+	});
+
+	test("keeps concurrent projections operation-local and the fixed output free of source data", async () => {
+		const first = [
+			assistantWithCalls([
+				{
+					id: "first-private-id",
+					name: "first_private_tool",
+					arguments: { value: "first-private-argument" },
+				},
+			]),
+		] as const;
+		const second = [
+			assistantWithCalls([
+				{
+					id: "second-private-id",
+					name: "second_private_tool",
+					arguments: { value: "second-private-argument" },
+				},
+			]),
+		] as const;
+		const [firstItems, secondItems] = await Promise.all([
+			Promise.resolve().then(() => responseItemsFromMessages(first)),
+			Promise.resolve().then(() => responseItemsFromMessages(second)),
+		]);
+
+		expect(firstItems.at(-1)).toEqual({
+			type: "function_call_output",
+			call_id: "first-private-id",
+			output: INTERRUPTED_TOOL_RESULT_TEXT,
+		});
+		expect(secondItems.at(-1)).toEqual({
+			type: "function_call_output",
+			call_id: "second-private-id",
+			output: INTERRUPTED_TOOL_RESULT_TEXT,
+		});
+		expect(INTERRUPTED_TOOL_RESULT_TEXT).not.toContain("private");
+	});
+});
+
 describe("Pi Codex provider adapter", () => {
+	test("repairs the complete activated-provider context once and blocks conflicts before dispatch", async () => {
+		const runtime = new FixtureRuntime();
+		const service = configuration();
+		const streamSimple = createFixtureStream(
+			runtime,
+			service,
+			new ProviderActivationPolicy(service),
+		);
+		for await (const _event of streamSimple(
+			model,
+			{
+				messages: [
+					assistantWithCalls([{ id: "interrupted-call", name: "fixture_tool" }]),
+					{ role: "user", content: "resume safely", timestamp: 2 },
+				] as unknown as Context["messages"],
+			},
+			{ apiKey: fixtureToken(), sessionId: "session-fixture" },
+		)) {
+			// Consume the stream to completion.
+		}
+		expect(runtime.calls).toBe(1);
+		const recoveredRequest = runtime.request?.request as { input: unknown[] } | undefined;
+		expect(recoveredRequest?.input).toEqual([
+			{
+				type: "function_call",
+				name: "fixture_tool",
+				arguments: "{}",
+				call_id: "interrupted-call",
+			},
+			{
+				type: "function_call_output",
+				call_id: "interrupted-call",
+				output: INTERRUPTED_TOOL_RESULT_TEXT,
+			},
+			{
+				type: "message",
+				role: "user",
+				content: [{ type: "input_text", text: "resume safely" }],
+			},
+		]);
+
+		const blockedRuntime = new FixtureRuntime();
+		const blockedStream = createFixtureStream(
+			blockedRuntime,
+			service,
+			new ProviderActivationPolicy(service),
+		);
+		const events = [];
+		for await (const event of blockedStream(
+			model,
+			{
+				messages: [
+					assistantWithCalls([
+						{ id: "duplicate-call", name: "fixture_tool" },
+						{ id: "duplicate-call", name: "fixture_tool" },
+					]),
+				] as unknown as Context["messages"],
+			},
+			{ apiKey: fixtureToken(), sessionId: "session-fixture" },
+		)) {
+			events.push(event);
+		}
+		expect(events.at(-1)).toMatchObject({
+			type: "error",
+			error: { errorMessage: "OpenAI Codex request failed" },
+		});
+		expect(blockedRuntime.calls).toBe(0);
+	});
+
 	test("maps Pi context through the native response stream", async () => {
 		const runtime = new FixtureRuntime();
 		const streamSimple = createFixtureStream(

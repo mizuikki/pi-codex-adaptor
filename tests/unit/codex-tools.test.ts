@@ -10,6 +10,7 @@ import type {
 import type { ConfigurationService } from "../../src/application/configuration.ts";
 import { ProviderActivationPolicy } from "../../src/application/provider-activation.ts";
 import { type CodexConfig, createDefaultConfig } from "../../src/domain/config.ts";
+import { INTERRUPTED_TOOL_RESULT_TEXT } from "../../src/integration/pi/codex-message-normalization.ts";
 import type { CodexToolProfileCoordinator } from "../../src/integration/pi/codex-tool-profile.ts";
 import { PI_CORE_AGENT_TOOL_NAMES } from "../../src/integration/pi/codex-tool-profile.ts";
 import {
@@ -709,6 +710,105 @@ describe("Pi core tool activation", () => {
 			);
 		expect(web?.content).toEqual([{ type: "text", text: "fixture output" }]);
 		expect(web?.details).toEqual({ status: "completed" });
+	});
+
+	test("repairs standalone web context and blocks conflicts before native execution", async () => {
+		const registerWeb = (runtime: FixtureRuntime): Map<string, ToolDefinition> => {
+			const tools = new Map<string, ToolDefinition>();
+			registerCodexTools(
+				{
+					registerTool: (tool: ToolDefinition) => tools.set(tool.name, tool),
+					on: () => {},
+					getActiveTools: () => [],
+					setActiveTools: () => {},
+				} as never,
+				runtime,
+				configuration(),
+				new ProviderActivationPolicy(configuration()),
+			);
+			return tools;
+		};
+		const assistant = {
+			role: "assistant",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			model: "fixture-model",
+			content: [{ type: "toolCall", id: "web-context-call", name: "fixture_tool", arguments: {} }],
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "toolUse",
+			timestamp: 1,
+		};
+		const runtime = new FixtureRuntime();
+		const tools = registerWeb(runtime);
+		const { ctx } = context();
+		(ctx.sessionManager as { getBranch: () => unknown[] }).getBranch = () => [
+			{ type: "message", message: assistant },
+			{ type: "message", message: { role: "user", content: "resume web", timestamp: 2 } },
+		];
+		await tools
+			.get("web.run")
+			?.execute(
+				"web-call",
+				{ search_query: [{ q: "fixture" }] } as never,
+				undefined,
+				undefined,
+				ctx,
+			);
+		expect(runtime.execution?.argumentsValue).toMatchObject({
+			conversation_items: [
+				{
+					type: "function_call",
+					name: "fixture_tool",
+					arguments: "{}",
+					call_id: "web-context-call",
+				},
+				{
+					type: "function_call_output",
+					call_id: "web-context-call",
+					output: INTERRUPTED_TOOL_RESULT_TEXT,
+				},
+				{
+					type: "message",
+					role: "user",
+					content: [{ type: "input_text", text: "resume web" }],
+				},
+			],
+		});
+
+		const blockedRuntime = new FixtureRuntime();
+		const blockedTools = registerWeb(blockedRuntime);
+		const blocked = context().ctx;
+		(blocked.sessionManager as { getBranch: () => unknown[] }).getBranch = () => [
+			{
+				type: "message",
+				message: {
+					...assistant,
+					content: [
+						{ type: "toolCall", id: "duplicate-call", name: "fixture_tool", arguments: {} },
+						{ type: "toolCall", id: "duplicate-call", name: "fixture_tool", arguments: {} },
+					],
+				},
+			},
+		];
+		const webTool = blockedTools.get("web.run");
+		if (webTool === undefined) throw new Error("web fixture tool was not registered");
+		await expect(
+			webTool.execute(
+				"web-call",
+				{ search_query: [{ q: "fixture" }] } as never,
+				undefined,
+				undefined,
+				blocked,
+			),
+		).rejects.toThrow("OpenAI Codex message history is invalid");
+		expect(blockedRuntime.execution).toBeUndefined();
 	});
 
 	test("snapshots bypass authorization at native tool dispatch", async () => {

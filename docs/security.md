@@ -59,6 +59,13 @@ atomic patch commit checks remain mandatory. Preauthorization for an unsupported
   open-ended numeric range. Arbitrary values above the 24-hour bound remain rejected.
 - Prompts, messages, credentials, complete headers, absolute user paths, account data, and opaque
   compaction items are excluded from logs and default diagnostics.
+- A persisted tool call without a result is treated as having unknown side effects. The adaptor never
+  retries that tool automatically. It inserts only the request-local fixed output `Tool result was not
+  recorded. The tool may have partially executed; inspect state before retrying.` before provider
+  dispatch. The output contains no tool name, call id, arguments, command, path, session id, provider
+  data, exception, or prior output, and it is never persisted to Pi's session. Duplicate identities,
+  signed-id conflicts, and function/custom output-kind conflicts fail locally before any provider,
+  compaction, or native-tool dispatch.
 - Opaque checkpoint windows are sensitive provider output. They are cloned into versioned Pi session
   data and bound to the active session, branch boundary, provider, base URL, API, model, and
   authentication identity. No client-side decryption occurs, and the encrypted string is never used

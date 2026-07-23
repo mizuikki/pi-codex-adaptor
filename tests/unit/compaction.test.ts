@@ -27,6 +27,7 @@ import { ProviderActivationPolicy } from "../../src/application/provider-activat
 import type { ResolveEffectiveCapabilities } from "../../src/application/resolve-effective-capabilities.ts";
 import { createDefaultConfig } from "../../src/domain/config.ts";
 import { registerCodexCompaction } from "../../src/integration/pi/codex-compaction.ts";
+import { INTERRUPTED_TOOL_RESULT_TEXT } from "../../src/integration/pi/codex-message-normalization.ts";
 import type {
 	CodexToolProfileCoordinator,
 	CodexToolProfileReadiness,
@@ -197,13 +198,15 @@ function compactEvent(
 	reason: "manual" | "threshold" | "overflow",
 	tokensBefore = 50_000,
 	signal: AbortSignal = new AbortController().signal,
+	messagesToSummarize: unknown[] = [{ role: "user", content: "compact this", timestamp: 1 }],
+	turnPrefixMessages: unknown[] = [],
 ): Record<string, unknown> {
 	return {
 		type: "session_before_compact",
 		preparation: {
 			firstKeptEntryId: "kept-entry",
-			messagesToSummarize: [{ role: "user", content: "compact this", timestamp: 1 }],
-			turnPrefixMessages: [],
+			messagesToSummarize,
+			turnPrefixMessages,
 			isSplitTurn: false,
 			tokensBefore,
 			fileOps: { read: [], written: [] },
@@ -444,6 +447,76 @@ describe("Codex compaction contracts", () => {
 });
 
 describe("manual Pi compaction", () => {
+	test("repairs one complete preparation sequence and blocks conflicts before compact dispatch", async () => {
+		const runtime = new FixtureRuntime();
+		const registration = register(runtime);
+		const assistant = {
+			role: "assistant",
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			content: [{ type: "toolCall", id: "compact-call", name: "fixture_tool", arguments: {} }],
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "toolUse",
+			timestamp: 1,
+		};
+		await registration.handlers.get("session_before_compact")?.[0]?.(
+			compactEvent(
+				"manual",
+				50_000,
+				new AbortController().signal,
+				[assistant],
+				[{ role: "user", content: "continue compaction", timestamp: 2 }],
+			),
+			context(),
+		);
+		expect(runtime.compactCalls).toBe(1);
+		const recoveredRequest = runtime.compaction?.request as { input: unknown[] } | undefined;
+		expect(recoveredRequest?.input).toEqual([
+			{
+				type: "function_call",
+				name: "fixture_tool",
+				arguments: "{}",
+				call_id: "compact-call",
+			},
+			{
+				type: "function_call_output",
+				call_id: "compact-call",
+				output: INTERRUPTED_TOOL_RESULT_TEXT,
+			},
+			{
+				type: "message",
+				role: "user",
+				content: [{ type: "input_text", text: "continue compaction" }],
+			},
+		]);
+
+		const blockedRuntime = new FixtureRuntime();
+		const blocked = register(blockedRuntime);
+		const notifications: Array<{ message: string; type: string | undefined }> = [];
+		await blocked.handlers.get("session_before_compact")?.[0]?.(
+			compactEvent("manual", 50_000, new AbortController().signal, [
+				{
+					...assistant,
+					content: [
+						{ type: "toolCall", id: "duplicate-call", name: "fixture_tool", arguments: {} },
+						{ type: "toolCall", id: "duplicate-call", name: "fixture_tool", arguments: {} },
+					],
+				},
+			]),
+			context({ notifications }),
+		);
+		expect(blockedRuntime.compactCalls).toBe(0);
+		expect(notifications).toEqual([{ message: COMPACTION_FAILURE_NOTIFICATION, type: "error" }]);
+	});
+
 	test("returns provider-bound v2 opaque details and never registers a turn-end scheduler", async () => {
 		const runtime = new FixtureRuntime();
 		const { handlers, store } = register(runtime);
