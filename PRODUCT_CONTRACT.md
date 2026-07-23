@@ -28,6 +28,20 @@ The first stable release will provide:
   session stdin execution in prompt mode, with an explicit Pi-owned per-request bypass option;
 - one `/codex` settings and diagnostics entry point.
 
+## Interrupted tool-call continuation
+
+When an active Pi branch contains a completed assistant tool call without its matching persisted
+result, the adaptor adds one request-local error output before the next provider turn:
+
+```text
+Tool result was not recorded. The tool may have partially executed; inspect state before retrying.
+```
+
+The result is rebuilt only for provider projection. Pi remains the sole owner of session persistence,
+and the adaptor never writes this result to the session, re-executes the interrupted tool, or assumes
+that the tool had no side effects. Complete call/result histories retain their existing structured
+provider input without an additional output.
+
 ## Compaction ownership
 
 Automatic compaction is inline automatic compaction owned by the adaptor's

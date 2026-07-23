@@ -29,6 +29,7 @@ import {
 import { isStrictJsonValue, isStrictPlainRecord } from "../../application/structured-json.ts";
 import { CapabilityError } from "../../domain/capability.ts";
 import type { CodexConfig } from "../../domain/config.ts";
+import { normalizeCodexContextMessages } from "./codex-message-normalization.ts";
 import { toPiProviderErrorMessage } from "./codex-provider-error.ts";
 import {
 	type CodexProviderRequestGuard,
@@ -534,7 +535,7 @@ export function buildCodexRequest(
 const buildRequest = buildCodexRequest;
 
 export function responseItemsFromMessages(messages: readonly unknown[]): unknown[] {
-	return messages.flatMap(toResponseItems);
+	return normalizeCodexContextMessages(messages).flatMap(toResponseItems);
 }
 
 const RESPONSE_ITEM_SIGNATURE_KIND = "pi-codex-adaptor.response-item";

@@ -33,6 +33,20 @@ external tools, and restores the captured subset on deactivation or shutdown. A 
 state and additive-tool selection policy are passed to both Responses and compaction assembly, so a
 pending, unavailable, or ownership-conflicted profile cannot dispatch a partial or hybrid surface.
 
+The Pi integration also owns deterministic request-time normalization of complete context-message
+sequences. Before typed response-item projection, it pairs assistant tool calls with recorded Pi tool
+results and inserts this fixed error for each unresolved call:
+
+```text
+Tool result was not recorded. The tool may have partially executed; inspect state before retrying.
+```
+
+The normalizer is pure and operation-local. It neither changes Pi session entries nor executes tools.
+Normal Responses, manual compaction, automatic checkpoint replay, and standalone web context all use
+the same projector. Automatic replay batches consecutive message-bearing entries before projection,
+so a call entry and its later result entry are normalized as one sequence. Explicit canonical opaque
+compaction items remain projection boundaries.
+
 Pi provider registration has process identity but provider execution has session identity. The Pi
 integration installs process-stable dispatchers for both supported API ids and routes each request by
 Pi's non-empty stream `sessionId` to exactly one weak session lease. The selected lease retains the
@@ -52,7 +66,8 @@ payload. The live tail is cloned from the hook payload, so in-flight provider it
 persisted are not reconstructed from session entries. The projection includes Pi's public
 `convertToLlm()` normalization. When an automatic checkpoint supersedes an older manual checkpoint,
 replay matches the provider's model-facing manual marker before replacing the covered prefix with
-the newer automatic output.
+the newer automatic output. Both the provider ledger and active-branch candidate pass through the
+same interrupted-call normalizer before structural comparison.
 
 Automatic checkpoints are Pi custom entries. `appendEntry` advances Pi's active branch before it
 reports persistence errors, so the adaptor verifies the new leaf and only then installs its in-memory

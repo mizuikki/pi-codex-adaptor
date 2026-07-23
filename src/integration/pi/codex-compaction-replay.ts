@@ -515,21 +515,29 @@ function projectEntries(
 	replayManualCompaction: boolean,
 ): readonly StructuredResponseItem[] {
 	const items: StructuredResponseItem[] = [];
-	for (const entry of entries) {
-		if (entry.type === "custom") continue;
-		if (entry.type === "compaction" && replayManualCompaction) {
-			const details = parseCodexCompactionDetails(entry.details);
-			if (details?.version === 2) items.push(...details.output.map(cloneStructuredValue));
-			continue;
-		}
-		const projected = responseItemsFromMessages(convertToLlm(sessionEntryToContextMessages(entry)));
+	let messages: ReturnType<typeof sessionEntryToContextMessages> = [];
+	const flushMessages = (): void => {
+		if (messages.length === 0) return;
+		const projected = responseItemsFromMessages(convertToLlm(messages));
 		for (const item of projected) {
 			if (!isStructuredJsonValue(item) || !isSupportedStructuredResponseItem(item)) {
 				throw new Error(REPLAY_ERROR);
 			}
 			items.push(item);
 		}
+		messages = [];
+	};
+	for (const entry of entries) {
+		if (entry.type === "custom") continue;
+		if (entry.type === "compaction" && replayManualCompaction) {
+			flushMessages();
+			const details = parseCodexCompactionDetails(entry.details);
+			if (details?.version === 2) items.push(...details.output.map(cloneStructuredValue));
+			continue;
+		}
+		messages.push(...sessionEntryToContextMessages(entry));
 	}
+	flushMessages();
 	return items;
 }
 
