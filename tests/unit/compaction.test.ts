@@ -1219,6 +1219,29 @@ describe("manual Pi compaction", () => {
 		expect(registration.store.isReplayInvalid("session-fixture")).toBe(false);
 	});
 
+	test("marks malformed persisted v3 summaries invalid without throwing during restore", async () => {
+		const runtime = new FixtureRuntime();
+		const registration = register(runtime);
+		const sessionStart = registration.handlers.get("session_start")?.[0];
+		if (sessionStart === undefined) throw new Error("session_start handler missing");
+		await sessionStart({ type: "session_start" }, {
+			...context(),
+			sessionManager: {
+				getSessionId: () => "session-fixture",
+				getBranch: () => [
+					{
+						type: "compaction",
+						id: "malformed-v3",
+						summary: {} as never,
+						details: createPortableCompactionDetails("0".repeat(64)),
+					},
+				],
+			},
+		} as unknown as ExtensionContext);
+		expect(registration.store.getForSession("session-fixture")).toBeUndefined();
+		expect(registration.store.isReplayInvalid("session-fixture")).toBe(true);
+	});
+
 	test("restores the latest compaction across unrelated custom entries", async () => {
 		const runtime = new FixtureRuntime();
 		const registration = register(runtime);
@@ -1416,6 +1439,20 @@ describe("manual Pi compaction", () => {
 					parentId: "parent",
 					summary,
 					retainedTail: exactOptionalFields.retainedTail,
+					details: exactOptionalFields.details,
+				},
+				exactOptionalFields,
+				digest,
+			).ok,
+		).toBe(true);
+		expect(
+			validateCommittedCompactionEntry(
+				{
+					type: "compaction",
+					id: "v3",
+					parentId: "parent",
+					summary,
+					retainedTail: [{ timestamp: 1, content: "retained", role: "user" }],
 					details: exactOptionalFields.details,
 				},
 				exactOptionalFields,

@@ -1,5 +1,5 @@
 {"type":"initialize","requestId":"init-1","protocolVersion":5,"client":{"name":"pi-codex-adaptor","version":"0.0.0"}}
-{"type":"request","requestId":"request-0","method":"contexts.summarize","params":{"modelId":"fixture-model","input":[]}}
+{"type":"request","requestId":"request-0","method":"contexts.summarize","params":{"modelId":"fixture-model","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"fixture context"}]}]}}
 {"type":"request","requestId":"request-1","method":"models.resolve","params":{"modelId":"fixture-model"}}
 {"type":"cancel","requestId":"cancel-1","targetRequestId":"request-1"}
 {"type":"approval_decision","requestId":"decision-1","approvalId":"approval-1","decision":"decline"}

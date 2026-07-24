@@ -328,7 +328,8 @@ function collectCapabilityIssues(
 	if (
 		compaction.mode === "auto" &&
 		context.manualCompactionAvailable === undefined &&
-		context.portableContextSummary === false
+		context.portableContextSummary === false &&
+		(capabilities === undefined || capabilities.has("portable_context_summary"))
 	) {
 		issue(
 			issues,

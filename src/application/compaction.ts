@@ -807,7 +807,21 @@ function claimsAdaptorCompactionDetails(value: unknown): boolean {
 }
 
 function structuralEqual(left: unknown, right: unknown): boolean {
-	return JSON.stringify(left) === JSON.stringify(right);
+	if (Object.is(left, right)) return true;
+	if (typeof left !== typeof right || left === null || right === null) return false;
+	if (Array.isArray(left) || Array.isArray(right)) {
+		if (!isStrictJsonArray(left) || !isStrictJsonArray(right) || left.length !== right.length) {
+			return false;
+		}
+		return left.every((value, index) => structuralEqual(value, right[index]));
+	}
+	if (!isStrictPlainRecord(left) || !isStrictPlainRecord(right)) return false;
+	const leftKeys = Object.keys(left).sort();
+	const rightKeys = Object.keys(right).sort();
+	return (
+		structuralEqual(leftKeys, rightKeys) &&
+		leftKeys.every((key) => structuralEqual(left[key], right[key]))
+	);
 }
 
 export function isStructuredJsonValue(value: unknown): value is StructuredJsonValue {

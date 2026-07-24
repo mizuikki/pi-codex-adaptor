@@ -164,21 +164,30 @@ async function smokeInstallExactTarball(tarballPath: string): Promise<void> {
 			stderr: "pipe",
 			stdout: "pipe",
 		});
-		const [exitCode, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
-		if (
-			!stderr.includes(
-				"Pi host is incompatible: requires provider payload compaction API version 1",
-			) ||
-			exitCode === 0
-		) {
-			throw new Error(
-				`Exact-tarball clean install did not reject the transaction-less Pi host with status ${exitCode}: ${stderr.trim()}`,
-			);
-		}
+		const [exitCode, stderr] = await Promise.all([
+			child.exited,
+			new Response(child.stderr).text(),
+			new Response(child.stdout).text(),
+		]);
+		assertIncompatiblePiHostRejected(exitCode, stderr);
 	} finally {
 		await rm(installRoot, { force: true, recursive: true });
 		await rm(piHome, { force: true, recursive: true });
 	}
+}
+
+export function assertIncompatiblePiHostRejected(exitCode: number, stderr: string): void {
+	if (
+		stderr.includes(
+			"Pi host is incompatible: requires provider payload compaction API version 1",
+		) &&
+		exitCode !== 0
+	) {
+		return;
+	}
+	throw new Error(
+		`Exact-tarball clean install did not reject the transaction-less Pi host (status ${exitCode})`,
+	);
 }
 
 async function verifyTarball(path: string, expectedPaths: readonly string[]): Promise<PackResult> {

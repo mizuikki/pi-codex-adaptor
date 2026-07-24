@@ -313,10 +313,14 @@ function restoreCompaction(ctx: ExtensionContext, store: CodexCompactionStore): 
 		const raw = branch[index];
 		if (raw === undefined || (raw.type !== "compaction" && raw.type !== "custom")) continue;
 		if (raw.type === "custom" && raw.customType !== CODEX_AUTO_COMPACTION_KIND) continue;
+		const summarySha256 =
+			raw.type === "compaction" && typeof raw.summary === "string"
+				? sha256Hex(raw.summary)
+				: undefined;
 		const validated = validateCommittedCompactionEntry(
 			toPersistedEntryView(raw),
 			undefined,
-			raw.type === "compaction" ? sha256Hex(raw.summary) : undefined,
+			summarySha256,
 		);
 		if (!validated.ok) {
 			store.markReplayInvalid(sessionId);

@@ -184,6 +184,31 @@ describe("versioned product configuration", () => {
 		);
 	});
 
+	test("reports portable context summary unavailability only once", () => {
+		const config = createDefaultConfig();
+		const draft = {
+			...config,
+			codex: {
+				...config.codex,
+				webSearch: { mode: "disabled" as const },
+			},
+		};
+		try {
+			validateConfigForSave(draft, {
+				bridgeCapabilities: ["responses_sse", "compact_endpoint"],
+				portableContextSummary: false,
+			});
+			expect.unreachable();
+		} catch (error) {
+			expect(error).toBeInstanceOf(ConfigurationError);
+			const issues = (error as ConfigurationError).issues.filter(
+				(issue) => issue.path === "codex.compaction.mode",
+			);
+			expect(issues).toHaveLength(1);
+			expect(issues[0]).toMatchObject({ code: "unsupported_capability" });
+		}
+	});
+
 	test("reports one issue when effective availability supersedes raw bridge evidence", () => {
 		const config = createDefaultConfig();
 		const cases = [

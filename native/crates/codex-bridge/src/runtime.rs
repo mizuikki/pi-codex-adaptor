@@ -101,7 +101,7 @@ const MAX_REQUEST_ID_BYTES: usize = 256;
 const MAX_REQUEST_IDS_PER_CONNECTION: usize = 65_536;
 const MAX_SESSION_OUTPUT_BYTES: usize = codex_utils_pty::DEFAULT_OUTPUT_BYTES_CAP;
 const DEFAULT_MAX_OUTPUT_TOKENS: usize = 10_000;
-const PORTABLE_SUMMARY_TIMEOUT_MS: u64 = 30_000;
+const PORTABLE_SUMMARY_TIMEOUT_MS: u64 = 600_000;
 const PORTABLE_SUMMARY_MAX_OUTPUT_TOKENS: usize = 1_024;
 const PORTABLE_SUMMARY_V1_INSTRUCTIONS: &str = "Summarize this conversation context for future continuation. Return plain text only. Preserve the user's goals, decisions, constraints, pending work, tool outcomes, and important factual state. Be concise and do not add markdown, bullets, or commentary about the summarization process.";
 const MAX_IMAGE_SOURCE_BYTES: u64 = 64 * 1024 * 1024;
@@ -4035,19 +4035,15 @@ async fn responses_compact(
     let timeout = Duration::from_millis(parsed.request_timeout_ms);
     let output = await_with_cancellation(
         cancellation,
-        Box::pin(tokio::time::timeout(
-            timeout,
-            client.compact_input(&input, HeaderMap::default(), timeout, None),
-        )),
+        Box::pin(client.compact_input(&input, HeaderMap::default(), timeout, None)),
     )
     .await?;
     match output {
-        Ok(output) => {
-            let output = output
-                .map_err(|error| api::map_provider_contract_error(&error, "compact_endpoint"))?;
-            Ok(RequestSuccess::completed(json!({ "output": output })))
+        Ok(output) => Ok(RequestSuccess::completed(json!({ "output": output }))),
+        Err(codex_api::ApiError::Transport(codex_api::TransportError::Timeout)) => {
+            Ok(RequestSuccess::timed_out(json!({})))
         }
-        Err(_) => Ok(RequestSuccess::timed_out(json!({}))),
+        Err(error) => Err(api::map_provider_contract_error(&error, "compact_endpoint").into()),
     }
 }
 
@@ -5367,6 +5363,39 @@ mod tests {
         assert_eq!(result.status, TerminalStatus::TimedOut);
         assert_eq!(result.result, json!({}));
         server.abort();
+    }
+
+    #[tokio::test]
+    async fn compact_endpoint_honors_the_request_deadline() {
+        let (base_url, server) = spawn_stalling_fixture_http_server().await;
+        let result = responses_compact(
+            json!({
+                "request": {
+                    "model": "fixture-model",
+                    "input": [],
+                    "instructions": "",
+                    "tools": null,
+                    "parallel_tool_calls": true,
+                    "reasoning": null,
+                    "service_tier": null,
+                    "prompt_cache_key": null,
+                    "text": null
+                },
+                "requestTimeoutMs": 25,
+                "connection": fixture_connection(base_url),
+            }),
+            &CancellationToken::new(),
+        )
+        .await
+        .expect("stalled compact endpoint should return a timeout status");
+        assert_eq!(result.status, TerminalStatus::TimedOut);
+        assert_eq!(result.result, json!({}));
+        server.abort();
+    }
+
+    #[test]
+    fn portable_summary_timeout_matches_the_maximum_compaction_deadline() {
+        assert_eq!(PORTABLE_SUMMARY_TIMEOUT_MS, 600_000);
     }
 
     #[test]

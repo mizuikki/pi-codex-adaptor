@@ -131,8 +131,8 @@ describe("Codex provider request guard", () => {
 		expect(approved).toBe(request);
 		expect(Object.isFrozen(approved)).toBe(true);
 		expect(Object.isFrozen(approved.input)).toBe(true);
-		guard.assertApproved(record, approved);
-		guard.assertApproved(record, structuredClone(approved));
+		expect(guard.assertApproved(record, approved)).toBe(approved);
+		expect(guard.assertApproved(record, structuredClone(approved))).toBe(approved);
 		expect(() => guard.assertApproved(record, { ...approved, model: "changed" })).toThrow(
 			"approval",
 		);

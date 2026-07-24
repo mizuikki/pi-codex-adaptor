@@ -96,7 +96,7 @@ export class CodexProviderRequestGuard {
 		return frozen;
 	}
 
-	assertApproved(record: CodexProviderRequestRecord, request: unknown): void {
+	assertApproved(record: CodexProviderRequestRecord, request: unknown): Record<string, unknown> {
 		this.assertLive(record);
 		if (
 			record.approvedRequest === undefined ||
@@ -106,6 +106,7 @@ export class CodexProviderRequestGuard {
 		) {
 			throw new Error(RECORD_REJECTED);
 		}
+		return record.approvedRequest;
 	}
 
 	consume(record: CodexProviderRequestRecord): void {

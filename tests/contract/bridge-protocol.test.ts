@@ -18,6 +18,31 @@ import {
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 
 describe("bridge protocol v5", () => {
+	test("keeps the canonical summary request fixture structurally valid", async () => {
+		const fixture = await readFile(
+			resolve(repositoryRoot, "fixtures/bridge-protocol/client-v5.jsonl"),
+			"utf8",
+		);
+		const request = fixture
+			.trimEnd()
+			.split("\n")
+			.map((line) => JSON.parse(line) as Record<string, unknown>)
+			.find((frame) => frame.method === "contexts.summarize");
+		expect(request).toMatchObject({
+			type: "request",
+			params: {
+				modelId: "fixture-model",
+				input: [
+					{
+						type: "message",
+						role: "user",
+						content: [{ type: "input_text", text: "fixture context" }],
+					},
+				],
+			},
+		});
+	});
+
 	test("decodes every native server contract frame", async () => {
 		const fixture = await readFile(
 			resolve(repositoryRoot, "fixtures/bridge-protocol/server-v5.jsonl"),

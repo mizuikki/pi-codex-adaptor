@@ -163,7 +163,7 @@ async function runResponse(
 			);
 			if (replacement !== undefined) request = asRequest(replacement);
 			const approvedRecord: CodexProviderRequestRecord = requestRecord;
-			requestGuard.assertApproved(approvedRecord, request);
+			request = requestGuard.assertApproved(approvedRecord, request);
 			dispatchConnection = approvedRecord.connection;
 			dispatchConfig = approvedRecord.config.codex;
 			dispatchProviderSupportsWebsockets = approvedRecord.capabilities.providerSupportsWebsockets;

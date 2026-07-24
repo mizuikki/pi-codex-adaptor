@@ -30,7 +30,9 @@ terminate frames but still return results through their request IDs.
 
 OpenAI request, event, and result objects are opaque payloads at this boundary. Their typed ownership
 stays in the pinned native modules. Unknown stream events are retained as opaque values and never
-treated as successful termination. Only a `result` or `error` frame terminates an operation.
+treated as successful termination. Only a `result` or `error` frame terminates an operation. A
+`result` can use the terminal status `completed`, `failed`, `aborted`, `incomplete`, or `timed_out`;
+timeouts are terminal outcomes rather than bridge errors.
 
 `responses.create` accepts the typed official request plus `transportMode: "auto" | "sse"` and a
 provider WebSocket capability. Native code forces streaming, uses the official WebSocket client when
@@ -43,7 +45,8 @@ that item unchanged together with normalized usage when the official stream repo
 compact-endpoint fallback returns only the canonical `ResponseItem` output array from the pinned
 official `CompactClient`; that client type does not expose provider usage, so completed
 `compact_endpoint` results omit `usage` rather than inventing token accounting.
-The timeout defaults to 120 seconds and is bounded at 600 seconds. The bridge deserializes each SSE
+The timeout defaults to 120 seconds and is bounded at 600 seconds. Timed-out compaction returns a
+terminal `timed_out` result with an empty result object. The bridge deserializes each SSE
 output item at the typed native `ResponseItem` boundary: supported aliases normalize to the canonical
 item type, and fields unknown to that native type are unavailable to TypeScript and are therefore not
 claimed as losslessly retained. The canonical `compaction` projection preserves its exact non-empty
@@ -55,11 +58,12 @@ parsing, or trimming.
 `contexts.summarize` accepts a validated provider connection, non-empty `modelId`, non-empty
 structured `input`, the configured transport mode, and the provider WebSocket capability. The host
 never sends a model-visible summary prompt. Native code owns the fixed `portable_summary_v1`
-instruction, disables tools, enforces the portable summary timeout and output bound, and accepts
+instruction, disables tools, enforces a ten-minute portable summary timeout and output bound, and accepts
 exactly one completed assistant message with non-empty plaintext output. Tool calls, non-message
 items, multiple assistant summary messages, empty output, oversized output, invalid UTF-8, or
-incomplete streams fail closed as protocol errors. A completed summary returns only the plaintext
-summary plus normalized usage when the provider reports it.
+incomplete streams fail closed as protocol errors. A timed-out summary returns a terminal `timed_out`
+result with an empty result object. A completed summary returns only the plaintext summary plus
+normalized usage when the provider reports it.
 
 When Remote V2 is active, both operations carry a host-owned `remoteCompactionV2Context` with the
 stable Pi session id; compaction also declares its `auto` or `manual` trigger. Native code derives the
