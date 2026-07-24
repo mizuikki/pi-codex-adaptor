@@ -1,13 +1,5 @@
 import { calculateCost, type Model, type Usage } from "@earendil-works/pi-ai";
-import type {
-	BeforeProviderPayloadEvent,
-	BeforeProviderPayloadEventResult,
-	ExtensionAPI,
-	ExtensionContext,
-	ProviderCompactionProposal,
-	ProviderPayloadAttribution,
-	SessionEntry,
-} from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-agent";
 import { convertToLlm, sessionEntryToContextMessages } from "@earendil-works/pi-coding-agent";
 
 import { type CodexRuntime, remoteCompactionV2Context } from "../../application/codex-runtime.ts";
@@ -47,6 +39,14 @@ import {
 	sha256Hex,
 } from "./codex-provider-request-guard.ts";
 import type { CodexToolProfileCoordinator } from "./codex-tool-profile.ts";
+import {
+	type BeforeProviderPayloadEvent,
+	type BeforeProviderPayloadEventResult,
+	fullActivePathSnapshot,
+	onBeforeProviderPayload,
+	type ProviderCompactionProposal,
+	type ProviderPayloadAttribution,
+} from "./provider-payload-compaction-api.ts";
 
 const REPLAY_ERROR = "OpenAI Codex automatic compaction cannot safely replay this request";
 type ProviderPayloadResult = {
@@ -86,7 +86,7 @@ interface InputSegmentation {
 }
 
 export function registerCodexCompactionReplay(options: CodexCompactionReplayOptions): void {
-	options.pi.on("before_provider_payload", async (event, ctx) => {
+	onBeforeProviderPayload(options.pi, async (event, ctx) => {
 		return handleBeforeProviderPayload(event, ctx, options);
 	});
 }
@@ -538,10 +538,7 @@ function findLatestCheckpoint(
 function fullActivePath(
 	sessionManager: ExtensionContext["sessionManager"],
 ): readonly SessionEntry[] {
-	if (typeof sessionManager.getFullActivePathSnapshot !== "function") {
-		throw new Error(REPLAY_ERROR);
-	}
-	const entries = sessionManager.getFullActivePathSnapshot();
+	const entries = fullActivePathSnapshot(sessionManager);
 	if (!Array.isArray(entries)) throw new Error(REPLAY_ERROR);
 	return entries;
 }
@@ -590,6 +587,7 @@ function toPersistedEntryView(entry: SessionEntry): PersistedCompactionEntryView
 		};
 	}
 	if (entry.type === "compaction") {
+		const retainedTail = (entry as SessionEntry & { readonly retainedTail?: unknown }).retainedTail;
 		return {
 			type: "compaction",
 			id: entry.id,
@@ -598,7 +596,7 @@ function toPersistedEntryView(entry: SessionEntry): PersistedCompactionEntryView
 			...(entry.details === undefined ? {} : { details: entry.details }),
 			...(entry.firstKeptEntryId === undefined ? {} : { firstKeptEntryId: entry.firstKeptEntryId }),
 			...(entry.usage === undefined ? {} : { usage: entry.usage }),
-			...(entry.retainedTail === undefined ? {} : { retainedTail: entry.retainedTail }),
+			...(retainedTail === undefined ? {} : { retainedTail }),
 		};
 	}
 	return { type: "custom", id: entry.id, parentId: entry.parentId };

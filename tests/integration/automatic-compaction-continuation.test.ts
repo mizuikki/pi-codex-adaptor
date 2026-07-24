@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
+import { existsSync } from "node:fs";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
 	type Context,
 	fauxProvider,
@@ -17,7 +19,6 @@ import {
 	SessionManager,
 	SettingsManager,
 } from "@earendil-works/pi-coding-agent";
-import { ProviderPayloadCompactionController } from "../../node_modules/@earendil-works/pi-coding-agent/dist/core/provider-payload-compaction.js";
 
 import type {
 	CodexRuntime,
@@ -44,8 +45,52 @@ import {
 } from "../../src/integration/pi/codex-provider.ts";
 import { CodexProviderRequestGuard } from "../../src/integration/pi/codex-provider-request-guard.ts";
 import type { CodexToolProfileCoordinator } from "../../src/integration/pi/codex-tool-profile.ts";
+import {
+	type BeforeProviderPayloadEventResult,
+	onProviderPayloadSessionCompact,
+	type ProviderPayloadAttribution,
+} from "../../src/integration/pi/provider-payload-compaction-api.ts";
 
 const OPAQUE = "synthetic-opaque-content";
+const providerPayloadControllerModule = new URL(
+	"./core/provider-payload-compaction.js",
+	import.meta.resolve("@earendil-works/pi-coding-agent"),
+);
+const providerPayloadCompactionAvailable = existsSync(
+	fileURLToPath(providerPayloadControllerModule),
+);
+const providerPayloadTest = providerPayloadCompactionAvailable ? test : test.skip;
+
+interface ProviderPayloadCompactionController {
+	createAttribution(
+		model: Model<string>,
+		origin: "agent",
+		signal: AbortSignal,
+	): ProviderPayloadAttribution;
+	commitPayload(
+		model: Model<string>,
+		result: BeforeProviderPayloadEventResult,
+		attribution: ProviderPayloadAttribution,
+	): Promise<unknown>;
+}
+
+async function createProviderPayloadCompactionController(
+	session: SessionManager,
+	settings: SettingsManager,
+	extensionRunnerRef: unknown,
+): Promise<ProviderPayloadCompactionController> {
+	const module = (await import(providerPayloadControllerModule.href)) as {
+		ProviderPayloadCompactionController?: new (
+			session: SessionManager,
+			settings: SettingsManager,
+			extensionRunnerRef: unknown,
+		) => ProviderPayloadCompactionController;
+	};
+	if (module.ProviderPayloadCompactionController === undefined) {
+		throw new Error("Pi host does not expose provider payload compaction");
+	}
+	return new module.ProviderPayloadCompactionController(session, settings, extensionRunnerRef);
+}
 
 const model: Model<string> = {
 	id: "integration-fixture-model",
@@ -272,6 +317,7 @@ async function runRealProviderDispatch(options: { legacy?: boolean } = {}) {
 	appendInitialMessages(session);
 	if (options.legacy === true) {
 		const firstKeptEntryId = session.getEntries().find((entry) => entry.type === "message")?.id;
+		if (firstKeptEntryId === undefined) throw new Error("legacy fixture has no message entry");
 		session.appendCompaction(
 			"legacy summary",
 			firstKeptEntryId,
@@ -382,7 +428,7 @@ async function runRealProviderDispatch(options: { legacy?: boolean } = {}) {
 					healthyProfile(),
 					guard,
 				);
-				pi.on("session_compact", (event) => {
+				onProviderPayloadSessionCompact(pi, (event) => {
 					compactEvents.push(event.trigger);
 				});
 			},
@@ -521,7 +567,7 @@ async function runIntegration(
 		// Keep enough recent tokens for multiple retained messages while still leaving a prefix.
 		compaction: { keepRecentTokens: 20 },
 	});
-	const payloadController = new ProviderPayloadCompactionController(
+	const payloadController = await createProviderPayloadCompactionController(
 		session,
 		settingsManager,
 		extensionRunnerRef as never,
@@ -540,7 +586,7 @@ async function runIntegration(
 				const result = (await hook(
 					{ type: "before_provider_payload", model, payload, attribution },
 					ctx,
-				)) as import("@earendil-works/pi-coding-agent").BeforeProviderPayloadEventResult;
+				)) as BeforeProviderPayloadEventResult;
 				if (result.compaction !== undefined) {
 					if (options.abortBeforeCommit === true) {
 						controller.abort();
@@ -576,7 +622,7 @@ async function runIntegration(
 }
 
 describe("public Pi automatic compaction continuation harness", () => {
-	test("uses the real coding-agent provider dispatch transaction", async () => {
+	providerPayloadTest("uses the real coding-agent provider dispatch transaction", async () => {
 		const result = await runRealProviderDispatch();
 		expect(result.runtime.summaryCalls).toBe(1);
 		expect(result.runtime.compactCalls).toBe(1);
@@ -588,7 +634,10 @@ describe("public Pi automatic compaction continuation harness", () => {
 		expect(compactEntry).toMatchObject({ type: "compaction" });
 		if (compactEntry?.type !== "compaction") throw new Error("checkpoint was not appended");
 		expect(compactEntry.firstKeptEntryId).not.toBe(compactEntry.parentId);
-		expect(compactEntry.retainedTail?.length).toBeGreaterThan(0);
+		expect(
+			(compactEntry as typeof compactEntry & { readonly retainedTail?: readonly unknown[] })
+				.retainedTail?.length,
+		).toBeGreaterThan(0);
 		expect((result.runtime.responseRequests[0] as { input: unknown[] }).input[0]).toEqual({
 			type: "compaction",
 			encrypted_content: OPAQUE,
@@ -596,104 +645,134 @@ describe("public Pi automatic compaction continuation harness", () => {
 		expect(result.store.isReplayInvalid(result.session.getSessionId())).toBe(false);
 	});
 
-	test("migrates a legacy boundary through the real coding-agent provider dispatch", async () => {
-		const result = await runRealProviderDispatch({ legacy: true });
-		expect(result.runtime.summaryCalls).toBe(1);
-		expect(result.runtime.compactCalls).toBe(1);
-		expect(result.runtime.responseCalls).toBe(1);
-		expect(result.compactEvents).toEqual(["provider_inline"]);
-		expect(result.session.getEntries().filter((entry) => entry.type === "compaction")).toHaveLength(
-			2,
-		);
-		expect(result.store.isReplayInvalid(result.session.getSessionId())).toBe(false);
-	});
+	providerPayloadTest(
+		"migrates a legacy boundary through the real coding-agent provider dispatch",
+		async () => {
+			const result = await runRealProviderDispatch({ legacy: true });
+			expect(result.runtime.summaryCalls).toBe(1);
+			expect(result.runtime.compactCalls).toBe(1);
+			expect(result.runtime.responseCalls).toBe(1);
+			expect(result.compactEvents).toEqual(["provider_inline"]);
+			expect(
+				result.session.getEntries().filter((entry) => entry.type === "compaction"),
+			).toHaveLength(2);
+			expect(result.store.isReplayInvalid(result.session.getSessionId())).toBe(false);
+		},
+	);
 
-	test("rewrites a provider payload inline and lets the existing run finish", async () => {
-		const result = await runIntegration();
-		expect(result.events.at(-1)).toMatchObject({ type: "done" });
-		expect(result.runtime.compactCalls).toBe(1);
-		expect(result.runtime.responseCalls).toBe(1);
-		expect(result.compacted.value).toBe(0);
-		expect(result.compactEvents).toEqual([{ trigger: "provider_inline", fromExtension: true }]);
-		const checkpoint = result.session.getLeafEntry();
-		expect(checkpoint).toMatchObject({
-			type: "compaction",
-		});
-		if (checkpoint?.type !== "compaction") throw new Error("checkpoint was not appended");
-		expect(checkpoint.parentId).not.toBeNull();
-		expect(result.session.getEntry(checkpoint.parentId ?? "")).toBeDefined();
-		expect(checkpoint.firstKeptEntryId).not.toBe(checkpoint.parentId);
-		expect(checkpoint.retainedTail?.length).toBeGreaterThan(0);
-		expect((result.runtime.responseRequests[0] as { input: unknown[] }).input[0]).toEqual({
-			type: "compaction",
-			encrypted_content: OPAQUE,
-		});
-		expect((result.runtime.responseRequests[0] as { input: unknown[] }).input.at(-1)).toEqual({
-			type: "custom_tool_call_output",
-			call_id: "integration-call",
-			output: { marker: "live" },
-		});
-		expect(result.runtime.compactContexts).toEqual([undefined]);
-		expect(result.runtime.responseContexts).toEqual([{ sessionId: "integration-session" }]);
-	});
+	providerPayloadTest(
+		"rewrites a provider payload inline and lets the existing run finish",
+		async () => {
+			const result = await runIntegration();
+			expect(result.events.at(-1)).toMatchObject({ type: "done" });
+			expect(result.runtime.compactCalls).toBe(1);
+			expect(result.runtime.responseCalls).toBe(1);
+			expect(result.compacted.value).toBe(0);
+			expect(result.compactEvents).toEqual([{ trigger: "provider_inline", fromExtension: true }]);
+			const checkpoint = result.session.getLeafEntry();
+			expect(checkpoint).toMatchObject({
+				type: "compaction",
+			});
+			if (checkpoint?.type !== "compaction") throw new Error("checkpoint was not appended");
+			expect(checkpoint.parentId).not.toBeNull();
+			expect(result.session.getEntry(checkpoint.parentId ?? "")).toBeDefined();
+			expect(checkpoint.firstKeptEntryId).not.toBe(checkpoint.parentId);
+			expect(
+				(checkpoint as typeof checkpoint & { readonly retainedTail?: readonly unknown[] })
+					.retainedTail?.length,
+			).toBeGreaterThan(0);
+			expect((result.runtime.responseRequests[0] as { input: unknown[] }).input[0]).toEqual({
+				type: "compaction",
+				encrypted_content: OPAQUE,
+			});
+			expect((result.runtime.responseRequests[0] as { input: unknown[] }).input.at(-1)).toEqual({
+				type: "custom_tool_call_output",
+				call_id: "integration-call",
+				output: { marker: "live" },
+			});
+			expect(result.runtime.compactContexts).toEqual([undefined]);
+			expect(result.runtime.responseContexts).toEqual([{ sessionId: "integration-session" }]);
+		},
+	);
 
-	test("shows the public append failure boundary and poisons the extension instance", async () => {
-		const result = await runIntegration({ failAppend: true });
-		expect(result.events.at(-1)).toMatchObject({ type: "error" });
-		expect(result.runtime.responseCalls).toBe(0);
-		expect(result.store.isReplayInvalid(result.session.getSessionId())).toBe(true);
-		expect(result.session.getLeafEntry()).toMatchObject({ type: "compaction" });
-	});
+	providerPayloadTest(
+		"shows the public append failure boundary and poisons the extension instance",
+		async () => {
+			const result = await runIntegration({ failAppend: true });
+			expect(result.events.at(-1)).toMatchObject({ type: "error" });
+			expect(result.runtime.responseCalls).toBe(0);
+			expect(result.store.isReplayInvalid(result.session.getSessionId())).toBe(true);
+			expect(result.session.getLeafEntry()).toMatchObject({ type: "compaction" });
+		},
+	);
 
-	test("does not invoke compact after the current Pi signal is already aborted", async () => {
-		const result = await runIntegration({ aborted: true });
-		expect(result.events.at(-1)).toMatchObject({ type: "error" });
-		expect(result.runtime.summaryCalls).toBe(0);
-		expect(result.runtime.compactCalls).toBe(0);
-		expect(result.runtime.responseCalls).toBe(0);
-	});
+	providerPayloadTest(
+		"does not invoke compact after the current Pi signal is already aborted",
+		async () => {
+			const result = await runIntegration({ aborted: true });
+			expect(result.events.at(-1)).toMatchObject({ type: "error" });
+			expect(result.runtime.summaryCalls).toBe(0);
+			expect(result.runtime.compactCalls).toBe(0);
+			expect(result.runtime.responseCalls).toBe(0);
+		},
+	);
 
-	test("does not append, compact, or dispatch after cancellation wins during portable summary", async () => {
-		const result = await runIntegration({ abortDuringSummary: true });
-		expect(result.events.at(-1)).toMatchObject({ type: "error" });
-		expect(result.runtime.summaryCalls).toBe(1);
-		expect(result.runtime.compactCalls).toBe(1);
-		expect(result.runtime.responseCalls).toBe(0);
-		expect(result.session.getLeafEntry()?.type).toBe("message");
-	});
+	providerPayloadTest(
+		"does not append, compact, or dispatch after cancellation wins during portable summary",
+		async () => {
+			const result = await runIntegration({ abortDuringSummary: true });
+			expect(result.events.at(-1)).toMatchObject({ type: "error" });
+			expect(result.runtime.summaryCalls).toBe(1);
+			expect(result.runtime.compactCalls).toBe(1);
+			expect(result.runtime.responseCalls).toBe(0);
+			expect(result.session.getLeafEntry()?.type).toBe("message");
+		},
+	);
 
-	test("does not append or dispatch after cancellation wins after proposal and before commit", async () => {
-		const result = await runIntegration({ abortBeforeCommit: true });
-		expect(result.events.at(-1)).toMatchObject({ type: "error" });
-		expect(result.runtime.summaryCalls).toBe(1);
-		expect(result.runtime.compactCalls).toBe(1);
-		expect(result.runtime.responseCalls).toBe(0);
-		expect(result.session.getLeafEntry()?.type).toBe("message");
-	});
+	providerPayloadTest(
+		"does not append or dispatch after cancellation wins after proposal and before commit",
+		async () => {
+			const result = await runIntegration({ abortBeforeCommit: true });
+			expect(result.events.at(-1)).toMatchObject({ type: "error" });
+			expect(result.runtime.summaryCalls).toBe(1);
+			expect(result.runtime.compactCalls).toBe(1);
+			expect(result.runtime.responseCalls).toBe(0);
+			expect(result.session.getLeafEntry()?.type).toBe("message");
+		},
+	);
 
-	test("does not append or send Responses after compact invocation observes cancellation", async () => {
-		const result = await runIntegration({ abortDuringCompact: true });
-		expect(result.events.at(-1)).toMatchObject({ type: "error" });
-		expect(result.runtime.compactCalls).toBe(1);
-		expect(result.runtime.responseCalls).toBe(0);
-		expect(result.session.getLeafEntry()?.type).toBe("message");
-	});
+	providerPayloadTest(
+		"does not append or send Responses after compact invocation observes cancellation",
+		async () => {
+			const result = await runIntegration({ abortDuringCompact: true });
+			expect(result.events.at(-1)).toMatchObject({ type: "error" });
+			expect(result.runtime.compactCalls).toBe(1);
+			expect(result.runtime.responseCalls).toBe(0);
+			expect(result.session.getLeafEntry()?.type).toBe("message");
+		},
+	);
 
-	test("keeps append cancellation distinct from pre-append cancellation", async () => {
-		const result = await runIntegration({ abortAfterAppend: true });
-		expect(result.events.at(-1)).toMatchObject({ type: "error" });
-		expect(result.runtime.compactCalls).toBe(1);
-		expect(result.runtime.responseCalls).toBe(0);
-		expect(result.session.getLeafEntry()).toMatchObject({ type: "compaction" });
-		expect(result.store.isReplayInvalid(result.session.getSessionId())).toBe(true);
-	});
+	providerPayloadTest(
+		"keeps append cancellation distinct from pre-append cancellation",
+		async () => {
+			const result = await runIntegration({ abortAfterAppend: true });
+			expect(result.events.at(-1)).toMatchObject({ type: "error" });
+			expect(result.runtime.compactCalls).toBe(1);
+			expect(result.runtime.responseCalls).toBe(0);
+			expect(result.session.getLeafEntry()).toMatchObject({ type: "compaction" });
+			expect(result.store.isReplayInvalid(result.session.getSessionId())).toBe(true);
+		},
+	);
 
-	test("does not turn a post-Responses local abort into a successful stream", async () => {
-		const result = await runIntegration({ abortDuringResponse: true });
-		expect(result.events.at(-1)).toMatchObject({ type: "error" });
-		expect(result.runtime.compactCalls).toBe(1);
-		expect(result.runtime.responseCalls).toBe(1);
-	});
+	providerPayloadTest(
+		"does not turn a post-Responses local abort into a successful stream",
+		async () => {
+			const result = await runIntegration({ abortDuringResponse: true });
+			expect(result.events.at(-1)).toMatchObject({ type: "error" });
+			expect(result.runtime.compactCalls).toBe(1);
+			expect(result.runtime.responseCalls).toBe(1);
+		},
+	);
 
 	test("records the public append failure boundary for a file-backed session", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "pi-codex-adaptor-session-"));

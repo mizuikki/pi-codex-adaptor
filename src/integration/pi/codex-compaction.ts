@@ -39,6 +39,10 @@ import {
 } from "./codex-tool-profile.ts";
 import { selectCodexToolSurface } from "./codex-tool-surface.ts";
 import { resolveProviderConnection } from "./provider-connection.ts";
+import {
+	onProviderPayloadCompactionIndeterminate,
+	onProviderPayloadSessionCompact,
+} from "./provider-payload-compaction-api.ts";
 
 const CODEX_COMPACTION_FAILED =
 	"OpenAI Codex compaction failed; the session context was left unchanged.";
@@ -59,10 +63,10 @@ export function registerCodexCompaction(
 		restoreCompaction(ctx, store);
 	});
 	pi.on("model_select", () => {});
-	pi.on("session_compact", (event, ctx) => {
+	onProviderPayloadSessionCompact(pi, (event, ctx) => {
 		acceptCompaction(event, ctx, store);
 	});
-	pi.on("session_compact_indeterminate", (_event, ctx) => {
+	onProviderPayloadCompactionIndeterminate(pi, (_event, ctx) => {
 		store.markReplayInvalid(ctx.sessionManager.getSessionId());
 	});
 	pi.on("session_shutdown", (_event, ctx) => {
@@ -355,7 +359,12 @@ function restoreCompaction(ctx: ExtensionContext, store: CodexCompactionStore): 
 }
 
 function acceptCompaction(
-	event: SessionCompactEvent,
+	event: SessionCompactEvent & {
+		readonly trigger?: string;
+		readonly compactionEntry: SessionCompactEvent["compactionEntry"] & {
+			readonly retainedTail?: unknown;
+		};
+	},
 	ctx: ExtensionContext,
 	store: CodexCompactionStore,
 ): void {

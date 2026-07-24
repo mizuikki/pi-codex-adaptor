@@ -141,13 +141,28 @@ async function archivePiFork(
 }
 
 async function copyGeneratedPiModelData(piDir: string, forkDirectory: string): Promise<void> {
-	// Pi intentionally omits generated model JSON from Git. These compatibility tests do not inspect
-	// model catalogs, so copy the checkout's generated data without querying external providers.
-	await cp(
+	// Pi intentionally omits generated model JSON from Git. A CI checkout therefore uses the
+	// pinned development package's generated catalog without querying external providers.
+	const source = await firstExistingDirectory([
 		resolve(piDir, "packages/ai/src/providers/data"),
-		resolve(forkDirectory, "packages/ai/src/providers/data"),
-		{ recursive: true },
-	);
+		resolve(repositoryRoot, "node_modules/@earendil-works/pi-ai/dist/providers/data"),
+	]);
+	if (source === undefined) {
+		throw new Error("Pi model data is unavailable for fork compatibility verification");
+	}
+	await cp(source, resolve(forkDirectory, "packages/ai/src/providers/data"), { recursive: true });
+}
+
+async function firstExistingDirectory(candidates: readonly string[]): Promise<string | undefined> {
+	for (const candidate of candidates) {
+		try {
+			const metadata = await Bun.file(candidate).stat();
+			if (metadata.isDirectory()) return candidate;
+		} catch {
+			// Try the next checked-in or installed catalog source.
+		}
+	}
+	return undefined;
 }
 
 async function buildAndPackPi(forkDirectory: string, tarballDirectory: string): Promise<void> {
@@ -317,24 +332,12 @@ async function verifyPackagedProviderDispatch(
 		resolve(repositoryRoot, "tests/integration/automatic-compaction-continuation.test.ts"),
 		"utf8",
 	);
-	const packageTest = sourceTest
-		.replace(
-			"\tModelRuntime,\n\tSessionManager,",
-			"\tModelRuntime,\n\tProviderPayloadCompactionController,\n\tSessionManager,",
-		)
-		.replace(
-			'import { ProviderPayloadCompactionController } from "../../node_modules/@earendil-works/pi-coding-agent/dist/core/provider-payload-compaction.js";\n',
-			"",
-		);
-	if (packageTest === sourceTest) {
-		throw new Error("Packaged provider dispatch harness could not be projected");
-	}
 	const testPath = resolve(
 		packageRoot,
 		"tests/integration/automatic-compaction-continuation.test.ts",
 	);
 	await mkdir(dirname(testPath), { recursive: true });
-	await writeFile(testPath, packageTest);
+	await writeFile(testPath, sourceTest);
 	await run(process.execPath, ["test", testPath], {
 		cwd: packageRoot,
 		env: {

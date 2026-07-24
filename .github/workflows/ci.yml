@@ -55,6 +55,31 @@ jobs:
         if: runner.os == 'Linux'
         run: bun run check:upstream-source
 
+  pi-fork-compatibility:
+    name: Pi fork compatibility
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Check out the required Pi host
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: mizuikki/pi
+          ref: 1ed87e67e52b5ef0e9665ecdf014a4339689d282
+          path: pi-host
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.3.14
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.18.0
+      - name: Install dependencies
+        run: bun ci
+      - name: Verify Pi fork compatibility
+        run: bun run test:pi-fork -- --pi-dir pi-host --pi-ref 1ed87e67e52b5ef0e9665ecdf014a4339689d282
+
   pull-request-contract:
     name: Pull request contract
     if: github.event_name == 'pull_request'

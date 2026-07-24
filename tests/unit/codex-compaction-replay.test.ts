@@ -365,10 +365,11 @@ class SessionFixture {
 
 	messages(includeLiveTail = true): readonly unknown[] {
 		const messages = this.contextEntries().flatMap((entry) => {
+			const retainedTail = (entry as SessionEntry & { retainedTail?: unknown }).retainedTail;
 			if (
 				entry.type === "compaction" &&
-				entry.retainedTail !== undefined &&
-				!Array.isArray(entry.retainedTail)
+				retainedTail !== undefined &&
+				!Array.isArray(retainedTail)
 			) {
 				// Keep fixture projection tolerant so malformed retained-tail entries still reach
 				// the adaptor classifier instead of crashing Pi's summary projector.
