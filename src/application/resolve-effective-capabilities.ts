@@ -104,13 +104,16 @@ export class ResolveEffectiveCapabilities {
 			providerContract.responsesWebsocket === "official-only" &&
 			bridge.has("responses_websocket") &&
 			input.providerId === "openai-codex";
+		const portableContextSummary = bridge.has("portable_context_summary");
 		const transport = bridge.has("responses_sse")
 			? available("provider-contract")
 			: unavailable("responses_sse_executor_unavailable");
-		const implementation = bridge.has("remote_compaction_v2")
-			? "remote_v2"
-			: bridge.has("compact_endpoint")
-				? "compact_endpoint"
+		const implementation =
+			portableContextSummary &&
+			(bridge.has("remote_compaction_v2") || bridge.has("compact_endpoint"))
+				? bridge.has("remote_compaction_v2")
+					? "remote_v2"
+					: "compact_endpoint"
 				: null;
 		const manualCompaction =
 			input.config.codex.compaction.mode === "off"
@@ -200,6 +203,7 @@ export function capabilityContextFromSnapshot(
 		providerSupportsWebsockets: snapshot.providerSupportsWebsockets,
 		remoteCompactionV2: snapshot.compaction.implementation === "remote_v2",
 		compactEndpoint: snapshot.compaction.implementation === "compact_endpoint",
+		portableContextSummary: snapshot.bridgeCapabilities.includes("portable_context_summary"),
 	};
 }
 

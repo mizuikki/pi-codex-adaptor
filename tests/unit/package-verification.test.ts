@@ -3,12 +3,25 @@ import { resolve } from "node:path";
 
 import { isSafeFileName } from "../../scripts/assemble-package.ts";
 import {
+	assertIncompatiblePiHostRejected,
 	hasCompleteNativeArtifact,
 	resolveDeclaredPackageExtension,
 	resolvePackageExtension,
 } from "../../scripts/verify-package.ts";
 
 describe("package verification helpers", () => {
+	test("does not include loader probe output in a failed compatibility check", () => {
+		try {
+			assertIncompatiblePiHostRejected(0, "/private/fixture stderr");
+			expect.unreachable();
+		} catch (error) {
+			expect(String(error)).toContain(
+				"Exact-tarball clean install did not reject the transaction-less Pi host (status 0)",
+			);
+			expect(String(error)).not.toContain("/private/fixture");
+		}
+	});
+
 	test("accepts only plain native executable filenames", () => {
 		expect(isSafeFileName("codex-bridge")).toBe(true);
 		expect(isSafeFileName("codex-bridge.exe")).toBe(true);

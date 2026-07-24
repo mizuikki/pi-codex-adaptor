@@ -15,7 +15,7 @@ const CHECKSUM = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcd
 describe("redacted diagnostics", () => {
 	test("exports only the allowlisted bridge identity fields by default", () => {
 		const snapshot = createDiagnosticsSnapshot(createDefaultConfig(), {
-			bridgeProtocolVersion: 3,
+			bridgeProtocolVersion: 5,
 			officialCodexVersion: "0.144.3",
 			capabilities: ["responses_sse"],
 			prompt: "private prompt",
@@ -32,7 +32,7 @@ describe("redacted diagnostics", () => {
 				supportedApis: ["openai-responses", "openai-codex-responses"],
 			},
 			bridge: {
-				bridgeProtocolVersion: 3,
+				bridgeProtocolVersion: 5,
 				officialCodexVersion: "0.144.3",
 				capabilities: ["responses_sse"],
 			},
@@ -40,11 +40,33 @@ describe("redacted diagnostics", () => {
 		});
 	});
 
+	test("drops portable summaries and opaque compaction payloads from bridge diagnostics", () => {
+		const snapshot = createDiagnosticsSnapshot(createDefaultConfig(), {
+			bridgeProtocolVersion: 5,
+			officialCodexVersion: "0.144.3",
+			capabilities: ["responses_sse", "portable_context_summary"],
+			portableSummary: "secret portable summary",
+			compaction: {
+				summary: "secret portable summary",
+				opaque: "opaque fixture",
+			},
+		});
+
+		const serialized = JSON.stringify(snapshot);
+		expect(serialized).not.toContain("secret portable summary");
+		expect(serialized).not.toContain("opaque fixture");
+		expect(snapshot.bridge).toEqual({
+			bridgeProtocolVersion: 5,
+			officialCodexVersion: "0.144.3",
+			capabilities: ["responses_sse", "portable_context_summary"],
+		});
+	});
+
 	test("includes host-sourced adaptor, Pi, OS/arch, checksum, and safe recent errors", () => {
 		const snapshot = createDiagnosticsSnapshot(
 			createDefaultConfig(),
 			{
-				bridgeProtocolVersion: 3,
+				bridgeProtocolVersion: 5,
 				officialCodexTag: "rust-v0.144.3",
 				officialSourceCommit: "78ad6e6bfd1d3b6a209acd3ef82172a96b25179c",
 				buildTarget: "x86_64-unknown-linux-musl",
@@ -93,7 +115,7 @@ describe("redacted diagnostics", () => {
 			pi: { version: "0.81.1" },
 			runtime: { os: "linux", arch: "x64" },
 			bridge: {
-				bridgeProtocolVersion: 3,
+				bridgeProtocolVersion: 5,
 				officialCodexTag: "rust-v0.144.3",
 				officialSourceCommit: "78ad6e6bfd1d3b6a209acd3ef82172a96b25179c",
 				buildTarget: "x86_64-unknown-linux-musl",
@@ -144,7 +166,7 @@ describe("redacted diagnostics", () => {
 			},
 		};
 		const snapshot = createDiagnosticsSnapshot(createDefaultConfig(), {
-			bridgeProtocolVersion: 3,
+			bridgeProtocolVersion: 5,
 		});
 		const mutated = {
 			...snapshot,
@@ -175,7 +197,7 @@ describe("redacted diagnostics", () => {
 				providerCount: 1,
 				supportedApis: ["openai-responses", "openai-codex-responses"],
 			},
-			bridge: { bridgeProtocolVersion: 3 },
+			bridge: { bridgeProtocolVersion: 5 },
 			recentErrors: [],
 		});
 		expect(JSON.stringify(captured[0])).not.toContain("secret-token");
@@ -205,9 +227,9 @@ describe("redacted diagnostics", () => {
 				providerCount: 1,
 				supportedApis: ["openai-responses", "openai-codex-responses"],
 			},
-			bridge: { bridgeProtocolVersion: 3, config: createDefaultConfig() as unknown as string },
+			bridge: { bridgeProtocolVersion: 5, config: createDefaultConfig() as unknown as string },
 			recentErrors: [],
 		});
-		expect(snapshot.bridge).toEqual({ bridgeProtocolVersion: 3 });
+		expect(snapshot.bridge).toEqual({ bridgeProtocolVersion: 5 });
 	});
 });

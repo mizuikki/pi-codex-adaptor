@@ -48,6 +48,7 @@ use codex_api::ImageGenerationRequest;
 use codex_api::ImageQuality;
 use codex_api::ImageUrl;
 use codex_api::ImagesClient;
+use codex_api::OpenAiVerbosity;
 use codex_api::Reasoning;
 use codex_api::ResponsesApiRequest;
 use codex_api::ResponsesClient;
@@ -68,6 +69,7 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::protocol::TokenUsage;
 use codex_tools::CommandToolOptions;
 use codex_tools::ToolSpec;
 use codex_utils_output_truncation::TruncationPolicy;
@@ -99,6 +101,9 @@ const MAX_REQUEST_ID_BYTES: usize = 256;
 const MAX_REQUEST_IDS_PER_CONNECTION: usize = 65_536;
 const MAX_SESSION_OUTPUT_BYTES: usize = codex_utils_pty::DEFAULT_OUTPUT_BYTES_CAP;
 const DEFAULT_MAX_OUTPUT_TOKENS: usize = 10_000;
+const PORTABLE_SUMMARY_TIMEOUT_MS: u64 = 600_000;
+const PORTABLE_SUMMARY_MAX_OUTPUT_TOKENS: usize = 1_024;
+const PORTABLE_SUMMARY_V1_INSTRUCTIONS: &str = "Summarize this conversation context for future continuation. Return plain text only. Preserve the user's goals, decisions, constraints, pending work, tool outcomes, and important factual state. Be concise and do not add markdown, bullets, or commentary about the summarization process.";
 const MAX_IMAGE_SOURCE_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_IMAGE_RESULT_BYTES: usize = 12 * 1024 * 1024;
 const MAX_IMAGE_REFERENCE_BYTES: u64 = 64 * 1024 * 1024;
@@ -455,6 +460,20 @@ struct ResponsesCreateParams {
     connection: ProviderConnection,
     request: ResponsesApiRequest,
     transport_mode: ResponsesTransportMode,
+    provider_supports_websockets: bool,
+    #[serde(default)]
+    remote_compaction_v2_context: Option<RemoteCompactionV2Context>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ContextsSummarizeParams {
+    connection: ProviderConnection,
+    model_id: String,
+    input: Vec<ResponseItem>,
+    #[serde(default)]
+    transport_mode: ResponsesTransportMode,
+    #[serde(default = "default_provider_websocket_capability")]
     provider_supports_websockets: bool,
     #[serde(default)]
     remote_compaction_v2_context: Option<RemoteCompactionV2Context>,
@@ -1544,12 +1563,11 @@ async fn dispatch(
                 "capabilities": compiled_capabilities(),
             })))
         }
+        RequestMethod::ContextsSummarize => contexts_summarize(params, cancellation).await,
         RequestMethod::ResponsesCreate => responses_create(params, flow, cancellation)
             .await
             .map(RequestSuccess::completed),
-        RequestMethod::ResponsesCompact => responses_compact(params, cancellation)
-            .await
-            .map(RequestSuccess::completed),
+        RequestMethod::ResponsesCompact => responses_compact(params, cancellation).await,
         RequestMethod::ModelsResolve => {
             models_resolve(params, cancellation).map(RequestSuccess::completed)
         }
@@ -3737,6 +3755,164 @@ async fn responses_create(
     .into())
 }
 
+async fn contexts_summarize(
+    params: Value,
+    cancellation: &CancellationToken,
+) -> Result<RequestSuccess, RequestFailure> {
+    let mut parsed = serde_json::from_value::<ContextsSummarizeParams>(params)
+        .map_err(|_| invalid_params("contexts.summarize parameters are invalid"))?;
+    if parsed.model_id.is_empty() || parsed.model_id.len() > 256 {
+        return Err(invalid_params("contexts.summarize modelId is invalid").into());
+    }
+    if parsed.input.is_empty() {
+        return Err(invalid_params("contexts.summarize input is invalid").into());
+    }
+    let remote_v2_context = parsed
+        .remote_compaction_v2_context
+        .take()
+        .map(RemoteCompactionV2Context::validate)
+        .transpose()?;
+    let connection = api::connect(&parsed.connection)?;
+    let timeout = Duration::from_millis(PORTABLE_SUMMARY_TIMEOUT_MS);
+    let result = await_with_cancellation(
+        cancellation,
+        Box::pin(tokio::time::timeout(
+            timeout,
+            contexts_summarize_inner(
+                parsed.model_id,
+                parsed.input,
+                parsed.transport_mode,
+                parsed.provider_supports_websockets,
+                connection,
+                cancellation,
+                remote_v2_context,
+            ),
+        )),
+    )
+    .await?;
+    match result {
+        Ok(result) => result.map(RequestSuccess::completed),
+        Err(_) => Ok(RequestSuccess::timed_out(json!({}))),
+    }
+}
+
+#[allow(clippy::too_many_lines)]
+async fn contexts_summarize_inner(
+    model_id: String,
+    input: Vec<ResponseItem>,
+    transport_mode: ResponsesTransportMode,
+    provider_supports_websockets: bool,
+    connection: api::ApiConnection,
+    cancellation: &CancellationToken,
+    remote_v2_context: Option<RemoteCompactionV2Context>,
+) -> Result<Value, RequestFailure> {
+    let mut request = ResponsesApiRequest {
+        model: model_id,
+        instructions: PORTABLE_SUMMARY_V1_INSTRUCTIONS.to_owned(),
+        input,
+        tools: None,
+        tool_choice: "none".to_owned(),
+        parallel_tool_calls: false,
+        reasoning: None,
+        store: false,
+        stream: true,
+        stream_options: None,
+        include: Vec::new(),
+        service_tier: None,
+        prompt_cache_key: None,
+        text: Some(TextControls {
+            verbosity: Some(OpenAiVerbosity::Low),
+            format: None,
+        }),
+        client_metadata: None,
+    };
+    if let Some(context) = remote_v2_context.as_ref() {
+        context.apply_to_request(&mut request, RemoteCompactionV2RequestKind::Compaction)?;
+    }
+    let websocket_connect_timeout = connection.websocket_connect_timeout;
+    let mut response = await_with_cancellation(
+        cancellation,
+        Box::pin(start_response_stream(
+            request,
+            transport_mode,
+            provider_supports_websockets,
+            connection,
+            websocket_connect_timeout,
+            RemoteCompactionV2RequestMetadata {
+                context: remote_v2_context.as_ref(),
+                kind: RemoteCompactionV2RequestKind::Compaction,
+            },
+            "portable_context_summary",
+        )),
+    )
+    .await??;
+    let mut summary = None;
+    let mut completed = false;
+    let mut saw_invalid_output = false;
+    let mut token_usage = None;
+    loop {
+        let event = tokio::select! {
+            () = cancellation.cancelled() => return Err(RequestFailure::Cancelled),
+            event = response.rx_event.recv() => event,
+        };
+        let Some(event) = event else {
+            break;
+        };
+        let event = event.map_err(|error| {
+            api::map_provider_contract_error(&error, "portable_context_summary")
+        })?;
+        match event {
+            codex_api::ResponseEvent::OutputItemDone(item) => match extract_portable_summary(&item)
+            {
+                Ok(text) => {
+                    if summary.replace(text).is_some() {
+                        saw_invalid_output = true;
+                    }
+                }
+                Err(_) => {
+                    saw_invalid_output = true;
+                }
+            },
+            codex_api::ResponseEvent::Completed {
+                token_usage: usage, ..
+            } => {
+                token_usage = usage;
+                completed = true;
+                break;
+            }
+            _ => {}
+        }
+    }
+    if !completed {
+        return Err(BridgeError {
+            category: ErrorCategory::ProtocolError,
+            code: "portable_summary_incomplete".to_owned(),
+            message: "portable context summary ended without completion".to_owned(),
+            retryable: true,
+        }
+        .into());
+    }
+    if saw_invalid_output {
+        return Err(
+            invalid_portable_summary("portable context summary returned invalid output").into(),
+        );
+    }
+    let Some(summary) = summary else {
+        return Err(invalid_portable_summary(
+            "portable context summary returned no assistant message",
+        )
+        .into());
+    };
+    let mut result = json!({ "summary": summary });
+    if let Some(usage) = normalized_usage_json(token_usage) {
+        result
+            .as_object_mut()
+            .expect("summary result should be an object")
+            .insert("usage".to_owned(), usage);
+    }
+    Ok(result)
+}
+
 async fn start_response_stream(
     request: ResponsesApiRequest,
     transport_mode: ResponsesTransportMode,
@@ -3796,7 +3972,7 @@ async fn start_response_stream(
 async fn responses_compact(
     params: Value,
     cancellation: &CancellationToken,
-) -> Result<Value, RequestFailure> {
+) -> Result<RequestSuccess, RequestFailure> {
     let mut parsed = serde_json::from_value::<ResponsesCompactParams>(params)
         .map_err(|_| invalid_params("responses.compact parameters are invalid"))?;
     if parsed.request_timeout_ms == 0 || parsed.request_timeout_ms > 600_000 {
@@ -3831,8 +4007,8 @@ async fn responses_compact(
         )
         .await?
         {
-            Ok(result) => result,
-            Err(_) => Err(compaction_timeout().into()),
+            Ok(result) => result.map(RequestSuccess::completed),
+            Err(_) => Ok(RequestSuccess::timed_out(json!({}))),
         };
     }
     let client = CompactClient::new(
@@ -3856,20 +4032,22 @@ async fn responses_compact(
         text: request.text,
     };
     ensure_not_cancelled(cancellation)?;
+    let timeout = Duration::from_millis(parsed.request_timeout_ms);
     let output = await_with_cancellation(
         cancellation,
-        client.compact_input(
-            &input,
-            HeaderMap::default(),
-            Duration::from_millis(parsed.request_timeout_ms),
-            None,
-        ),
+        Box::pin(client.compact_input(&input, HeaderMap::default(), timeout, None)),
     )
-    .await?
-    .map_err(|error| api::map_provider_contract_error(&error, "compact_endpoint"))?;
-    Ok(json!({ "output": output }))
+    .await?;
+    match output {
+        Ok(output) => Ok(RequestSuccess::completed(json!({ "output": output }))),
+        Err(codex_api::ApiError::Transport(codex_api::TransportError::Timeout)) => {
+            Ok(RequestSuccess::timed_out(json!({})))
+        }
+        Err(error) => Err(api::map_provider_contract_error(&error, "compact_endpoint").into()),
+    }
 }
 
+#[allow(clippy::too_many_lines)]
 async fn responses_compact_remote(
     request: OwnedCompactionInput,
     transport_mode: ResponsesTransportMode,
@@ -3921,6 +4099,7 @@ async fn responses_compact_remote(
     let mut compacted = None;
     let mut compacted_count = 0usize;
     let mut completed = false;
+    let mut token_usage = None;
     loop {
         let event = tokio::select! {
             () = cancellation.cancelled() => return Err(RequestFailure::Cancelled),
@@ -3938,7 +4117,10 @@ async fn responses_compact_remote(
                     compacted.get_or_insert(item);
                 }
             }
-            codex_api::ResponseEvent::Completed { .. } => {
+            codex_api::ResponseEvent::Completed {
+                token_usage: usage, ..
+            } => {
+                token_usage = usage;
                 completed = true;
                 break;
             }
@@ -3972,18 +4154,69 @@ async fn responses_compact_remote(
         }
         .into());
     };
-    Ok(json!({
-        "output": crate::remote_compaction_v2::build_compacted_history(&retained_input, compacted)
-    }))
+    let mut result = json!({
+        "output": crate::remote_compaction_v2::build_compacted_history(&retained_input, compacted),
+    });
+    if let Some(usage) = normalized_usage_json(token_usage) {
+        result
+            .as_object_mut()
+            .expect("remote compaction result should be an object")
+            .insert("usage".to_owned(), usage);
+    }
+    Ok(result)
 }
 
-fn compaction_timeout() -> BridgeError {
+fn invalid_portable_summary(message: &str) -> BridgeError {
     BridgeError {
-        category: ErrorCategory::NativeToolError,
-        code: "compaction_timeout".to_owned(),
-        message: "the compaction request timed out".to_owned(),
-        retryable: true,
+        category: ErrorCategory::ProtocolError,
+        code: "portable_summary_invalid_output".to_owned(),
+        message: message.to_owned(),
+        retryable: false,
     }
+}
+
+fn normalized_usage_json(usage: Option<TokenUsage>) -> Option<Value> {
+    usage.map(|usage| {
+        json!({
+            "inputTokens": usage.input_tokens.max(0),
+            "outputTokens": usage.output_tokens.max(0),
+            "cachedInputTokens": usage.cached_input_tokens.max(0),
+            "reasoningTokens": usage.reasoning_output_tokens.max(0),
+        })
+    })
+}
+
+fn extract_portable_summary(item: &ResponseItem) -> Result<String, BridgeError> {
+    let ResponseItem::Message { role, content, .. } = item else {
+        return Err(invalid_portable_summary(
+            "portable context summary returned a non-message output item",
+        ));
+    };
+    if role != "assistant" {
+        return Err(invalid_portable_summary(
+            "portable context summary returned a non-assistant message",
+        ));
+    }
+    let mut summary = String::new();
+    for part in content {
+        let ContentItem::OutputText { text } = part else {
+            return Err(invalid_portable_summary(
+                "portable context summary returned a non-text message part",
+            ));
+        };
+        summary.push_str(text);
+    }
+    if summary.trim().is_empty() {
+        return Err(invalid_portable_summary(
+            "portable context summary returned empty text",
+        ));
+    }
+    if approx_token_count(&summary) > PORTABLE_SUMMARY_MAX_OUTPUT_TOKENS {
+        return Err(invalid_portable_summary(
+            "portable context summary exceeded the output limit",
+        ));
+    }
+    Ok(summary)
 }
 
 fn invalid_params(message: &str) -> BridgeError {
@@ -4142,6 +4375,7 @@ fn compiled_capabilities() -> Vec<BridgeCapability> {
     vec![
         BridgeCapability::ResponsesSse,
         BridgeCapability::ResponsesWebsocket,
+        BridgeCapability::PortableContextSummary,
         BridgeCapability::CompactEndpoint,
         BridgeCapability::RemoteCompactionV2,
         BridgeCapability::ModelMetadata,
@@ -4324,7 +4558,7 @@ mod tests {
 
     fn initialization() -> &'static str {
         concat!(
-            "{\"type\":\"initialize\",\"requestId\":\"init-1\",\"protocolVersion\":4,",
+            "{\"type\":\"initialize\",\"requestId\":\"init-1\",\"protocolVersion\":5,",
             "\"client\":{\"name\":\"contract-test\",\"version\":\"0.0.0\"}}\n"
         )
     }
@@ -4629,7 +4863,7 @@ mod tests {
     #[tokio::test]
     #[allow(clippy::large_futures)]
     async fn preserves_official_compaction_output_items() {
-        let (base_url, server) = spawn_fixture_http_server(
+        let (base_url, request, server) = spawn_capturing_fixture_http_server(
             "{\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[]}]}"
                 .to_owned(),
         )
@@ -4654,10 +4888,254 @@ mod tests {
         )
         .await
         .expect("compaction request should complete");
+        assert_eq!(result.status, TerminalStatus::Completed);
+        let result = result.result;
 
         assert_eq!(result["output"][0]["type"], "message");
         assert_eq!(result["output"][0]["role"], "assistant");
+        // The pinned official CompactClient returns only Vec<ResponseItem>; it has no usage
+        // envelope, so compact_endpoint must not invent token accounting fields.
+        // Proof that the pinned official CompactClient contract is output-only: its
+        // compact_input() returns Result<Vec<ResponseItem>, ApiError> with no usage field,
+        // so completed compact_endpoint results must omit usage rather than invent it.
+        assert!(result.get("usage").is_none());
+        let request = request.await.expect("fixture request should be captured");
+        assert_eq!(fixture_header(&request, "session-id"), None);
+        assert_eq!(fixture_header(&request, "x-codex-beta-features"), None);
+        let body = fixture_request_body(&request);
+        assert!(body.get("client_metadata").is_none());
         server.await.expect("fixture server should join");
+    }
+
+    #[tokio::test]
+    #[allow(clippy::large_futures)]
+    async fn returns_a_bounded_plaintext_portable_summary_without_tools_or_remote_v2_claims() {
+        let (base_url, request, server) = spawn_capturing_fixture_http_server(
+            concat!(
+                "event: response.output_item.done\n",
+                "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"portable fixture summary\"}]}}\n\n",
+                "event: response.completed\n",
+                "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"summary-response\",\"usage\":{\"input_tokens\":7,\"input_tokens_details\":{\"cached_tokens\":2},\"output_tokens\":3,\"output_tokens_details\":{\"reasoning_tokens\":1},\"total_tokens\":10},\"output\":[]}}\n\n",
+            )
+            .to_owned(),
+        )
+        .await;
+        let result = contexts_summarize(
+            json!({
+                "modelId": "fixture-model",
+                "input": [{
+                    "type": "message",
+                    "role": "user",
+                    "content": [{ "type": "input_text", "text": "x" }]
+                }],
+                "transportMode": "sse",
+                "providerSupportsWebsockets": false,
+                "connection": fixture_connection(base_url),
+            }),
+            &CancellationToken::new(),
+        )
+        .await
+        .expect("summary request should complete");
+        assert_eq!(result.status, TerminalStatus::Completed);
+        let result = result.result;
+        assert_eq!(result["summary"], "portable fixture summary");
+        assert_eq!(result["usage"]["inputTokens"], 7);
+        assert_eq!(result["usage"]["cachedInputTokens"], 2);
+        assert_eq!(result["usage"]["outputTokens"], 3);
+        assert_eq!(result["usage"]["reasoningTokens"], 1);
+
+        let request = request.await.expect("fixture request should be captured");
+        assert_eq!(fixture_header(&request, "session-id"), None);
+        assert_eq!(fixture_header(&request, "x-codex-beta-features"), None);
+        let body = fixture_request_body(&request);
+        assert_eq!(body["model"], "fixture-model");
+        assert_eq!(body["tool_choice"], "none");
+        assert!(body.get("tools").is_none());
+        assert!(body.get("prompt_cache_key").is_none());
+        assert!(body.get("client_metadata").is_none());
+        server.await.expect("fixture server should join");
+    }
+
+    #[tokio::test]
+    #[allow(clippy::large_futures)]
+    async fn summary_remote_v2_attribution_matches_the_compaction_prefix_policy() {
+        let (base_url, request, server) = spawn_capturing_fixture_http_server(
+            concat!(
+                "event: response.output_item.done\n",
+                "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"summary with attribution\"}]}}\n\n",
+                "event: response.completed\n",
+                "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"summary-response\",\"output\":[]}}\n\n",
+            )
+            .to_owned(),
+        )
+        .await;
+        let result = contexts_summarize(
+            json!({
+                "modelId": "fixture-model",
+                "input": [{
+                    "type": "compaction",
+                    "encrypted_content": "opaque"
+                }],
+                "transportMode": "sse",
+                "providerSupportsWebsockets": false,
+                "remoteCompactionV2Context": {
+                    "sessionId": "remote-v2-session",
+                    "compactionTrigger": "manual"
+                },
+                "connection": fixture_connection(base_url),
+            }),
+            &CancellationToken::new(),
+        )
+        .await
+        .expect("summary request should complete");
+        assert_eq!(result.status, TerminalStatus::Completed);
+
+        let request = request.await.expect("fixture request should be captured");
+        assert_eq!(
+            fixture_header(&request, "session-id"),
+            Some("remote-v2-session")
+        );
+        assert_eq!(
+            fixture_header(&request, "x-codex-beta-features"),
+            Some("remote_compaction_v2")
+        );
+        let body = fixture_request_body(&request);
+        let metadata = &body["client_metadata"];
+        assert_eq!(metadata["session_id"], "remote-v2-session");
+        let turn: Value = serde_json::from_str(
+            metadata["x-codex-turn-metadata"]
+                .as_str()
+                .expect("turn metadata should be a string"),
+        )
+        .expect("turn metadata should be JSON");
+        assert_eq!(turn["request_kind"], "compaction");
+        assert_eq!(turn["compaction"]["trigger"], "manual");
+        assert_eq!(turn["compaction"]["reason"], "user_requested");
+        server.await.expect("fixture server should join");
+    }
+
+    #[tokio::test]
+    async fn contexts_summarize_rejects_missing_unknown_and_invalid_parameters() {
+        let cases = [
+            json!({}),
+            json!({
+                "connection": fixture_connection("https://example.invalid/v1".to_owned()),
+                "input": [{ "type": "message", "role": "user", "content": [{ "type": "input_text", "text": "x" }] }]
+            }),
+            json!({
+                "modelId": "fixture-model",
+                "connection": fixture_connection("https://example.invalid/v1".to_owned()),
+                "input": [],
+            }),
+            json!({
+                "modelId": "fixture-model",
+                "connection": fixture_connection("https://example.invalid/v1".to_owned()),
+                "input": [{ "type": "message", "role": "user", "content": [{ "type": "input_text", "text": "x" }] }],
+                "unexpected": true,
+            }),
+        ];
+
+        for params in cases {
+            let error = contexts_summarize(params, &CancellationToken::new())
+                .await
+                .expect_err("invalid contexts.summarize parameters should fail");
+            assert!(matches!(
+                error,
+                RequestFailure::Bridge(error) if error.code == "invalid_params"
+            ));
+        }
+    }
+
+    #[tokio::test]
+    #[allow(clippy::large_futures)]
+    async fn rejects_malformed_portable_summary_output() {
+        let (base_url, server) = spawn_fixture_http_server(
+            concat!(
+                "event: response.output_item.done\n",
+                "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"first summary\"}]}}\n\n",
+                "event: response.output_item.done\n",
+                "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"second summary\"}]}}\n\n",
+                "event: response.completed\n",
+                "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"summary-response\",\"output\":[]}}\n\n",
+            )
+            .to_owned(),
+        )
+        .await;
+        let error = contexts_summarize(
+            json!({
+                "modelId": "fixture-model",
+                "input": [{
+                    "type": "message",
+                    "role": "user",
+                    "content": [{ "type": "input_text", "text": "x" }]
+                }],
+                "transportMode": "sse",
+                "providerSupportsWebsockets": false,
+                "connection": fixture_connection(base_url),
+            }),
+            &CancellationToken::new(),
+        )
+        .await
+        .expect_err("malformed summary output should fail");
+        assert!(matches!(
+            error,
+            RequestFailure::Bridge(error)
+                if error.code == "portable_summary_invalid_output"
+                    && error.message == "portable context summary returned invalid output"
+        ));
+        server.await.expect("fixture server should join");
+    }
+
+    #[test]
+    fn rejects_portable_summary_output_that_exceeds_the_bound() {
+        let item = ResponseItem::Message {
+            id: None,
+            role: "assistant".to_owned(),
+            content: vec![ContentItem::OutputText {
+                text: "fixture ".repeat(PORTABLE_SUMMARY_MAX_OUTPUT_TOKENS),
+            }],
+            phase: None,
+            internal_chat_message_metadata_passthrough: None,
+        };
+        let error =
+            extract_portable_summary(&item).expect_err("oversized summary output should fail");
+        assert_eq!(error.code, "portable_summary_invalid_output");
+        assert_eq!(
+            error.message,
+            "portable context summary exceeded the output limit"
+        );
+    }
+
+    #[tokio::test]
+    async fn contexts_summarize_honors_cancellation() {
+        let (base_url, server) = spawn_stalling_fixture_http_server().await;
+        let cancellation = CancellationToken::new();
+        let task_cancellation = cancellation.clone();
+        let task = tokio::spawn(async move {
+            contexts_summarize(
+                json!({
+                    "modelId": "fixture-model",
+                    "input": [{
+                        "type": "message",
+                        "role": "user",
+                        "content": [{ "type": "input_text", "text": "x" }]
+                    }],
+                    "transportMode": "sse",
+                    "providerSupportsWebsockets": false,
+                    "connection": fixture_connection(base_url),
+                }),
+                &task_cancellation,
+            )
+            .await
+        });
+        tokio::task::yield_now().await;
+        cancellation.cancel();
+        let result = task
+            .await
+            .expect("summary task should join")
+            .expect_err("cancelled summary should fail");
+        assert!(matches!(result, RequestFailure::Cancelled));
+        server.abort();
     }
 
     #[tokio::test]
@@ -4700,6 +5178,8 @@ mod tests {
         )
         .await
         .expect("remote compaction should complete");
+        assert_eq!(result.status, TerminalStatus::Completed);
+        let result = result.result;
         assert_eq!(result["output"][0]["type"], "message");
         assert_eq!(result["output"][0]["role"], "user");
         assert_eq!(result["output"][1]["type"], "compaction");
@@ -4747,6 +5227,8 @@ mod tests {
         )
         .await
         .expect("remote compaction should complete");
+        assert_eq!(result.status, TerminalStatus::Completed);
+        let result = result.result;
         assert_eq!(result["output"][0]["type"], "compaction");
 
         let request = request.await.expect("fixture request should be captured");
@@ -4855,7 +5337,7 @@ mod tests {
     #[tokio::test]
     async fn remote_v2_compaction_honors_the_request_deadline() {
         let (base_url, server) = spawn_stalling_fixture_http_server().await;
-        let error = responses_compact(
+        let result = responses_compact(
             json!({
                 "implementation": "remote_v2",
                 "transportMode": "sse",
@@ -4877,12 +5359,43 @@ mod tests {
             &CancellationToken::new(),
         )
         .await
-        .expect_err("stalled remote compaction should time out");
-        assert!(matches!(
-            error,
-            RequestFailure::Bridge(error) if error.code == "compaction_timeout" && error.retryable
-        ));
+        .expect("stalled remote compaction should return a timeout status");
+        assert_eq!(result.status, TerminalStatus::TimedOut);
+        assert_eq!(result.result, json!({}));
         server.abort();
+    }
+
+    #[tokio::test]
+    async fn compact_endpoint_honors_the_request_deadline() {
+        let (base_url, server) = spawn_stalling_fixture_http_server().await;
+        let result = responses_compact(
+            json!({
+                "request": {
+                    "model": "fixture-model",
+                    "input": [],
+                    "instructions": "",
+                    "tools": null,
+                    "parallel_tool_calls": true,
+                    "reasoning": null,
+                    "service_tier": null,
+                    "prompt_cache_key": null,
+                    "text": null
+                },
+                "requestTimeoutMs": 25,
+                "connection": fixture_connection(base_url),
+            }),
+            &CancellationToken::new(),
+        )
+        .await
+        .expect("stalled compact endpoint should return a timeout status");
+        assert_eq!(result.status, TerminalStatus::TimedOut);
+        assert_eq!(result.result, json!({}));
+        server.abort();
+    }
+
+    #[test]
+    fn portable_summary_timeout_matches_the_maximum_compaction_deadline() {
+        assert_eq!(PORTABLE_SUMMARY_TIMEOUT_MS, 600_000);
     }
 
     #[test]
@@ -9130,7 +9643,7 @@ mod tests {
     async fn rejects_malformed_secret_bearing_frames_with_stable_safe_messages() {
         let secret = "fixture-secret-sentinel";
         let malformed = format!(
-            "{{\"type\":\"initialize\",\"requestId\":\"init-1\",\"protocolVersion\":4,\"client\":{{\"name\":\"contract-test\",\"version\":\"0.0.0\"}},\"extra\":true,\"opaque\":\"{secret}\"}}\n"
+            "{{\"type\":\"initialize\",\"requestId\":\"init-1\",\"protocolVersion\":5,\"client\":{{\"name\":\"contract-test\",\"version\":\"0.0.0\"}},\"extra\":true,\"opaque\":\"{secret}\"}}\n"
         );
         let messages = run_server(&malformed).await;
         assert_eq!(messages.len(), 1);
@@ -9139,7 +9652,7 @@ mod tests {
         };
         assert!(request_id.is_none());
         assert_eq!(error.code, "invalid_frame");
-        assert_eq!(error.message, "bridge frame does not match protocol v4");
+        assert_eq!(error.message, "bridge frame does not match protocol v5");
         assert!(!error.message.contains(secret));
         assert!(!error.message.contains("fixture-secret-sentinel"));
         assert!(!format!("{messages:?}").contains(secret));

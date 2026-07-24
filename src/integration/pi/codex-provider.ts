@@ -17,6 +17,7 @@ import {
 import {
 	CodexCompactionStore,
 	isSupportedStructuredResponseItem,
+	matchingOpaqueSnapshotOutput,
 } from "../../application/compaction.ts";
 import type { ConfigurationService } from "../../application/configuration.ts";
 import type { ProviderActivationPolicy } from "../../application/provider-activation.ts";
@@ -32,8 +33,11 @@ import type { CodexConfig } from "../../domain/config.ts";
 import { normalizeCodexContextMessages } from "./codex-message-normalization.ts";
 import { toPiProviderErrorMessage } from "./codex-provider-error.ts";
 import {
+	authenticationSummary,
 	type CodexProviderRequestGuard,
 	type CodexProviderRequestRecord,
+	sessionFingerprint,
+	sha256Hex,
 	snapshotSimpleStreamOptions,
 } from "./codex-provider-request-guard.ts";
 import {
@@ -132,6 +136,7 @@ async function runResponse(
 			context,
 			options,
 			config.codex,
+			connection,
 			officialTools,
 			compactions,
 			snapshot,
@@ -158,7 +163,7 @@ async function runResponse(
 			);
 			if (replacement !== undefined) request = asRequest(replacement);
 			const approvedRecord: CodexProviderRequestRecord = requestRecord;
-			requestGuard.assertApproved(approvedRecord, request);
+			request = requestGuard.assertApproved(approvedRecord, request);
 			dispatchConnection = approvedRecord.connection;
 			dispatchConfig = approvedRecord.config.codex;
 			dispatchProviderSupportsWebsockets = approvedRecord.capabilities.providerSupportsWebsockets;
@@ -492,6 +497,7 @@ export function buildCodexRequest(
 		serviceTier: "default" | "priority" | "flex";
 		verbosity: "low" | "medium" | "high";
 	},
+	connection: CodexProviderConnection | undefined,
 	officialTools: readonly unknown[],
 	compactions: CodexCompactionStore,
 	capabilities: EffectiveCapabilitySnapshot,
@@ -506,12 +512,26 @@ export function buildCodexRequest(
 		options?.reasoning === undefined
 			? undefined
 			: (model.thinkingLevelMap?.[options.reasoning] ?? options.reasoning);
-	const snapshot = compactions.get(options?.sessionId, model.id);
+	if (options?.sessionId !== undefined && compactions.isReplayInvalid(options.sessionId)) {
+		throw new Error("OpenAI Codex compaction replay is invalid for this session");
+	}
+	const snapshot = compactions.getForSession(options?.sessionId);
+	const identity =
+		options?.sessionId === undefined || connection === undefined
+			? undefined
+			: providerRequestIdentity(options.sessionId, model, connection);
+	const matchedOpaqueOutput = matchingOpaqueSnapshotOutput(
+		snapshot,
+		identity,
+		snapshot?.source === "manual" ? sha256Hex(snapshot.summary) : undefined,
+	);
 	const messages =
-		snapshot?.source === "manual" && isCompactionMarker(context.messages[0], snapshot.summary)
+		matchedOpaqueOutput !== undefined &&
+		snapshot?.source === "manual" &&
+		isCompactionMarker(context.messages[0], snapshot.summary)
 			? context.messages.slice(1)
 			: context.messages;
-	const canonicalPrefix = messages === context.messages ? [] : (snapshot?.output ?? []);
+	const canonicalPrefix = messages === context.messages ? [] : (matchedOpaqueOutput ?? []);
 	return {
 		model: model.id,
 		instructions: withSupplementalSessionInstructions(context.systemPrompt ?? "", capabilities),
@@ -534,12 +554,36 @@ export function buildCodexRequest(
 
 const buildRequest = buildCodexRequest;
 
+function providerRequestIdentity(
+	sessionId: string,
+	model: Pick<Model<string>, "id" | "api">,
+	connection: CodexProviderConnection,
+) {
+	const authenticationBinding = authenticationSummary(
+		connection.authentication,
+		connection.accountId,
+		connection.accountIdSource,
+	);
+	if (authenticationBinding === undefined) return undefined;
+	return {
+		sessionFingerprint: sessionFingerprint(sessionId),
+		providerId: connection.providerId,
+		api: model.api,
+		baseUrl: connection.baseUrl,
+		modelId: model.id,
+		authenticationBinding,
+	};
+}
+
 export function responseItemsFromMessages(messages: readonly unknown[]): unknown[] {
 	return normalizeCodexContextMessages(messages).flatMap(toResponseItems);
 }
 
 const RESPONSE_ITEM_SIGNATURE_KIND = "pi-codex-adaptor.response-item";
 const RESPONSE_ITEM_SIGNATURE_VERSION = 2;
+const COMPACTION_SUMMARY_PREFIX =
+	"The conversation history before this point was compacted into the following summary:\n\n<summary>\n";
+const COMPACTION_SUMMARY_SUFFIX = "\n</summary>";
 
 /** Encode a complete bridge-supported item in a Pi signature field without interpreting it. */
 export function encodeResponseItemSignature(item: unknown): string {
@@ -578,7 +622,9 @@ export function decodeResponseItemSignature(value: unknown): Record<string, unkn
 function toResponseItems(message: unknown): unknown[] {
 	const raw = record(message);
 	if (raw === undefined || typeof raw.role !== "string") return [];
-	if (raw.role === "compactionSummary") return [];
+	if (raw.role === "compactionSummary" && typeof raw.summary === "string") {
+		return [userTextItem(`${COMPACTION_SUMMARY_PREFIX}${raw.summary}${COMPACTION_SUMMARY_SUFFIX}`)];
+	}
 	if (raw.role === "branchSummary" && typeof raw.summary === "string") {
 		return [userTextItem(raw.summary)];
 	}

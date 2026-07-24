@@ -1,6 +1,6 @@
 # Bridge Protocol
 
-Protocol version 4 is a bounded newline-delimited JSON channel between the TypeScript host and the
+Protocol version 5 is a bounded newline-delimited JSON channel between the TypeScript host and the
 single native `codex-bridge` process. Each line contains exactly one object and is limited to
 16 MiB, excluding the line terminator. The bridge advertises a maximum of 256 unacknowledged stream
 events and reports paused and resumed backpressure states.
@@ -10,7 +10,7 @@ non-secret client identity. The handshake returns protocol,
 official Codex, native target, project source, vendor tree, frame limit, and compiled capability
 identity. A protocol or official baseline mismatch is fatal and must not be downgraded.
 
-Protocol v4 requires an explicit host-owned authorization value on every `tools.execute` params
+Protocol v5 requires an explicit host-owned authorization value on every `tools.execute` params
 object: `authorization: "require_approval" | "preauthorized"`. The `session_write` control frame
 also requires the same field, including when `data` is empty. Missing or unknown values fail closed
 as invalid parameters; there is no implicit default and the field is not part of any model-visible
@@ -30,7 +30,9 @@ terminate frames but still return results through their request IDs.
 
 OpenAI request, event, and result objects are opaque payloads at this boundary. Their typed ownership
 stays in the pinned native modules. Unknown stream events are retained as opaque values and never
-treated as successful termination. Only a `result` or `error` frame terminates an operation.
+treated as successful termination. Only a `result` or `error` frame terminates an operation. A
+`result` can use the terminal status `completed`, `failed`, `aborted`, `incomplete`, or `timed_out`;
+timeouts are terminal outcomes rather than bridge errors.
 
 `responses.create` accepts the typed official request plus `transportMode: "auto" | "sse"` and a
 provider WebSocket capability. Native code forces streaming, uses the official WebSocket client when
@@ -39,20 +41,36 @@ emits only the official client's validated events. `responses.compact` accepts t
 `implementation: "remote_v2" | "compact_endpoint"`, the configured transport mode, and a provider
 WebSocket capability. `remote_v2` appends the official compaction trigger, consumes the official
 stream, requires exactly one official `compaction` output item followed by completion, and returns
-that item unchanged. The compact-endpoint fallback returns canonical `ResponseItem` output unchanged.
-The timeout defaults to 120 seconds and is bounded at 600 seconds. The bridge deserializes each SSE
+that item unchanged together with normalized usage when the official stream reports it. The
+compact-endpoint fallback returns only the canonical `ResponseItem` output array from the pinned
+official `CompactClient`; that client type does not expose provider usage, so completed
+`compact_endpoint` results omit `usage` rather than inventing token accounting.
+The timeout defaults to 120 seconds and is bounded at 600 seconds. Timed-out compaction returns a
+terminal `timed_out` result with an empty result object. The bridge deserializes each SSE
 output item at the typed native `ResponseItem` boundary: supported aliases normalize to the canonical
 item type, and fields unknown to that native type are unavailable to TypeScript and are therefore not
 claimed as losslessly retained. The canonical `compaction` projection preserves its exact non-empty
 `encrypted_content` string. The protocol carries no trigger field in the returned output; the remote
 implementation's trigger is a native request-side detail. The Pi integration stores the returned
-typed projection in versioned opaque checkpoint details, restores it on session reload, substitutes it
-for Pi's display-only summary on the next request, and passes it back without decryption, parsing, or
-trimming.
+typed projection in versioned opaque checkpoint details and passes it back without decryption,
+parsing, or trimming.
+
+`contexts.summarize` accepts a validated provider connection, non-empty `modelId`, non-empty
+structured `input`, the configured transport mode, and the provider WebSocket capability. The host
+never sends a model-visible summary prompt. Native code owns the fixed `portable_summary_v1`
+instruction, disables tools, enforces a ten-minute portable summary timeout and output bound, and accepts
+exactly one completed assistant message with non-empty plaintext output. Tool calls, non-message
+items, multiple assistant summary messages, empty output, oversized output, invalid UTF-8, or
+incomplete streams fail closed as protocol errors. A timed-out summary returns a terminal `timed_out`
+result with an empty result object. A completed summary returns only the plaintext summary plus
+normalized usage when the provider reports it.
+
 When Remote V2 is active, both operations carry a host-owned `remoteCompactionV2Context` with the
 stable Pi session id; compaction also declares its `auto` or `manual` trigger. Native code derives the
 Codex session, thread, window, beta-feature, and turn metadata headers and `client_metadata` from that
 context. This preserves the server-side context required to replay opaque compaction output.
+`contexts.summarize` carries the same Remote V2 context only when the summarized prefix already begins
+with a matched Remote V2 opaque accelerator; portable-only prefixes claim no opaque attribution.
 Account rate-limit events are consumed and discarded at the native boundary.
 
 `models.resolve` accepts an exact `{ "modelId": string }` and is credential-free and network-free. It
@@ -155,8 +173,8 @@ preserved exactly; native code maps it to an effectively unbounded stream idle t
 between `86400001` and `2147483646`, zero, and any larger number remain invalid. Websocket connect
 timeouts stay finite-only within the same 24-hour bound and do not accept the disabled sentinel.
 
-The canonical v4 examples are [client-v4.jsonl](../fixtures/bridge-protocol/client-v4.jsonl) and
-[server-v4.jsonl](../fixtures/bridge-protocol/server-v4.jsonl). Rust contract tests decode every
+The canonical v5 examples are [client-v5.jsonl](../fixtures/bridge-protocol/client-v5.jsonl) and
+[server-v5.jsonl](../fixtures/bridge-protocol/server-v5.jsonl). Rust contract tests decode every
 recorded frame and enforce size, one-frame, unknown-field, opaque-event, required authorization,
-advertised approval order, `allow_session` rejection, zero-frame bypass behavior, and safe
-malformed-frame behavior.
+advertised approval order, `allow_session` rejection, portable-summary param validation, summary
+output bounds, attribution policy, zero-frame bypass behavior, and safe malformed-frame behavior.

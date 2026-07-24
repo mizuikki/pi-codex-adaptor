@@ -13,12 +13,12 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 /// Current bridge protocol version.
-pub const BRIDGE_PROTOCOL_VERSION: u32 = 4;
+pub const BRIDGE_PROTOCOL_VERSION: u32 = 5;
 
 /// Maximum JSON payload size for one JSONL frame, excluding the line terminator.
 pub const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
 
-/// Maximum number of unacknowledged stream events advertised by protocol v4.
+/// Maximum number of unacknowledged stream events advertised by protocol v5.
 pub const MAX_PENDING_EVENTS: u32 = 256;
 
 /// Official Codex release used by the native implementation.
@@ -147,6 +147,8 @@ pub enum ProviderAuthentication {
 /// Multiplexed operations supported by the bridge protocol.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum RequestMethod {
+    #[serde(rename = "contexts.summarize")]
+    ContextsSummarize,
     #[serde(rename = "responses.create")]
     ResponsesCreate,
     #[serde(rename = "responses.compact")]
@@ -180,13 +182,13 @@ pub enum NativeAuthorization {
 }
 
 impl ApprovalDecision {
-    /// Decisions advertised on every approval request in protocol v4.
+    /// Decisions advertised on every approval request in protocol v5.
     ///
     /// Order is intentional: Decline, Cancel, then `AllowOnce`. Session-scoped allow is never
     /// advertised because Pi has no session approval policy surface.
     pub const ADVERTISED: [Self; 3] = [Self::Decline, Self::Cancel, Self::AllowOnce];
 
-    /// Returns whether this decision is advertised to Pi for protocol v4 approvals.
+    /// Returns whether this decision is advertised to Pi for protocol v5 approvals.
     #[must_use]
     pub const fn is_advertised(self) -> bool {
         matches!(self, Self::Decline | Self::Cancel | Self::AllowOnce)
@@ -262,6 +264,7 @@ pub struct BridgeHandshake {
 pub enum BridgeCapability {
     ResponsesSse,
     ResponsesWebsocket,
+    PortableContextSummary,
     RemoteCompactionV2,
     CompactEndpoint,
     ModelMetadata,
@@ -356,9 +359,10 @@ impl fmt::Display for ProtocolCodecError {
                 formatter.write_str("bridge input contains multiple JSONL frames")
             }
             Self::InvalidJson(error) => match error.classify() {
-                serde_json::error::Category::Data => {
-                    formatter.write_str("bridge frame does not match protocol v4")
-                }
+                serde_json::error::Category::Data => write!(
+                    formatter,
+                    "bridge frame does not match protocol v{BRIDGE_PROTOCOL_VERSION}"
+                ),
                 serde_json::error::Category::Io
                 | serde_json::error::Category::Syntax
                 | serde_json::error::Category::Eof => {
@@ -383,7 +387,7 @@ impl Error for ProtocolCodecError {
 /// # Errors
 ///
 /// Returns [`ProtocolCodecError`] when the frame is empty, oversized, contains more than one record,
-/// or does not match the protocol v4 client envelope.
+/// or does not match the protocol v5 client envelope.
 pub fn decode_client_frame(frame: &[u8]) -> Result<ClientMessage, ProtocolCodecError> {
     decode_frame(frame)
 }
@@ -393,7 +397,7 @@ pub fn decode_client_frame(frame: &[u8]) -> Result<ClientMessage, ProtocolCodecE
 /// # Errors
 ///
 /// Returns [`ProtocolCodecError`] when the frame is empty, oversized, contains more than one record,
-/// or does not match the protocol v4 server envelope.
+/// or does not match the protocol v5 server envelope.
 pub fn decode_server_frame(frame: &[u8]) -> Result<ServerMessage, ProtocolCodecError> {
     decode_frame(frame)
 }
@@ -472,7 +476,7 @@ mod tests {
 
     #[test]
     fn decodes_every_recorded_client_contract_frame() {
-        let fixture = include_bytes!("../../../../fixtures/bridge-protocol/client-v4.jsonl");
+        let fixture = include_bytes!("../../../../fixtures/bridge-protocol/client-v5.jsonl");
 
         for line in fixture.split_inclusive(|byte| *byte == b'\n') {
             decode_client_frame(line).expect("client fixture frame should decode");
@@ -481,7 +485,7 @@ mod tests {
 
     #[test]
     fn decodes_every_recorded_server_contract_frame() {
-        let fixture = include_bytes!("../../../../fixtures/bridge-protocol/server-v4.jsonl");
+        let fixture = include_bytes!("../../../../fixtures/bridge-protocol/server-v5.jsonl");
 
         for line in fixture.split_inclusive(|byte| *byte == b'\n') {
             decode_server_frame(line).expect("server fixture frame should decode");
@@ -566,13 +570,16 @@ mod tests {
     fn schema_errors_do_not_echo_secret_bearing_frame_contents() {
         let secret = "fixture-secret-sentinel";
         let frame = format!(
-            r#"{{"type":"initialize","requestId":"request-1","protocolVersion":4,"client":{{"name":"fixture","version":"0.0.0"}},"extra":true,"token":"{secret}"}}"#
+            r#"{{"type":"initialize","requestId":"request-1","protocolVersion":5,"client":{{"name":"fixture","version":"0.0.0"}},"extra":true,"token":"{secret}"}}"#
         );
         let error = expect_client_error(decode_client_frame(frame.as_bytes()));
         let display = error.to_string();
 
         assert!(matches!(error, ProtocolCodecError::InvalidJson(_)));
-        assert_eq!(display, "bridge frame does not match protocol v4");
+        assert_eq!(
+            display,
+            format!("bridge frame does not match protocol v{BRIDGE_PROTOCOL_VERSION}")
+        );
         assert!(!display.contains(secret));
         assert!(!display.contains("initialize"));
         assert!(!display.contains("extra"));

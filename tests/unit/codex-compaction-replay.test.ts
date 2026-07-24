@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { Context, Model } from "@earendil-works/pi-ai";
 import {
-	type BeforeProviderRequestEvent,
 	buildContextEntries as buildPiContextEntries,
 	convertToLlm,
 	type ExtensionContext,
@@ -12,14 +11,18 @@ import {
 import type {
 	CodexRuntime,
 	CompactResponseOptions,
+	CompactResponseResult,
 	CreateResponseOptions,
 	CreateResponseResult,
 	ExecuteToolOptions,
+	SummarizeContextResult,
 } from "../../src/application/codex-runtime.ts";
 import {
 	CodexCompactionCoordinator,
 	CodexCompactionStore,
+	createCodexAutoCompactionCheckpoint,
 	createCodexCompactionDetails,
+	createPortableCompactionDetails,
 } from "../../src/application/compaction.ts";
 import type { ConfigurationService } from "../../src/application/configuration.ts";
 import { ProviderActivationPolicy } from "../../src/application/provider-activation.ts";
@@ -34,7 +37,10 @@ import {
 	createCodexStreamSimple,
 	encodeResponseItemSignature,
 } from "../../src/integration/pi/codex-provider.ts";
-import { CodexProviderRequestGuard } from "../../src/integration/pi/codex-provider-request-guard.ts";
+import {
+	CodexProviderRequestGuard,
+	sha256Hex,
+} from "../../src/integration/pi/codex-provider-request-guard.ts";
 import type { CodexToolProfileCoordinator } from "../../src/integration/pi/codex-tool-profile.ts";
 import { createProviderConnection } from "../../src/integration/pi/provider-connection.ts";
 
@@ -85,7 +91,8 @@ class FixtureRuntime implements CodexRuntime {
 	readonly responseRequests: unknown[] = [];
 	compactCalls = 0;
 	responseCalls = 0;
-	compactImpl: ((options: CompactResponseOptions) => Promise<CreateResponseResult>) | undefined;
+	summaryImpl: (() => Promise<SummarizeContextResult>) | undefined;
+	compactImpl: ((options: CompactResponseOptions) => Promise<CompactResponseResult>) | undefined;
 
 	async createResponse(options: CreateResponseOptions): Promise<CreateResponseResult> {
 		this.responseCalls += 1;
@@ -93,7 +100,15 @@ class FixtureRuntime implements CodexRuntime {
 		return { status: "completed", result: { responseId: "synthetic-response" } };
 	}
 
-	async compact(options: CompactResponseOptions): Promise<CreateResponseResult> {
+	async summarizeContext(): Promise<SummarizeContextResult> {
+		if (this.summaryImpl !== undefined) return this.summaryImpl();
+		return {
+			status: "completed",
+			result: { summary: "fixture portable summary" },
+		};
+	}
+
+	async compact(options: CompactResponseOptions): Promise<CompactResponseResult> {
 		this.compactCalls += 1;
 		this.compactRequests.push(structuredClone(options.request));
 		if (this.compactImpl !== undefined) return this.compactImpl(options);
@@ -117,6 +132,7 @@ class FixtureRuntime implements CodexRuntime {
 			capabilities: [
 				"responses_sse",
 				"responses_websocket",
+				"portable_context_summary",
 				"remote_compaction_v2",
 				"compact_endpoint",
 				"unified_exec",
@@ -171,6 +187,7 @@ class SessionFixture {
 	readonly entries: SessionEntry[] = [];
 	readonly byId = new Map<string, SessionEntry>();
 	#customEntryIndex = 0;
+	#compactionEntryIndex = 0;
 	leafId: string | null = null;
 	appendThrows = false;
 	contextTokens = 95_001;
@@ -231,20 +248,30 @@ class SessionFixture {
 		if (this.appendThrows) throw new Error("synthetic persistence failure");
 	}
 
-	appendCompaction(details: unknown): void {
-		const entry: SessionEntry = {
+	appendCompaction(
+		details: unknown,
+		options: {
+			summary?: string;
+			firstKeptEntryId?: string;
+			retainedTail?: readonly unknown[];
+		} = {},
+	): void {
+		this.#compactionEntryIndex += 1;
+		const entry = {
 			type: "compaction",
-			id: "manual-entry-1",
+			id: `manual-entry-${this.#compactionEntryIndex}`,
 			parentId: this.leafId,
 			timestamp: new Date(0).toISOString(),
-			summary: "Synthetic manual compaction",
-			firstKeptEntryId: "tool-1",
+			summary: options.summary ?? "Synthetic manual compaction",
+			firstKeptEntryId: options.firstKeptEntryId ?? "tool-1",
 			tokensBefore: 95_001,
 			details,
-		};
+			...(options.retainedTail === undefined ? {} : { retainedTail: options.retainedTail }),
+		} as SessionEntry;
 		this.entries.push(entry);
 		this.byId.set(entry.id, entry);
 		this.leafId = entry.id;
+		if (this.appendThrows) throw new Error("synthetic persistence failure");
 	}
 
 	appendUser(id: string, content: string): void {
@@ -332,8 +359,27 @@ class SessionFixture {
 		return buildPiContextEntries(this.entries, this.leafId, this.byId);
 	}
 
+	fullActivePath(): SessionEntry[] {
+		return this.branch();
+	}
+
 	messages(includeLiveTail = true): readonly unknown[] {
-		const messages = this.contextEntries().flatMap((entry) => sessionEntryToContextMessages(entry));
+		const messages = this.contextEntries().flatMap((entry) => {
+			const retainedTail = (entry as SessionEntry & { retainedTail?: unknown }).retainedTail;
+			if (
+				entry.type === "compaction" &&
+				retainedTail !== undefined &&
+				!Array.isArray(retainedTail)
+			) {
+				// Keep fixture projection tolerant so malformed retained-tail entries still reach
+				// the adaptor classifier instead of crashing Pi's summary projector.
+				const { retainedTail: _ignored, ...rest } = entry as SessionEntry & {
+					retainedTail?: unknown;
+				};
+				return sessionEntryToContextMessages(rest as SessionEntry);
+			}
+			return sessionEntryToContextMessages(entry);
+		});
 		if (!includeLiveTail) return messages;
 		return [
 			...messages,
@@ -381,6 +427,17 @@ class SessionFixture {
 	}
 }
 
+function toolResultMessage() {
+	return {
+		role: "toolResult",
+		toolCallId: "call-fixture",
+		toolName: "fixture_tool",
+		content: [{ type: "text", text: "fixture output" }],
+		isError: false,
+		timestamp: 3,
+	};
+}
+
 function makeContext(session: SessionFixture, signal: AbortSignal): ExtensionContext {
 	return {
 		model,
@@ -388,6 +445,7 @@ function makeContext(session: SessionFixture, signal: AbortSignal): ExtensionCon
 		sessionManager: {
 			getSessionId: () => SESSION_ID,
 			getBranch: () => session.branch(),
+			getFullActivePathSnapshot: () => session.fullActivePath(),
 			buildContextEntries: () => session.contextEntries(),
 			getLeafId: () => session.leafId,
 			getLeafEntry: () => (session.leafId === null ? undefined : session.byId.get(session.leafId)),
@@ -411,6 +469,8 @@ interface Harness {
 		attribution?: {
 			origin: "agent" | "compaction_summary" | "branch_summary";
 			sessionId: string;
+			candidateRetainedTail?: readonly unknown[];
+			includeCompactionToken?: boolean;
 		},
 	): Promise<unknown[]>;
 	runtime: FixtureRuntime;
@@ -432,19 +492,27 @@ function harness(options: { session?: SessionFixture } = {}): Harness {
 	let hook:
 		| ((
 				event: {
-					type: "before_provider_request";
+					type: "before_provider_payload";
+					model: typeof model;
 					payload: unknown;
-					origin?: "agent" | "compaction_summary" | "branch_summary";
-					sessionId?: string;
+					attribution: {
+						sessionId: string;
+						origin: "agent" | "compaction_summary" | "branch_summary";
+						signal: AbortSignal;
+						compaction?: {
+							token: object;
+							candidateLeafId: string;
+							candidateRetainedTail: readonly unknown[];
+						};
+					};
 				},
 				ctx: ExtensionContext,
 		  ) => unknown)
 		| undefined;
 	const pi = {
 		on: (event: string, handler: typeof hook) => {
-			if (event === "before_provider_request") hook = handler;
+			if (event === "before_provider_payload") hook = handler;
 		},
-		appendEntry: (customType: string, data: unknown) => session.appendEntry(customType, data),
 	} as never;
 	registerCodexCompactionReplay({
 		pi,
@@ -490,17 +558,58 @@ function harness(options: { session?: SessionFixture } = {}): Harness {
 					signal,
 					onPayload: async (payload) => {
 						if (hook === undefined) throw new Error("synthetic hook was not registered");
-						const transformed = await hook(
+						const payloadAttribution = {
+							sessionId: attribution?.sessionId ?? SESSION_ID,
+							origin: attribution?.origin ?? "agent",
+							signal,
+							...((attribution?.origin ?? "agent") !== "agent" ||
+							attribution?.includeCompactionToken === false
+								? {}
+								: {
+										compaction: {
+											token: {},
+											candidateLeafId: session.leafId ?? "tool-1",
+											candidateRetainedTail: attribution?.candidateRetainedTail ?? [],
+										},
+									}),
+						};
+						const transformed = (await hook(
 							{
-								type: "before_provider_request",
+								type: "before_provider_payload",
+								model,
 								payload,
-								...attribution,
+								attribution: payloadAttribution,
 							},
 							ctx,
-						);
+						)) as {
+							payload: unknown;
+							compaction?: { summary: string; tokensBefore: number; details?: unknown };
+						};
+						const committedPayload = transformed.payload;
+						if (transformed.compaction !== undefined) {
+							try {
+								session.appendCompaction(transformed.compaction.details, {
+									summary: transformed.compaction.summary,
+									...(payloadAttribution.compaction?.candidateLeafId === undefined
+										? {}
+										: { firstKeptEntryId: payloadAttribution.compaction.candidateLeafId }),
+									// Persist an explicit array so v3 readback always has a structural tail.
+									retainedTail: payloadAttribution.compaction?.candidateRetainedTail ?? [],
+								});
+								store.setManual(
+									SESSION_ID,
+									transformed.compaction.summary,
+									transformed.compaction.details as never,
+									session.leafId ?? undefined,
+								);
+							} catch (error) {
+								store.markReplayInvalid(SESSION_ID);
+								throw error;
+							}
+						}
 						return onPayloadTail === undefined
-							? transformed
-							: onPayloadTail(transformed as Record<string, unknown>);
+							? committedPayload
+							: onPayloadTail(committedPayload as Record<string, unknown>);
 					},
 				},
 			);
@@ -519,9 +628,7 @@ test("leaves Pi-native fallback payloads unchanged without an adaptor request re
 	const coordinator = new CodexCompactionCoordinator();
 	const capabilities = new ResolveEffectiveCapabilities(runtime);
 	const guard = new CodexProviderRequestGuard();
-	let handler:
-		| ((event: BeforeProviderRequestEvent, ctx: ExtensionContext) => unknown | Promise<unknown>)
-		| undefined;
+	let handler: ((event: unknown, ctx: ExtensionContext) => unknown | Promise<unknown>) | undefined;
 	registerCodexCompactionReplay({
 		pi: {
 			on: (_event: string, callback: typeof handler) => {
@@ -539,11 +646,23 @@ test("leaves Pi-native fallback payloads unchanged without an adaptor request re
 	});
 	if (handler === undefined) throw new Error("fallback hook was not registered");
 	const payload = { model: "native-model", input: [] };
-	const result = await handler({ type: "before_provider_request", payload }, {
-		model: { ...model, provider: "unselected-provider", api: "openai-responses" },
-		sessionManager: { getSessionId: () => "native-session" },
-	} as unknown as ExtensionContext);
-	expect(result).toBe(payload);
+	const result = await handler(
+		{
+			type: "before_provider_payload",
+			model,
+			payload,
+			attribution: {
+				sessionId: "native-session",
+				origin: "agent",
+				signal: new AbortController().signal,
+			},
+		},
+		{
+			model: { ...model, provider: "unselected-provider", api: "openai-responses" },
+			sessionManager: { getSessionId: () => "native-session" },
+		} as unknown as ExtensionContext,
+	);
+	expect(result).toEqual({ payload });
 });
 
 describe("active-branch Codex compaction replay", () => {
@@ -632,7 +751,298 @@ describe("active-branch Codex compaction replay", () => {
 		expect(value.guard.activeRecordCount).toBe(0);
 	});
 
-	test("compacts inline before the request, appends a custom checkpoint, and naturally continues", async () => {
+	test("treats an ordinary Pi compaction as portable context instead of a blocked checkpoint", async () => {
+		const session = new SessionFixture();
+		session.appendCompaction(undefined);
+		session.appendUser("user-after-portable", "continue after the portable checkpoint");
+		session.contextTokens = 1_000;
+		const value = harness({ session });
+		const events = await value.run(false);
+
+		expect(events.at(-1)).toMatchObject({ type: "done" });
+		expect(value.runtime.compactCalls).toBe(0);
+		expect(value.runtime.responseCalls).toBe(1);
+		expect((value.runtime.responseRequests[0] as { input: unknown[] }).input).toEqual([
+			{
+				type: "message",
+				role: "user",
+				content: [
+					{
+						type: "input_text",
+						text: expect.stringContaining("Synthetic manual compaction"),
+					},
+				],
+			},
+			{
+				type: "function_call_output",
+				call_id: "call-fixture",
+				output: "fixture output",
+			},
+			{
+				type: "message",
+				role: "user",
+				content: [{ type: "input_text", text: "continue after the portable checkpoint" }],
+			},
+		]);
+	});
+
+	test("treats non-adaptor compaction details as a portable boundary", async () => {
+		const session = new SessionFixture();
+		session.appendCompaction({ kind: "fixture.other-extension", version: 1 });
+		session.contextTokens = 1_000;
+		const value = harness({ session });
+		const events = await value.run(false);
+
+		expect(events.at(-1)).toMatchObject({ type: "done" });
+		expect(value.runtime.compactCalls).toBe(0);
+		expect(value.runtime.responseCalls).toBe(1);
+	});
+
+	test.each([
+		{
+			name: "ordinary Pi compaction -> portable request boundary",
+			run: async () => {
+				const session = new SessionFixture();
+				session.appendCompaction(undefined);
+				session.appendUser("user-after-portable", "continue after the portable checkpoint");
+				session.contextTokens = 1_000;
+				const value = harness({ session });
+				const events = await value.run(false);
+				return {
+					lastEvent: events.at(-1),
+					compactCalls: value.runtime.compactCalls,
+					firstInputType: (value.runtime.responseRequests[0] as { input: Array<{ type: string }> })
+						.input[0]?.type,
+				};
+			},
+			expected: { compactCalls: 0, firstInputType: "message" },
+		},
+		{
+			name: "matching v3 compaction -> opaque replay after reload",
+			run: async () => {
+				const connection = createProviderConnection(model, { apiKey: fixtureToken() });
+				const identity = providerCompactionIdentityFromValues({
+					sessionId: SESSION_ID,
+					model,
+					connection,
+				});
+				if (identity === undefined) throw new Error("fixture identity unavailable");
+				const details = createPortableCompactionDetails(sha256Hex("reloaded summary"), {
+					identity,
+					output: [{ type: "compaction", encrypted_content: OPAQUE }],
+				});
+				const session = new SessionFixture();
+				session.appendCompaction(details, {
+					summary: "reloaded summary",
+					retainedTail: [toolResultMessage()],
+				});
+				session.contextTokens = 1_000;
+				const value = harness({ session });
+				value.store.setManual(SESSION_ID, "reloaded summary", details, session.leafId ?? undefined);
+				const events = await value.run(false);
+				return {
+					lastEvent: events.at(-1),
+					compactCalls: value.runtime.compactCalls,
+					firstInputType: (value.runtime.responseRequests[0] as { input: Array<{ type: string }> })
+						.input[0]?.type,
+				};
+			},
+			expected: { compactCalls: 0, firstInputType: "compaction" },
+		},
+		{
+			name: "legacy opaque mismatch -> migration commit before dispatch",
+			run: async () => {
+				const session = new SessionFixture();
+				const legacyIdentity = providerCompactionIdentityFromValues({
+					sessionId: SESSION_ID,
+					model,
+					connection: createProviderConnection(model, { apiKey: fixtureToken("legacy-account") }),
+				});
+				if (legacyIdentity === undefined) throw new Error("fixture identity unavailable");
+				session.appendCompaction(
+					createCodexCompactionDetails(legacyIdentity, [
+						{ type: "compaction", encrypted_content: "legacy-manual-opaque" },
+					]),
+				);
+				session.contextTokens = 1_000;
+				const value = harness({ session });
+				const events = await value.run(false, undefined, {
+					origin: "agent",
+					sessionId: SESSION_ID,
+					candidateRetainedTail: [toolResultMessage()],
+				});
+				return {
+					lastEvent: events.at(-1),
+					compactCalls: value.runtime.compactCalls,
+					lastEntryType: value.session.entries.at(-1)?.type,
+				};
+			},
+			expected: { compactCalls: 1, lastEntryType: "compaction" },
+		},
+		{
+			name: "provider_inline -> real compaction entry and same-run continuation",
+			run: async () => {
+				const value = harness();
+				const events = await value.run(true, undefined, { origin: "agent", sessionId: SESSION_ID });
+				return {
+					lastEvent: events.at(-1),
+					compactCalls: value.runtime.compactCalls,
+					lastEntryType: value.session.entries.at(-1)?.type,
+				};
+			},
+			expected: { compactCalls: 1, lastEntryType: "compaction" },
+		},
+	])("covers Section 7.3 row: $name", async ({ run, expected }) => {
+		const result = await run();
+		expect(result.lastEvent).toMatchObject({ type: "done" });
+		for (const [key, value] of Object.entries(expected)) {
+			expect(result).toHaveProperty(key, value);
+		}
+	});
+
+	test("migrates a legacy automatic checkpoint on identity change before dispatch", async () => {
+		const session = new SessionFixture();
+		const legacyIdentity = providerCompactionIdentityFromValues({
+			sessionId: SESSION_ID,
+			model,
+			connection: createProviderConnection(model, { apiKey: fixtureToken("legacy-account") }),
+		});
+		if (legacyIdentity === undefined) throw new Error("fixture identity unavailable");
+		session.appendEntry(
+			"pi-codex-adaptor.auto-compaction",
+			createCodexAutoCompactionCheckpoint(legacyIdentity, "legacy-checkpoint", "tool-1", [
+				{ type: "compaction", encrypted_content: "legacy-opaque" },
+			]),
+		);
+		session.contextTokens = 1_000;
+		const value = harness({ session });
+		const events = await value.run(false, undefined, {
+			origin: "agent",
+			sessionId: SESSION_ID,
+			candidateRetainedTail: [toolResultMessage()],
+		});
+
+		expect(events.at(-1)).toMatchObject({ type: "done" });
+		expect(value.runtime.compactCalls).toBe(1);
+		expect(value.runtime.responseCalls).toBe(1);
+		expect(value.session.entries.at(-1)).toMatchObject({
+			type: "compaction",
+			summary: "fixture portable summary",
+		});
+		expect((value.runtime.responseRequests[0] as { input: unknown[] }).input).toEqual([
+			{
+				type: "compaction",
+				id: "synthetic-compaction-item",
+				encrypted_content: OPAQUE,
+				internal_chat_message_metadata_passthrough: { turn_id: "synthetic-turn" },
+			},
+			{
+				type: "function_call_output",
+				call_id: "call-fixture",
+				output: "fixture output",
+			},
+		]);
+	});
+
+	test("replays a legacy automatic checkpoint on exact identity without migrating", async () => {
+		const session = new SessionFixture();
+		const connection = createProviderConnection(model, { apiKey: fixtureToken() });
+		const identity = providerCompactionIdentityFromValues({
+			sessionId: SESSION_ID,
+			model,
+			connection,
+		});
+		if (identity === undefined) throw new Error("fixture identity unavailable");
+		const checkpoint = createCodexAutoCompactionCheckpoint(
+			identity,
+			"legacy-checkpoint",
+			"tool-1",
+			[{ type: "compaction", encrypted_content: "legacy-opaque" }],
+		);
+		session.appendEntry("pi-codex-adaptor.auto-compaction", checkpoint);
+		session.contextTokens = 1_000;
+		const value = harness({ session });
+		value.store.setAutomatic(SESSION_ID, checkpoint, session.leafId ?? undefined);
+		const events = await value.run(false);
+
+		expect(events.at(-1)).toMatchObject({ type: "done" });
+		expect(value.runtime.compactCalls).toBe(0);
+		expect(value.runtime.responseCalls).toBe(1);
+		expect((value.runtime.responseRequests[0] as { input: unknown[] }).input).toEqual([
+			{ type: "compaction", encrypted_content: "legacy-opaque" },
+		]);
+	});
+
+	test("migrates a legacy manual opaque checkpoint on identity change before dispatch", async () => {
+		const session = new SessionFixture();
+		const legacyIdentity = providerCompactionIdentityFromValues({
+			sessionId: SESSION_ID,
+			model,
+			connection: createProviderConnection(model, { apiKey: fixtureToken("legacy-account") }),
+		});
+		if (legacyIdentity === undefined) throw new Error("fixture identity unavailable");
+		session.appendCompaction(
+			createCodexCompactionDetails(legacyIdentity, [
+				{ type: "compaction", encrypted_content: "legacy-manual-opaque" },
+			]),
+		);
+		session.contextTokens = 1_000;
+		const value = harness({ session });
+		const events = await value.run(false, undefined, {
+			origin: "agent",
+			sessionId: SESSION_ID,
+			candidateRetainedTail: [toolResultMessage()],
+		});
+
+		expect(events.at(-1)).toMatchObject({ type: "done" });
+		expect(value.runtime.compactCalls).toBe(1);
+		expect(value.runtime.responseCalls).toBe(1);
+		expect(value.session.entries.at(-1)).toMatchObject({
+			type: "compaction",
+			summary: "fixture portable summary",
+		});
+		expect((value.runtime.responseRequests[0] as { input: unknown[] }).input).toEqual([
+			{
+				type: "compaction",
+				id: "synthetic-compaction-item",
+				encrypted_content: OPAQUE,
+				internal_chat_message_metadata_passthrough: { turn_id: "synthetic-turn" },
+			},
+			{
+				type: "function_call_output",
+				call_id: "call-fixture",
+				output: "fixture output",
+			},
+		]);
+	});
+
+	test("fails closed when legacy migration has no Pi commit token", async () => {
+		const session = new SessionFixture();
+		const legacyIdentity = providerCompactionIdentityFromValues({
+			sessionId: SESSION_ID,
+			model,
+			connection: createProviderConnection(model, { apiKey: fixtureToken("legacy-account") }),
+		});
+		if (legacyIdentity === undefined) throw new Error("fixture identity unavailable");
+		session.appendCompaction(
+			createCodexCompactionDetails(legacyIdentity, [
+				{ type: "compaction", encrypted_content: "legacy-manual-opaque" },
+			]),
+		);
+		session.contextTokens = 1_000;
+		const value = harness({ session });
+		const events = await value.run(false, undefined, {
+			origin: "agent",
+			sessionId: SESSION_ID,
+			includeCompactionToken: false,
+		});
+
+		expect(events.at(-1)).toMatchObject({ type: "error" });
+		expect(value.runtime.compactCalls).toBe(0);
+		expect(value.runtime.responseCalls).toBe(0);
+	});
+
+	test("compacts inline before the request, appends a real compaction entry, and naturally continues", async () => {
 		const value = harness();
 		const events = await value.run(true, undefined, { origin: "agent", sessionId: SESSION_ID });
 		expect(events.at(-1)).toMatchObject({ type: "done" });
@@ -642,21 +1052,20 @@ describe("active-branch Codex compaction replay", () => {
 			"message",
 			"message",
 			"message",
-			"custom",
+			"compaction",
 		]);
 		const checkpoint = value.session.entries.at(-1);
 		expect(checkpoint).toMatchObject({
-			type: "custom",
+			type: "compaction",
 			parentId: "tool-1",
-			customType: "pi-codex-adaptor.auto-compaction",
 		});
-		expect(value.store.getForSession(SESSION_ID)?.source).toBe("automatic");
+		expect(value.store.getForSession(SESSION_ID)?.source).toBe("manual");
 		const compactRequest = value.runtime.compactRequests[0] as { input: readonly unknown[] };
 		const responseRequest = value.runtime.responseRequests[0] as { input: readonly unknown[] };
 		expect(compactRequest.input.at(-1)).toEqual({
-			type: "custom_tool_call_output",
+			type: "function_call_output",
 			call_id: "call-fixture",
-			output: { marker: "live-suffix" },
+			output: "fixture output",
 		});
 		expect(responseRequest.input).toEqual([
 			{
@@ -673,6 +1082,94 @@ describe("active-branch Codex compaction replay", () => {
 		]);
 	});
 
+	test("validates a token-bound retained tail and preserves the in-flight suffix after the paired commit", async () => {
+		const value = harness();
+		const retainedTail = [toolResultMessage()];
+		const events = await value.run(true, undefined, {
+			origin: "agent",
+			sessionId: SESSION_ID,
+			candidateRetainedTail: retainedTail,
+		});
+		expect(events.at(-1)).toMatchObject({ type: "done" });
+		const checkpoint =
+			value.session.leafId === null ? undefined : value.session.byId.get(value.session.leafId);
+		expect(checkpoint).toMatchObject({ type: "compaction" });
+		expect((checkpoint as unknown as Record<string, unknown>).retainedTail).toEqual(retainedTail);
+		expect((value.runtime.responseRequests[0] as { input: unknown[] }).input).toEqual([
+			{
+				type: "compaction",
+				id: "synthetic-compaction-item",
+				encrypted_content: OPAQUE,
+				internal_chat_message_metadata_passthrough: { turn_id: "synthetic-turn" },
+			},
+			{
+				type: "function_call_output",
+				call_id: "call-fixture",
+				output: "fixture output",
+			},
+			{
+				type: "custom_tool_call_output",
+				call_id: "call-fixture",
+				output: { marker: "live-suffix" },
+			},
+		]);
+	});
+
+	test("rewrites the active request with a portable summary when opaque compaction fails", async () => {
+		const value = harness();
+		value.runtime.compactImpl = async () => ({ status: "failed" });
+		const events = await value.run(true, undefined, { origin: "agent", sessionId: SESSION_ID });
+		expect(events.at(-1)).toMatchObject({ type: "done" });
+		expect(value.runtime.compactCalls).toBe(1);
+		expect(value.runtime.responseCalls).toBe(1);
+		const request = value.runtime.responseRequests[0] as { input: unknown[] };
+		expect(request.input).toEqual([
+			{
+				type: "message",
+				role: "user",
+				content: [
+					{
+						type: "input_text",
+						text: expect.stringContaining("fixture portable summary"),
+					},
+				],
+			},
+			{
+				type: "custom_tool_call_output",
+				call_id: "call-fixture",
+				output: { marker: "live-suffix" },
+			},
+		]);
+	});
+
+	test("observes an early compact rejection while portable summarization is pending", async () => {
+		const value = harness();
+		let releaseSummary!: () => void;
+		const summaryReleased = new Promise<void>((resolve) => {
+			releaseSummary = resolve;
+		});
+		value.runtime.summaryImpl = async () => {
+			await summaryReleased;
+			return { status: "completed", result: { summary: "fixture portable summary" } };
+		};
+		value.runtime.compactImpl = async () => {
+			throw new Error("synthetic compact failure");
+		};
+		const unhandled: unknown[] = [];
+		const onUnhandled = (error: unknown) => unhandled.push(error);
+		process.on("unhandledRejection", onUnhandled);
+		try {
+			const pending = value.run(true);
+			await new Promise<void>((resolve) => setTimeout(resolve, 0));
+			releaseSummary();
+			const events = await pending;
+			expect(events.at(-1)).toMatchObject({ type: "done" });
+			expect(unhandled).toEqual([]);
+		} finally {
+			process.off("unhandledRejection", onUnhandled);
+		}
+	});
+
 	test("compacts branch-backed input when Pi includes the current turn in context entries", async () => {
 		const value = harness();
 		const events = await value.run(false);
@@ -680,9 +1177,8 @@ describe("active-branch Codex compaction replay", () => {
 		expect(value.runtime.compactCalls).toBe(1);
 		expect(value.runtime.responseCalls).toBe(1);
 		expect(value.session.entries.at(-1)).toMatchObject({
-			type: "custom",
+			type: "compaction",
 			parentId: "tool-1",
-			customType: "pi-codex-adaptor.auto-compaction",
 		});
 		expect((value.runtime.responseRequests[0] as { input: unknown[] }).input).toEqual([
 			{
@@ -701,87 +1197,58 @@ describe("active-branch Codex compaction replay", () => {
 		expect(events.at(-1)).toMatchObject({ type: "done" });
 		expect(value.runtime.compactCalls).toBe(1);
 		expect(value.runtime.responseCalls).toBe(2);
-		expect((value.runtime.responseRequests[1] as { input: unknown[] }).input).toEqual([
-			{
-				type: "compaction",
-				id: "synthetic-compaction-item",
-				encrypted_content: OPAQUE,
-				internal_chat_message_metadata_passthrough: { turn_id: "synthetic-turn" },
-			},
-		]);
+		const replayInput = (value.runtime.responseRequests[1] as { input: unknown[] }).input;
+		expect(replayInput[0]).toEqual({
+			type: "compaction",
+			id: "synthetic-compaction-item",
+			encrypted_content: OPAQUE,
+			internal_chat_message_metadata_passthrough: { turn_id: "synthetic-turn" },
+		});
+		expect(
+			replayInput.filter((item) => (item as { type?: unknown }).type === "compaction"),
+		).toHaveLength(1);
 	});
 
-	test("continues automatic compaction after an earlier manual compaction and reloads it", async () => {
-		const session = new SessionFixture();
-		const value = harness({ session });
-		const connection = createProviderConnection(model, { apiKey: fixtureToken() });
-		const identity = providerCompactionIdentityFromValues({
-			sessionId: SESSION_ID,
-			model,
-			connection,
-		});
-		if (identity === undefined) throw new Error("fixture identity unavailable");
-		const manualOutput = [{ type: "compaction", encrypted_content: "synthetic-manual-opaque" }];
-		const manualDetails = createCodexCompactionDetails(identity, manualOutput);
-		session.appendCompaction(manualDetails);
-		session.appendUser("user-after-manual", "continue after the manual checkpoint");
-		value.store.setManual(
-			SESSION_ID,
-			"Synthetic manual compaction",
-			manualDetails,
-			"manual-entry-1",
-		);
-
-		const first = await value.run(true);
-		expect(first.at(-1)).toMatchObject({ type: "done" });
-		expect(value.runtime.compactCalls).toBe(1);
-		expect(value.store.getForSession(SESSION_ID)?.source).toBe("automatic");
-
-		session.appendToolContinuation();
-		const second = await value.run(false);
-
-		expect(second.at(-1)).toMatchObject({ type: "done" });
-		expect(value.runtime.compactCalls).toBe(2);
-		expect(value.runtime.responseCalls).toBe(2);
-		expect((value.runtime.responseRequests[1] as { input: unknown[] }).input).toEqual([
-			{
-				type: "compaction",
-				id: "synthetic-compaction-item",
-				encrypted_content: OPAQUE,
-				internal_chat_message_metadata_passthrough: { turn_id: "synthetic-turn" },
-			},
-			{
-				type: "function_call",
-				name: "fixture_tool",
-				arguments: '{"value":"after-auto"}',
-				call_id: "call-after-auto",
-			},
-			{
-				type: "function_call_output",
-				call_id: "call-after-auto",
-				output: "fixture continuation output",
-			},
-		]);
-
-		const automatic = value.store.getForSession(SESSION_ID);
-		if (automatic?.source !== "automatic") {
+	test("reloads or forks a real compaction entry without creating a second inline compaction", async () => {
+		const original = harness();
+		await original.run(true);
+		const stored = original.store.getForSession(SESSION_ID);
+		const entry =
+			original.session.leafId === null
+				? undefined
+				: original.session.byId.get(original.session.leafId);
+		if (stored?.source !== "manual" || entry?.type !== "compaction") {
 			throw new Error("automatic checkpoint was not installed");
 		}
-		const reloaded = harness({ session });
-		reloaded.store.setAutomatic(SESSION_ID, automatic.checkpoint, automatic.entryId);
-		session.contextTokens = 1_000;
-		const resumed = await reloaded.run(false);
 
-		expect(resumed.at(-1)).toMatchObject({ type: "done" });
+		const reloadedSession = new SessionFixture();
+		const retainedTail =
+			"retainedTail" in entry
+				? ((entry as unknown as Record<string, unknown>).retainedTail as
+						| readonly unknown[]
+						| undefined)
+				: undefined;
+		reloadedSession.appendCompaction(stored.details, {
+			summary: stored.summary,
+			...(retainedTail === undefined ? {} : { retainedTail }),
+		});
+		reloadedSession.contextTokens = 1_000;
+		const reloaded = harness({ session: reloadedSession });
+		reloaded.store.setManual(SESSION_ID, stored.summary, stored.details, stored.entryId);
+
+		const events = await reloaded.run(false);
+		expect(events.at(-1)).toMatchObject({ type: "done" });
 		expect(reloaded.runtime.compactCalls).toBe(0);
-		expect((reloaded.runtime.responseRequests[0] as { input: unknown[] }).input).toEqual([
-			{
-				type: "compaction",
-				id: "synthetic-compaction-item",
-				encrypted_content: OPAQUE,
-				internal_chat_message_metadata_passthrough: { turn_id: "synthetic-turn" },
-			},
-		]);
+		const reloadInput = (reloaded.runtime.responseRequests[0] as { input: unknown[] }).input;
+		expect(reloadInput[0]).toEqual({
+			type: "compaction",
+			id: "synthetic-compaction-item",
+			encrypted_content: OPAQUE,
+			internal_chat_message_metadata_passthrough: { turn_id: "synthetic-turn" },
+		});
+		expect(
+			reloadInput.filter((item) => (item as { type?: unknown }).type === "compaction"),
+		).toHaveLength(1);
 	});
 
 	test("poisons replay after an indeterminate append and blocks later Responses dispatch", async () => {
@@ -828,70 +1295,6 @@ describe("active-branch Codex compaction replay", () => {
 		expect(value.store.isReplayInvalid(SESSION_ID)).toBe(false);
 	});
 
-	test("recomputes the active branch on reload/fork and lets a later manual checkpoint supersede auto", async () => {
-		const original = harness();
-		await original.run(true);
-		const automatic = original.store.getForSession(SESSION_ID);
-		if (automatic?.source !== "automatic")
-			throw new Error("automatic checkpoint was not installed");
-
-		const reloadedSession = new SessionFixture();
-		reloadedSession.appendEntry("pi-codex-adaptor.auto-compaction", automatic.checkpoint);
-		const reloaded = harness({ session: reloadedSession });
-		const reloadedEvents = await reloaded.run(false);
-		expect(reloadedEvents.at(-1)).toMatchObject({ type: "done" });
-		expect(reloaded.runtime.compactCalls).toBe(0);
-		expect((reloaded.runtime.responseRequests[0] as { input: unknown[] }).input[0]).toMatchObject({
-			type: "compaction",
-			encrypted_content: OPAQUE,
-		});
-
-		const fork = harness();
-		const forkEvents = await fork.run(false);
-		expect(forkEvents.at(-1)).toMatchObject({ type: "done" });
-		expect(fork.runtime.compactCalls).toBe(1);
-		expect((fork.runtime.responseRequests[0] as { input: unknown[] }).input[0]).toMatchObject({
-			type: "compaction",
-			encrypted_content: OPAQUE,
-		});
-
-		const manualSession = new SessionFixture();
-		manualSession.appendEntry("pi-codex-adaptor.auto-compaction", automatic.checkpoint);
-		const manualDetails = createCodexCompactionDetails(automatic.checkpoint, [
-			{ type: "compaction", encrypted_content: "synthetic-manual-opaque" },
-		]);
-		manualSession.appendCompaction(manualDetails);
-		const manual = harness({ session: manualSession });
-		manual.store.setManual(
-			SESSION_ID,
-			"Synthetic manual compaction",
-			manualDetails,
-			"manual-entry-1",
-		);
-		manual.coordinator.beginExecution(SESSION_ID);
-		manual.session.appendUser("user-after-compaction", "summarize the completed work");
-		const manualEvents = await manual.run(false, (payload) => payload, {
-			origin: "agent",
-			sessionId: SESSION_ID,
-		});
-		manual.coordinator.end(SESSION_ID, "cancel");
-		expect(manualEvents.at(-1)).toMatchObject({ type: "done" });
-		expect(manual.runtime.compactCalls).toBe(0);
-		expect((manual.runtime.responseRequests[0] as { input: unknown[] }).input).toEqual([
-			{ type: "compaction", encrypted_content: "synthetic-manual-opaque" },
-			{
-				type: "function_call_output",
-				call_id: "call-fixture",
-				output: "fixture output",
-			},
-			{
-				type: "message",
-				role: "user",
-				content: [{ type: "input_text", text: "summarize the completed work" }],
-			},
-		]);
-	});
-
 	test("rejects malformed checkpoints and identity conflicts before compact or Responses", async () => {
 		const malformed = new SessionFixture();
 		malformed.appendEntry("pi-codex-adaptor.auto-compaction", {
@@ -903,6 +1306,37 @@ describe("active-branch Codex compaction replay", () => {
 		expect(malformedEvents.at(-1)).toMatchObject({ type: "error" });
 		expect(malformedValue.runtime.compactCalls).toBe(0);
 		expect(malformedValue.runtime.responseCalls).toBe(0);
+
+		const badSummaryDigest = new SessionFixture();
+		badSummaryDigest.appendCompaction(
+			{
+				...createPortableCompactionDetails(sha256Hex("Synthetic manual compaction")),
+				portable: { summarySha256: "0".repeat(64) },
+			},
+			{
+				summary: "Synthetic manual compaction",
+				retainedTail: [toolResultMessage()],
+			},
+		);
+		badSummaryDigest.contextTokens = 1_000;
+		const badSummaryDigestValue = harness({ session: badSummaryDigest });
+		const badSummaryDigestEvents = await badSummaryDigestValue.run(false);
+		expect(badSummaryDigestEvents.at(-1)).toMatchObject({ type: "error" });
+		expect(badSummaryDigestValue.runtime.responseCalls).toBe(0);
+
+		const badRetainedTail = new SessionFixture();
+		badRetainedTail.appendCompaction(
+			createPortableCompactionDetails(sha256Hex("Synthetic manual compaction")),
+			{
+				summary: "Synthetic manual compaction",
+				retainedTail: {} as never,
+			},
+		);
+		badRetainedTail.contextTokens = 1_000;
+		const badRetainedTailValue = harness({ session: badRetainedTail });
+		const badRetainedTailEvents = await badRetainedTailValue.run(false);
+		expect(badRetainedTailEvents.at(-1)).toMatchObject({ type: "error" });
+		expect(badRetainedTailValue.runtime.responseCalls).toBe(0);
 
 		const conflicting = harness();
 		const result = await conflicting.run(true, (payload) => ({ ...payload, model: "other-model" }));

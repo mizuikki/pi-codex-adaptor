@@ -28,14 +28,14 @@ describe("file diagnostics exporter", () => {
 						providerCount: 1,
 						supportedApis: ["openai-responses", "openai-codex-responses"],
 					},
-					bridge: { bridgeProtocolVersion: 3 },
+					bridge: { bridgeProtocolVersion: 5 },
 					recentErrors: [],
 				},
 				path,
 			);
 			expect(result.path).toBe(path);
 			expect(result.sha256).toHaveLength(64);
-			expect(await readFile(path, "utf8")).toContain('"bridgeProtocolVersion": 3');
+			expect(await readFile(path, "utf8")).toContain('"bridgeProtocolVersion": 5');
 		} finally {
 			await rm(directory, { recursive: true, force: true });
 		}
@@ -48,7 +48,7 @@ describe("file diagnostics exporter", () => {
 			const snapshot = createDiagnosticsSnapshot(
 				createDefaultConfig(),
 				{
-					bridgeProtocolVersion: 3,
+					bridgeProtocolVersion: 5,
 					officialCodexVersion: "0.144.3",
 					capabilities: ["responses_sse"],
 					prompt: "private",
@@ -62,7 +62,7 @@ describe("file diagnostics exporter", () => {
 						{
 							category: "ProtocolError",
 							code: "invalid_frame",
-							message: "Bridge frame does not match protocol v4",
+							message: "Bridge frame does not match protocol v5",
 						},
 					],
 				},
@@ -103,7 +103,7 @@ describe("file diagnostics exporter", () => {
 							providerCount: 1,
 							supportedApis: ["openai-responses", "openai-codex-responses"],
 						},
-						bridge: { bridgeProtocolVersion: 3 },
+						bridge: { bridgeProtocolVersion: 5 },
 						recentErrors: [],
 					},
 					directory,

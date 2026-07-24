@@ -2,8 +2,9 @@ import type { CompactionConfig } from "../domain/config.ts";
 import { isStrictJsonArray, isStrictJsonValue, isStrictPlainRecord } from "./structured-json.ts";
 
 export const CODEX_COMPACTION_DETAILS_KIND = "pi-codex-adaptor.compaction";
-export const CODEX_COMPACTION_DETAILS_VERSION = 2;
-export const CODEX_COMPACTION_LEGACY_DETAILS_VERSION = 1;
+export const CODEX_COMPACTION_DETAILS_VERSION = 3;
+export const CODEX_COMPACTION_LEGACY_DETAILS_VERSION = 2;
+export const CODEX_COMPACTION_MODEL_ONLY_DETAILS_VERSION = 1;
 export const CODEX_AUTO_COMPACTION_KIND = "pi-codex-adaptor.auto-compaction";
 export const CODEX_AUTO_COMPACTION_VERSION = 1;
 
@@ -32,23 +33,37 @@ export interface CodexCompactionIdentity {
 	readonly authenticationBinding: CodexAuthenticationBindingV1;
 }
 
-export interface CodexCompactionDetailsV2 extends CodexCompactionIdentity {
+export interface CodexOpaqueCompactionDetailsV3 extends CodexCompactionIdentity {
+	output: readonly StructuredResponseItem[];
+}
+
+export interface CodexPortableCompactionDetailsV3 {
 	kind: typeof CODEX_COMPACTION_DETAILS_KIND;
 	version: typeof CODEX_COMPACTION_DETAILS_VERSION;
+	portable: {
+		readonly summarySha256: string;
+	};
+	readonly opaque?: CodexOpaqueCompactionDetailsV3;
+}
+
+export interface CodexLegacyCompactionDetailsV2 extends CodexCompactionIdentity {
+	kind: typeof CODEX_COMPACTION_DETAILS_KIND;
+	version: typeof CODEX_COMPACTION_LEGACY_DETAILS_VERSION;
 	output: readonly StructuredResponseItem[];
 }
 
 export interface CodexLegacyCompactionDetailsV1 {
 	kind: typeof CODEX_COMPACTION_DETAILS_KIND;
-	version: typeof CODEX_COMPACTION_LEGACY_DETAILS_VERSION;
+	version: typeof CODEX_COMPACTION_MODEL_ONLY_DETAILS_VERSION;
 	modelId: string;
 	output: readonly StructuredResponseItem[];
 	readonly replay: "legacy_identity_missing";
 }
 
-export type CodexCompactionDetails = CodexCompactionDetailsV2;
+export type CodexCompactionDetails = CodexPortableCompactionDetailsV3;
 export type ParsedCodexCompactionDetails =
-	| CodexCompactionDetailsV2
+	| CodexPortableCompactionDetailsV3
+	| CodexLegacyCompactionDetailsV2
 	| CodexLegacyCompactionDetailsV1;
 
 export interface CodexAutoCompactionCheckpointV1 extends CodexCompactionIdentity {
@@ -75,8 +90,8 @@ export type CodexCompactionSnapshot =
 			readonly source: "manual";
 			readonly summary: string;
 			readonly entryId?: string;
-			readonly details: CodexCompactionDetailsV2;
-			readonly output: readonly StructuredResponseItem[];
+			readonly details: CodexPortableCompactionDetailsV3 | CodexLegacyCompactionDetailsV2;
+			readonly output?: readonly StructuredResponseItem[];
 	  }
 	| {
 			readonly source: "automatic";
@@ -84,6 +99,54 @@ export type CodexCompactionSnapshot =
 			readonly checkpoint: CodexAutoCompactionCheckpointV1;
 			readonly output: readonly StructuredResponseItem[];
 	  };
+
+/** Storage-neutral entry view for pure boundary classification. */
+export interface PersistedCompactionEntryView {
+	readonly type: "compaction" | "custom";
+	readonly id?: string | undefined;
+	readonly parentId?: string | null | undefined;
+	readonly summary?: string | undefined;
+	readonly details?: unknown;
+	readonly firstKeptEntryId?: string | undefined;
+	readonly usage?: unknown;
+	readonly retainedTail?: unknown;
+	readonly customType?: string | undefined;
+	readonly data?: unknown;
+}
+
+export type PersistedCompactionKind =
+	| { readonly source: "portable_pi"; readonly entry: PersistedCompactionEntryView }
+	| {
+			readonly source: "adaptor_v3";
+			readonly entry: PersistedCompactionEntryView;
+			readonly details: CodexPortableCompactionDetailsV3;
+	  }
+	| {
+			readonly source: "legacy_opaque";
+			readonly entry: PersistedCompactionEntryView;
+			readonly details:
+				| CodexLegacyCompactionDetailsV2
+				| CodexLegacyCompactionDetailsV1
+				| CodexAutoCompactionCheckpointV1;
+	  }
+	| { readonly source: "malformed_adaptor" };
+
+export interface CommittedCompactionProposalExpectation {
+	readonly parentId?: string | null;
+	readonly summary?: string;
+	readonly summarySha256?: string;
+	readonly firstKeptEntryId?: string;
+	readonly usage?: unknown;
+	readonly retainedTail?: unknown;
+	readonly details?: CodexPortableCompactionDetailsV3;
+}
+
+export interface PendingCommittedCompactionExpectation
+	extends CommittedCompactionProposalExpectation {
+	readonly summary: string;
+	readonly summarySha256: string;
+	readonly details: CodexPortableCompactionDetailsV3;
+}
 
 const SUPPORTED_RESPONSE_ITEM_TYPES = new Set([
 	"additional_tools",
@@ -244,12 +307,14 @@ const MAX_IDENTITY_FIELD_LENGTH = 4096;
 export class CodexCompactionStore {
 	readonly #sessions = new Map<string, CodexCompactionSnapshot>();
 	readonly #replayInvalid = new Set<string>();
+	readonly #pendingCommits = new Map<string, PendingCommittedCompactionExpectation>();
 
 	get(sessionId: string | undefined, modelId: string): CodexCompactionSnapshot | undefined {
 		if (sessionId === undefined || this.#replayInvalid.has(sessionId)) return undefined;
 		const snapshot = this.#sessions.get(sessionId);
 		if (snapshot === undefined) return undefined;
-		const identity = snapshot.source === "manual" ? snapshot.details : snapshot.checkpoint;
+		const identity = snapshotIdentity(snapshot);
+		if (identity === undefined) return undefined;
 		return identity.modelId === modelId ? snapshot : undefined;
 	}
 
@@ -261,9 +326,12 @@ export class CodexCompactionStore {
 	set(
 		sessionId: string,
 		summary: string,
-		details: CodexCompactionDetailsV2 | CodexLegacyCompactionDetailsV1,
+		details:
+			| CodexPortableCompactionDetailsV3
+			| CodexLegacyCompactionDetailsV2
+			| CodexLegacyCompactionDetailsV1,
 	): void {
-		if (details.version !== CODEX_COMPACTION_DETAILS_VERSION) {
+		if (details.version === CODEX_COMPACTION_MODEL_ONLY_DETAILS_VERSION) {
 			this.clear(sessionId);
 			return;
 		}
@@ -273,15 +341,16 @@ export class CodexCompactionStore {
 	setManual(
 		sessionId: string,
 		summary: string,
-		details: CodexCompactionDetailsV2,
+		details: CodexPortableCompactionDetailsV3 | CodexLegacyCompactionDetailsV2,
 		entryId?: string,
 	): void {
 		this.#replayInvalid.delete(sessionId);
+		const output = opaqueOutputFromDetails(details);
 		this.#sessions.set(sessionId, {
 			source: "manual",
 			summary,
 			details: cloneCompactionDetails(details),
-			output: cloneOutputWindow(details.output),
+			...(output === undefined ? {} : { output }),
 			...(entryId === undefined ? {} : { entryId }),
 		});
 	}
@@ -300,14 +369,29 @@ export class CodexCompactionStore {
 		});
 	}
 
+	setPendingCommit(sessionId: string, expected: PendingCommittedCompactionExpectation): void {
+		this.#pendingCommits.set(sessionId, structuredClone(expected));
+	}
+
+	getPendingCommit(sessionId: string): PendingCommittedCompactionExpectation | undefined {
+		const expected = this.#pendingCommits.get(sessionId);
+		return expected === undefined ? undefined : structuredClone(expected);
+	}
+
+	clearPendingCommit(sessionId: string): void {
+		this.#pendingCommits.delete(sessionId);
+	}
+
 	clear(sessionId: string): void {
 		this.#sessions.delete(sessionId);
 		this.#replayInvalid.delete(sessionId);
+		this.#pendingCommits.delete(sessionId);
 	}
 
 	markReplayInvalid(sessionId: string): void {
 		this.#replayInvalid.add(sessionId);
 		this.#sessions.delete(sessionId);
+		this.#pendingCommits.delete(sessionId);
 	}
 
 	isReplayInvalid(sessionId: string): boolean {
@@ -321,13 +405,14 @@ export class CodexCompactionStore {
 	disposeAll(): void {
 		this.#sessions.clear();
 		this.#replayInvalid.clear();
+		this.#pendingCommits.clear();
 	}
 }
 
 export function createCodexCompactionDetails(
 	identity: CodexCompactionIdentity,
 	output: readonly unknown[],
-): CodexCompactionDetailsV2;
+): CodexLegacyCompactionDetailsV2;
 /** Compatibility constructor for callers that only have the legacy model/output pair. */
 export function createCodexCompactionDetails(
 	modelId: string,
@@ -336,11 +421,11 @@ export function createCodexCompactionDetails(
 export function createCodexCompactionDetails(
 	identityOrModel: CodexCompactionIdentity | string,
 	output: readonly unknown[],
-): CodexCompactionDetailsV2 | CodexLegacyCompactionDetailsV1 {
+): CodexLegacyCompactionDetailsV2 | CodexLegacyCompactionDetailsV1 {
 	if (typeof identityOrModel === "string") {
 		return {
 			kind: CODEX_COMPACTION_DETAILS_KIND,
-			version: CODEX_COMPACTION_LEGACY_DETAILS_VERSION,
+			version: CODEX_COMPACTION_MODEL_ONLY_DETAILS_VERSION,
 			modelId: requireIdentityText(identityOrModel, "model id"),
 			output: cloneLegacyOutputWindow(output),
 			replay: "legacy_identity_missing",
@@ -348,9 +433,36 @@ export function createCodexCompactionDetails(
 	}
 	return {
 		kind: CODEX_COMPACTION_DETAILS_KIND,
-		version: CODEX_COMPACTION_DETAILS_VERSION,
+		version: CODEX_COMPACTION_LEGACY_DETAILS_VERSION,
 		...validateIdentity(identityOrModel),
 		output: cloneOutputWindow(output),
+	};
+}
+
+export function createPortableCompactionDetails(
+	portableSummarySha256: string,
+	opaque?:
+		| {
+				readonly identity: CodexCompactionIdentity;
+				readonly output: readonly unknown[];
+		  }
+		| undefined,
+): CodexPortableCompactionDetailsV3 {
+	if (typeof portableSummarySha256 !== "string" || !/^[0-9a-f]{64}$/.test(portableSummarySha256)) {
+		throw new Error("summary digest is invalid");
+	}
+	return {
+		kind: CODEX_COMPACTION_DETAILS_KIND,
+		version: CODEX_COMPACTION_DETAILS_VERSION,
+		portable: { summarySha256: portableSummarySha256 },
+		...(opaque === undefined
+			? {}
+			: {
+					opaque: {
+						...validateIdentity(opaque.identity),
+						output: cloneOutputWindow(opaque.output),
+					},
+				}),
 	};
 }
 
@@ -375,7 +487,7 @@ export function parseCodexCompactionDetails(
 ): ParsedCodexCompactionDetails | undefined {
 	const object = plainRecord(value);
 	if (object === undefined || object.kind !== CODEX_COMPACTION_DETAILS_KIND) return undefined;
-	if (object.version === CODEX_COMPACTION_LEGACY_DETAILS_VERSION) {
+	if (object.version === CODEX_COMPACTION_MODEL_ONLY_DETAILS_VERSION) {
 		if (
 			(!hasExactKeys(object, ["kind", "version", "modelId", "output"]) &&
 				(!hasExactKeys(object, ["kind", "version", "modelId", "output", "replay"]) ||
@@ -389,7 +501,7 @@ export function parseCodexCompactionDetails(
 		try {
 			return {
 				kind: CODEX_COMPACTION_DETAILS_KIND,
-				version: CODEX_COMPACTION_LEGACY_DETAILS_VERSION,
+				version: CODEX_COMPACTION_MODEL_ONLY_DETAILS_VERSION,
 				modelId: requireIdentityText(object.modelId, "model id"),
 				output: cloneLegacyOutputWindow(object.output as readonly unknown[]),
 				replay: "legacy_identity_missing",
@@ -398,11 +510,50 @@ export function parseCodexCompactionDetails(
 			return undefined;
 		}
 	}
+	if (object.version === CODEX_COMPACTION_LEGACY_DETAILS_VERSION) {
+		if (
+			!hasExactKeys(object, [
+				"kind",
+				"version",
+				"sessionFingerprint",
+				"providerId",
+				"api",
+				"baseUrl",
+				"modelId",
+				"authenticationBinding",
+				"output",
+			])
+		) {
+			return undefined;
+		}
+		try {
+			return {
+				kind: CODEX_COMPACTION_DETAILS_KIND,
+				version: CODEX_COMPACTION_LEGACY_DETAILS_VERSION,
+				...parseIdentity(object),
+				output: cloneOutputWindow(object.output as readonly unknown[]),
+			};
+		} catch {
+			return undefined;
+		}
+	}
 	if (object.version !== CODEX_COMPACTION_DETAILS_VERSION) return undefined;
+	const portable = plainRecord(object.portable);
 	if (
-		!hasExactKeys(object, [
-			"kind",
-			"version",
+		(!hasExactKeys(object, ["kind", "version", "portable"]) &&
+			!hasExactKeys(object, ["kind", "version", "portable", "opaque"])) ||
+		portable === undefined ||
+		!hasExactKeys(portable, ["summarySha256"]) ||
+		typeof portable.summarySha256 !== "string" ||
+		!/^[0-9a-f]{64}$/.test(portable.summarySha256)
+	) {
+		return undefined;
+	}
+	const opaque = object.opaque === undefined ? undefined : plainRecord(object.opaque);
+	if (object.opaque !== undefined && opaque === undefined) return undefined;
+	if (
+		opaque !== undefined &&
+		!hasExactKeys(opaque, [
 			"sessionFingerprint",
 			"providerId",
 			"api",
@@ -418,8 +569,15 @@ export function parseCodexCompactionDetails(
 		return {
 			kind: CODEX_COMPACTION_DETAILS_KIND,
 			version: CODEX_COMPACTION_DETAILS_VERSION,
-			...parseIdentity(object),
-			output: cloneOutputWindow(object.output as readonly unknown[]),
+			portable: { summarySha256: portable.summarySha256 },
+			...(opaque === undefined
+				? {}
+				: {
+						opaque: {
+							...parseIdentity(opaque),
+							output: cloneOutputWindow(opaque.output as readonly unknown[]),
+						},
+					}),
 		};
 	} catch {
 		return undefined;
@@ -471,8 +629,199 @@ export function validateCompactionOutput(value: unknown): readonly StructuredRes
 
 export function isReplayableCompactionDetails(
 	value: ParsedCodexCompactionDetails | undefined,
-): value is CodexCompactionDetailsV2 {
-	return value?.version === CODEX_COMPACTION_DETAILS_VERSION;
+): value is CodexLegacyCompactionDetailsV2 | CodexPortableCompactionDetailsV3 {
+	return (
+		value?.version === CODEX_COMPACTION_LEGACY_DETAILS_VERSION ||
+		value?.version === CODEX_COMPACTION_DETAILS_VERSION
+	);
+}
+
+export function opaqueIdentityFromDetails(
+	details: CodexPortableCompactionDetailsV3 | CodexLegacyCompactionDetailsV2 | undefined,
+): CodexCompactionIdentity | undefined {
+	if (details === undefined) return undefined;
+	if (details.version === CODEX_COMPACTION_LEGACY_DETAILS_VERSION) {
+		return {
+			sessionFingerprint: details.sessionFingerprint,
+			providerId: details.providerId,
+			api: details.api,
+			baseUrl: details.baseUrl,
+			modelId: details.modelId,
+			authenticationBinding: details.authenticationBinding,
+		};
+	}
+	if (details.opaque === undefined) return undefined;
+	return {
+		sessionFingerprint: details.opaque.sessionFingerprint,
+		providerId: details.opaque.providerId,
+		api: details.opaque.api,
+		baseUrl: details.opaque.baseUrl,
+		modelId: details.opaque.modelId,
+		authenticationBinding: details.opaque.authenticationBinding,
+	};
+}
+
+export function opaqueOutputFromDetails(
+	details: CodexPortableCompactionDetailsV3 | CodexLegacyCompactionDetailsV2 | undefined,
+): readonly StructuredResponseItem[] | undefined {
+	if (details === undefined) return undefined;
+	const output =
+		details.version === CODEX_COMPACTION_LEGACY_DETAILS_VERSION
+			? details.output
+			: details.opaque?.output;
+	return output === undefined ? undefined : cloneOutputWindow(output);
+}
+
+export function sameCompactionIdentity(
+	left:
+		| Pick<
+				CodexCompactionIdentity,
+				| "sessionFingerprint"
+				| "providerId"
+				| "api"
+				| "baseUrl"
+				| "modelId"
+				| "authenticationBinding"
+		  >
+		| undefined,
+	right: CodexCompactionIdentity | undefined,
+): boolean {
+	return (
+		left !== undefined &&
+		right !== undefined &&
+		left.sessionFingerprint === right.sessionFingerprint &&
+		left.providerId === right.providerId &&
+		left.api === right.api &&
+		left.baseUrl === right.baseUrl &&
+		left.modelId === right.modelId &&
+		left.authenticationBinding.kind === right.authenticationBinding.kind &&
+		left.authenticationBinding.fingerprint === right.authenticationBinding.fingerprint
+	);
+}
+
+export function matchingOpaqueSnapshotOutput(
+	snapshot: CodexCompactionSnapshot | undefined,
+	identity: CodexCompactionIdentity | undefined,
+	summarySha256?: string,
+): readonly StructuredResponseItem[] | undefined {
+	if (snapshot === undefined || !sameCompactionIdentity(snapshotIdentity(snapshot), identity)) {
+		return undefined;
+	}
+	if (snapshot.source === "manual") {
+		if (snapshot.details.version === CODEX_COMPACTION_DETAILS_VERSION) {
+			if (
+				summarySha256 === undefined ||
+				snapshot.details.portable.summarySha256 !== summarySha256 ||
+				snapshot.details.opaque === undefined
+			) {
+				return undefined;
+			}
+		}
+		return snapshot.output === undefined ? undefined : cloneOutputWindow(snapshot.output);
+	}
+	return snapshot.output;
+}
+
+/** Classify one durable compaction boundary without Pi runtime dependencies. */
+export function classifyPersistedCompaction(
+	entry: PersistedCompactionEntryView,
+	summarySha256?: string,
+): PersistedCompactionKind {
+	if (entry.type === "custom") {
+		if (entry.customType !== CODEX_AUTO_COMPACTION_KIND) {
+			return { source: "portable_pi", entry };
+		}
+		const checkpoint = parseCodexAutoCompactionCheckpoint(entry.data);
+		if (checkpoint === undefined) return { source: "malformed_adaptor" };
+		return { source: "legacy_opaque", entry, details: checkpoint };
+	}
+	if (entry.type !== "compaction") return { source: "malformed_adaptor" };
+	if (!claimsAdaptorCompactionDetails(entry.details)) {
+		return { source: "portable_pi", entry };
+	}
+	const details = parseCodexCompactionDetails(entry.details);
+	if (details === undefined) return { source: "malformed_adaptor" };
+	if (details.version === CODEX_COMPACTION_DETAILS_VERSION) {
+		if (typeof entry.summary !== "string" || entry.summary.length === 0) {
+			return { source: "malformed_adaptor" };
+		}
+		if (summarySha256 === undefined || details.portable.summarySha256 !== summarySha256) {
+			return { source: "malformed_adaptor" };
+		}
+		return { source: "adaptor_v3", entry, details };
+	}
+	if (
+		details.version === CODEX_COMPACTION_LEGACY_DETAILS_VERSION ||
+		details.version === CODEX_COMPACTION_MODEL_ONLY_DETAILS_VERSION
+	) {
+		return { source: "legacy_opaque", entry, details };
+	}
+	return { source: "malformed_adaptor" };
+}
+
+/**
+ * Shared restore/commit validator for durable compaction boundaries.
+ * Malformed claimed adaptor data fails closed; ordinary Pi entries remain portable.
+ */
+export function validateCommittedCompactionEntry(
+	entry: PersistedCompactionEntryView,
+	expected?: CommittedCompactionProposalExpectation,
+	summarySha256?: string,
+): { readonly ok: true; readonly kind: PersistedCompactionKind } | { readonly ok: false } {
+	const kind = classifyPersistedCompaction(entry, summarySha256);
+	if (kind.source === "malformed_adaptor") return { ok: false };
+	if (expected === undefined) return { ok: true, kind };
+	if (typeof entry.id !== "string" || entry.id.length === 0) return { ok: false };
+	if (expected.parentId !== undefined && entry.parentId !== expected.parentId) return { ok: false };
+	if (expected.summary !== undefined && entry.summary !== expected.summary) return { ok: false };
+	if (
+		expected.firstKeptEntryId !== undefined &&
+		entry.firstKeptEntryId !== expected.firstKeptEntryId
+	) {
+		return { ok: false };
+	}
+	if (Object.hasOwn(expected, "usage") && !structuralEqual(entry.usage, expected.usage)) {
+		return { ok: false };
+	}
+	if (
+		Object.hasOwn(expected, "retainedTail") &&
+		!structuralEqual(entry.retainedTail, expected.retainedTail)
+	) {
+		return { ok: false };
+	}
+	if (expected.details !== undefined) {
+		if (kind.source !== "adaptor_v3") return { ok: false };
+		if (!structuralEqual(kind.details, expected.details)) return { ok: false };
+		if (
+			expected.summarySha256 !== undefined &&
+			kind.details.portable.summarySha256 !== expected.summarySha256
+		) {
+			return { ok: false };
+		}
+	}
+	return { ok: true, kind };
+}
+
+function claimsAdaptorCompactionDetails(value: unknown): boolean {
+	return isStrictPlainRecord(value) && value.kind === CODEX_COMPACTION_DETAILS_KIND;
+}
+
+function structuralEqual(left: unknown, right: unknown): boolean {
+	if (Object.is(left, right)) return true;
+	if (typeof left !== typeof right || left === null || right === null) return false;
+	if (Array.isArray(left) || Array.isArray(right)) {
+		if (!isStrictJsonArray(left) || !isStrictJsonArray(right) || left.length !== right.length) {
+			return false;
+		}
+		return left.every((value, index) => structuralEqual(value, right[index]));
+	}
+	if (!isStrictPlainRecord(left) || !isStrictPlainRecord(right)) return false;
+	const leftKeys = Object.keys(left).sort();
+	const rightKeys = Object.keys(right).sort();
+	return (
+		structuralEqual(leftKeys, rightKeys) &&
+		leftKeys.every((key) => structuralEqual(left[key], right[key]))
+	);
 }
 
 export function isStructuredJsonValue(value: unknown): value is StructuredJsonValue {
@@ -573,8 +922,25 @@ export class CodexCompactionCoordinator {
 	}
 }
 
-function cloneCompactionDetails(details: CodexCompactionDetailsV2): CodexCompactionDetailsV2 {
-	return createCodexCompactionDetails(details, details.output);
+function cloneCompactionDetails(
+	details: CodexPortableCompactionDetailsV3 | CodexLegacyCompactionDetailsV2,
+): CodexPortableCompactionDetailsV3 | CodexLegacyCompactionDetailsV2 {
+	if (details.version === CODEX_COMPACTION_LEGACY_DETAILS_VERSION) {
+		return createCodexCompactionDetails(details, details.output);
+	}
+	return {
+		kind: CODEX_COMPACTION_DETAILS_KIND,
+		version: CODEX_COMPACTION_DETAILS_VERSION,
+		portable: { summarySha256: details.portable.summarySha256 },
+		...(details.opaque === undefined
+			? {}
+			: {
+					opaque: {
+						...validateIdentity(details.opaque),
+						output: cloneOutputWindow(details.opaque.output),
+					},
+				}),
+	};
 }
 
 function cloneAutomaticCheckpoint(
@@ -586,6 +952,11 @@ function cloneAutomaticCheckpoint(
 		checkpoint.coveredEntryId,
 		checkpoint.output,
 	);
+}
+
+function snapshotIdentity(snapshot: CodexCompactionSnapshot): CodexCompactionIdentity | undefined {
+	if (snapshot.source === "automatic") return snapshot.checkpoint;
+	return opaqueIdentityFromDetails(snapshot.details);
 }
 
 function cloneOutputWindow(value: readonly unknown[]): readonly StructuredResponseItem[] {

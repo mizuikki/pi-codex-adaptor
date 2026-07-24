@@ -35,6 +35,16 @@ describe("extension entry point", () => {
 		await first.emit("session_shutdown", "session-first");
 		await second.emit("session_shutdown", "session-second");
 	});
+
+	test("fails closed when the Pi transaction capability is absent", async () => {
+		await expect(
+			piCodexAdaptor({
+				registerCommand: () => {},
+			} as never),
+		).rejects.toThrow(
+			"Pi host is incompatible: requires provider payload compaction API version 1",
+		);
+	});
 });
 
 type LifecycleHandler = (event: unknown, ctx: ExtensionContext) => unknown | Promise<unknown>;
@@ -52,6 +62,7 @@ function registrationFixture(): {
 	const handlers = new Map<string, LifecycleHandler[]>();
 	return {
 		api: {
+			providerPayloadCompactionApiVersion: 1,
 			registerCommand: (name: string) => commands.push(name),
 			registerProvider: (name: string, config: ProviderConfig) => {
 				providers.push({ name, config });

@@ -3,10 +3,11 @@
 `pi-codex-adaptor` is a Pi extension that will adapt the public OpenAI Codex `0.144.3`
 protocol and selected runtime modules without running a second agent inside Pi.
 
-The repository is under active implementation. Protocol v4, the native baseline handshake, official
-Responses SSE/WebSocket transport with connect fallback, compact endpoint, and exact model metadata
-resolution are implemented. The versioned configuration store, prompt-approved or preauthorized Unified Exec sessions,
-and `/codex` settings overlay are available. The extension registers the native bridge stream for
+The repository is under active implementation. Protocol v5, the native baseline handshake, official
+Responses SSE/WebSocket transport with connect fallback, `contexts.summarize`, the compact endpoint,
+and exact model metadata resolution are implemented. The versioned configuration store,
+prompt-approved or preauthorized Unified Exec sessions, and `/codex` settings overlay are available.
+The extension registers the native bridge stream for
 `openai-codex` and every configured activated provider id through Pi's public provider API, dispatches
 both supported Responses APIs by exact provider-id activation, and delegates unselected providers directly
 to Pi's public native streams. An activated
@@ -17,13 +18,16 @@ executes prompt-approved or explicitly preauthorized patches through the officia
 restores process ownership on session shutdown. The two process-stable stream handlers route by Pi's
 session identity to isolated main or nested-session state. An unrelated extension that replaces
 either supported Responses API remains an explicit registry conflict.
-Inline automatic compaction runs inside the already-planned provider request when the active context is
-known to be over threshold; it does not abort the run, call Pi's `ctx.compact()`, add a turn, or send a
-continuation message. Manual Pi compaction remains Pi-owned. Both paths use the official
-RemoteCompactionV2 stream when available and otherwise the typed Compact endpoint. Their canonical
-output is retained as versioned opaque checkpoints for provider-bound replay, including the encrypted
-string exactly as returned. The adaptor never decrypts that content or displays it as prose. The
-generated `image_gen.imagegen` namespace uses the official Images client for generation
+Inline automatic compaction now runs through the paired Pi `before_provider_payload` transaction.
+When the active context is known to be over threshold, the adaptor may issue a portable summary
+request and commit a real Pi `CompactionEntry` before the provider request is finally dispatched. The
+portable Pi summary plus Pi-materialized `retainedTail` are the durable cross-model boundary; a
+matching Codex identity may additionally reuse an opaque accelerator, while an identity change or
+opaque miss continues from the portable summary. Manual Pi compaction remains Pi-owned and also
+produces a portable-primary Pi entry. Legacy opaque-only automatic and manual checkpoints remain
+readable for exact-identity replay or one-time migration. Both paths use the official
+RemoteCompactionV2 stream when available and otherwise the typed Compact endpoint; the adaptor never
+decrypts opaque content or displays it as prose. The generated `image_gen.imagegen` namespace uses the official Images client for generation
 and workspace-scoped edits, and standalone `web.run` uses the typed Search client. `/codex` offers
 the four settings categories, a manual compact action, compact inline tool rendering, and redacted
 diagnostics export. The package has not been published to npm.
@@ -106,6 +110,10 @@ The product contract, security boundary, and upstream source pin are documented 
 [`docs/official-baseline.md`](./docs/official-baseline.md).
 Capabilities outside the first release are tracked in
 [`docs/remaining-gaps.md`](./docs/remaining-gaps.md).
+
+This development branch expects the paired [`mizuikki/pi`](https://github.com/mizuikki/pi) host at
+commit `44a2567c5d3c183e7af4375b195d15df468181c3`, with provider payload compaction API version `1`.
+The public Pi `0.81.1` package graph is a development baseline, not a compatible runtime host.
 
 ## Configuration and security
 
