@@ -65,6 +65,7 @@ export function createFakePi(options: {
 	const cwd = options.cwd ?? process.cwd();
 
 	const api = {
+		providerPayloadCompactionApiVersion: 1,
 		registerTool: (tool: ToolDefinition) => {
 			tools.set(tool.name, tool);
 		},

@@ -1,4 +1,4 @@
-export const BRIDGE_PROTOCOL_VERSION = 4;
+export const BRIDGE_PROTOCOL_VERSION = 5;
 export const OFFICIAL_CODEX_VERSION = "0.144.3";
 export const OFFICIAL_CODEX_TAG = "rust-v0.144.3";
 export const OFFICIAL_SOURCE_COMMIT = "78ad6e6bfd1d3b6a209acd3ef82172a96b25179c";

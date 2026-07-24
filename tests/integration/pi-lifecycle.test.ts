@@ -65,6 +65,7 @@ describe("fake Pi + real native lifecycle", () => {
 	test("binds and releases the process provider route with the Pi session lifecycle", async () => {
 		const pi = createFakePi({ token: fixtureToken(), sessionId: "session-lifecycle" });
 		const lifecycleApi = {
+			providerPayloadCompactionApiVersion: 1,
 			registerCommand: pi.api.registerCommand,
 			registerProvider: pi.api.registerProvider,
 			on: pi.api.on,

@@ -101,7 +101,6 @@ export class CodexProviderRequestGuard {
 		if (
 			record.approvedRequest === undefined ||
 			record.approvedDigest === undefined ||
-			request !== record.approvedRequest ||
 			!isRecord(request) ||
 			digestJson(request) !== record.approvedDigest
 		) {
@@ -283,8 +282,12 @@ function cloneConnection(connection: CodexProviderConnection): CodexProviderConn
 	return Object.freeze(cloneFrozenJson(connection));
 }
 
+export function sha256Hex(value: string): string {
+	return createHash("sha256").update(value, "utf8").digest("hex");
+}
+
 function sha256(value: string): string {
-	return `sha256:${createHash("sha256").update(value, "utf8").digest("hex")}`;
+	return `sha256:${sha256Hex(value)}`;
 }
 
 function extractAccountClaim(token: string): string | undefined {

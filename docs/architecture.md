@@ -58,23 +58,26 @@ scoped so one session cannot remove another session's binding. The router is the
 Automatic compaction is a provider-hook operation, not a Pi turn operation. After the selected
 dispatcher constructs a request, its extension-local `CodexProviderRequestGuard` opens one
 single-use `AsyncLocalStorage` record around the awaited public `onPayload` chain. The registered
-`before_provider_request` handler reads that record, verifies the routed and hook-context session
+`before_provider_payload` handler reads that record, verifies the routed and hook-context session
 ids, projects `buildContextEntries()` through Pi's exported `sessionEntryToContextMessages()`, and
 structurally matches the resulting input to the exact provider payload. It replays the latest
-provider-bound opaque checkpoint or performs one native compact call before returning the rewritten
-payload. The live tail is cloned from the hook payload, so in-flight provider items that Pi has not
-persisted are not reconstructed from session entries. The projection includes Pi's public
-`convertToLlm()` normalization. When an automatic checkpoint supersedes an older manual checkpoint,
-replay matches the provider's model-facing manual marker before replacing the covered prefix with
-the newer automatic output. Both the provider ledger and active-branch candidate pass through the
-same interrupted-call normalizer before structural comparison.
+matching opaque accelerator, migrates legacy opaque-only checkpoints when necessary, or performs one
+portable-summary-plus-compact attempt before returning the rewritten payload proposal. The live tail
+is cloned from the hook payload, so in-flight provider items that Pi has not persisted are not
+reconstructed from session entries. The projection includes Pi's public `convertToLlm()`
+normalization. When an inline checkpoint supersedes an older manual checkpoint, replay matches the
+provider's model-facing compaction marker before replacing the covered prefix with the newer output.
+Both the provider ledger and active-branch candidate pass through the same interrupted-call
+normalizer before structural comparison.
 
-Automatic checkpoints are Pi custom entries. `appendEntry` advances Pi's active branch before it
-reports persistence errors, so the adaptor verifies the new leaf and only then installs its in-memory
-snapshot. An indeterminate append poisons replay for that session instance until reload or
-replacement. Manual compaction remains Pi-owned: Pi writes the real `CompactionEntry`, while the
-adaptor supplies version `2` provider-bound details and restores them on reload. Neither path performs
-client-side decryption; the pinned native typed projection limits the retained opaque item.
+Automatic compactions now commit real Pi `CompactionEntry` records through the paired Pi transaction.
+Pi validates the token-bound leaf and retained-tail snapshot, persists the entry, emits the committed
+event, and only then allows the provider request to continue. The adaptor still keeps legacy custom
+automatic checkpoints readable for exact-identity replay or one-time migration, but it no longer
+writes them for new compactions. Manual and overflow compaction remain Pi-owned commit paths; the
+adaptor supplies portable-primary version `3` details with an optional provider-bound opaque
+accelerator. Neither path performs client-side decryption; the pinned native typed projection limits
+the retained opaque item.
 
 Activation is also the manual and overflow failure-ownership boundary. Once the selected provider
 activates Codex compaction, every setup, native, status, or output-validation failure returns terminal
@@ -84,7 +87,7 @@ cancellation, and coordinator contention remain non-error cancellation paths; in
 remain Pi-owned.
 
 Provider failure ownership is split across three layers. Native bridge code classifies transport and
-provider failures and exposes a bounded, redacted `retryable` bit on protocol v4 `BridgeError`.
+provider failures and exposes a bounded, redacted `retryable` bit on protocol v5 `BridgeError`.
 `src/integration/pi` maps only a trusted `BridgeRemoteError.retryable` fact into Pi's string-only
 assistant error surface using a fixed non-sensitive marker; it does not retry, reconnect, or issue a
 second `createResponse` call. For normal agent turns, Pi alone decides whether to remove the failed
@@ -92,11 +95,12 @@ assistant message and restart the turn under its existing retry settings. Auxili
 and branch-summary requests may use the same stream mapping, but their host-owned workflows handle
 failure without entering the AgentSession agent-turn retry loop.
 
-When `remote_v2` is selected, the host sends the same Pi session id with a compact request and each
-later Responses request from that session. Compaction also declares its `auto` or `manual` trigger.
-The native bridge derives the request-scoped Codex session, thread, window, beta-feature, and turn
-metadata for both SSE and WebSocket transport. This context is transient transport state: it neither
-changes Pi's opaque checkpoint format nor creates bridge-owned durable session state.
+When `remote_v2` is selected, the host sends the same Pi session id with each eligible compact,
+portable-summary, and later Responses request from that session. Compaction also declares its `auto`
+or `manual` trigger. The native bridge derives the request-scoped Codex session, thread, window,
+beta-feature, and turn metadata for both SSE and WebSocket transport. This context is transient
+transport state: it neither changes Pi's durable checkpoint format nor creates bridge-owned durable
+session state.
 
 Pi owns the persistent approval policy and maps one validated snapshot to one explicit authorization
 value on each native request. The integration layer never infers bypass from UI availability and does

@@ -28,22 +28,17 @@ Provider and model selection changes switch the active tool profile and rebuild 
 prompt/tool status. Codex core isolation and reversible Pi restoration are lifecycle behavior, not a
 new user setting.
 
-The OpenAI section's manual compaction action is manual Pi compaction. It uses a fixed shim summary
-that states the provider performed compaction and keeps the returned version `2` opaque details for
-provider-bound replay. The UI never attempts to decrypt, summarize, or display the encrypted content.
-Manual compaction keeps Pi's existing compaction-summary presentation.
+The OpenAI section's manual compaction action is manual Pi compaction. It now commits a normal Pi
+`CompactionEntry` whose durable boundary is the portable Pi summary plus the Pi-materialized
+`retainedTail`. A matching Codex identity may also retain an opaque accelerator for provider-bound
+replay. The UI never attempts to decrypt, summarize, or display encrypted content, and manual
+compaction keeps Pi's existing compaction-summary presentation.
 
 Inline automatic compaction remains silent in the live provider flow: it continues the current
 provider request and adds no synthetic conversational message or continuation turn. The durable
-checkpoint is still a hidden opaque `CustomEntry`. When Pi renders that custom entry, the adaptor
-projects exactly one information row:
-
-```text
-• Context compacted
-```
-
-Only the leading `•` is dimmed; the message uses normal transcript styling. The row has no tool
-gutter, lifecycle state, expansion, token count, checkpoint identifier, or opaque content.
+checkpoint is a real Pi `CompactionEntry` committed before dispatch. Presentation of that committed
+boundary remains Pi-owned. The adaptor no longer writes or renders a hidden automatic custom
+checkpoint for new compactions.
 
 Managed Codex tools render as compact unframed transcript rows owned by
 `src/ui/terminal/codex-tool-renderer.ts`. Each row uses the renderer-owned single-column glyphs `•`,

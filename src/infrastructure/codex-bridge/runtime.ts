@@ -1,9 +1,12 @@
 import type {
 	CodexRuntime,
 	CompactResponseOptions,
+	CompactResponseResult,
 	CreateResponseOptions,
 	CreateResponseResult,
 	ExecuteToolOptions,
+	SummarizeContextOptions,
+	SummarizeContextResult,
 } from "../../application/codex-runtime.ts";
 import { connectBundledBridge } from "./binary.ts";
 import {
@@ -26,6 +29,9 @@ export interface BundledCodexRuntimeOptions {
 	 */
 	openBridge?: () => Promise<BridgeClient>;
 }
+
+type CompletedSummarizeContextResult = Extract<SummarizeContextResult, { status: "completed" }>;
+type CompletedCompactResponseResult = Extract<CompactResponseResult, { status: "completed" }>;
 
 export class BundledCodexRuntime implements CodexRuntime {
 	readonly #options: BundledCodexRuntimeOptions;
@@ -62,10 +68,39 @@ export class BundledCodexRuntime implements CodexRuntime {
 		}
 	}
 
-	async compact(options: CompactResponseOptions): Promise<CreateResponseResult> {
+	async summarizeContext(options: SummarizeContextOptions): Promise<SummarizeContextResult> {
 		const client = await this.#connect();
 		try {
-			return await client.request(
+			const result = await client.request(
+				"contexts.summarize",
+				{
+					connection: options.connection,
+					modelId: options.modelId,
+					input: options.input,
+					transportMode: options.transportMode,
+					providerSupportsWebsockets: options.providerSupportsWebsockets,
+					...(options.remoteCompactionV2Context === undefined
+						? {}
+						: { remoteCompactionV2Context: options.remoteCompactionV2Context }),
+				},
+				options.signal === undefined ? {} : { signal: options.signal },
+			);
+			return result.status === "completed"
+				? {
+						status: "completed",
+						result: result.result as CompletedSummarizeContextResult["result"],
+					}
+				: { status: result.status };
+		} catch (error) {
+			this.#discardClientIfFatal(client, error);
+			throw error;
+		}
+	}
+
+	async compact(options: CompactResponseOptions): Promise<CompactResponseResult> {
+		const client = await this.#connect();
+		try {
+			const result = await client.request(
 				"responses.compact",
 				{
 					connection: options.connection,
@@ -79,6 +114,12 @@ export class BundledCodexRuntime implements CodexRuntime {
 				},
 				options.signal === undefined ? {} : { signal: options.signal },
 			);
+			return result.status === "completed"
+				? {
+						status: "completed",
+						result: result.result as CompletedCompactResponseResult["result"],
+					}
+				: { status: result.status };
 		} catch (error) {
 			this.#discardClientIfFatal(client, error);
 			throw error;

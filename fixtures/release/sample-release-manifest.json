@@ -3,7 +3,7 @@
   "package": "pi-codex-adaptor",
   "version": "0.1.0-rc.1",
   "projectSourceCommit": "0123456789abcdef0123456789abcdef01234567",
-  "bridgeProtocolVersion": 3,
+  "bridgeProtocolVersion": 5,
   "officialCodexVersion": "0.144.3",
   "officialCodexTag": "rust-v0.144.3",
   "officialSourceCommit": "78ad6e6bfd1d3b6a209acd3ef82172a96b25179c",

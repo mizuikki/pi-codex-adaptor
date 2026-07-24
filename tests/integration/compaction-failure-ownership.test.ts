@@ -16,8 +16,10 @@ import {
 import type {
 	CodexRuntime,
 	CompactResponseOptions,
+	CompactResponseResult,
 	CreateResponseResult,
 	ExecuteToolOptions,
+	SummarizeContextResult,
 } from "../../src/application/codex-runtime.ts";
 import {
 	CodexCompactionCoordinator,
@@ -52,13 +54,24 @@ class RejectingRuntime implements CodexRuntime {
 		return { status: "completed", result: {} };
 	}
 
-	async compact(_options: CompactResponseOptions): Promise<CreateResponseResult> {
+	async summarizeContext(): Promise<SummarizeContextResult> {
+		throw new Error("synthetic provider failure");
+	}
+
+	async compact(_options: CompactResponseOptions): Promise<CompactResponseResult> {
 		this.compactCalls += 1;
 		throw new Error("synthetic provider failure");
 	}
 
 	async readDiagnostics(): Promise<unknown> {
-		return { capabilities: ["responses_sse", "remote_compaction_v2", "compact_endpoint"] };
+		return {
+			capabilities: [
+				"responses_sse",
+				"portable_context_summary",
+				"remote_compaction_v2",
+				"compact_endpoint",
+			],
+		};
 	}
 
 	async resolveModel(modelId: string): Promise<unknown> {

@@ -72,7 +72,11 @@ describe("redaction policy", () => {
 	});
 
 	test("redacts opaque compaction data without retaining raw values", () => {
-		const opaque = { type: "compaction_item", body: "opaque-compaction-fixture-body" };
+		const opaque = {
+			type: "compaction_item",
+			body: "opaque-compaction-fixture-body",
+			summary: "portable-summary-fixture",
+		};
 		const redacted = redactValue({
 			status: "completed",
 			compaction: opaque,
@@ -88,6 +92,7 @@ describe("redaction policy", () => {
 		});
 		expect(serialized.includes("opaque-compaction-fixture-body")).toBe(false);
 		expect(serialized.includes("compaction_item")).toBe(false);
+		expect(serialized.includes("portable-summary-fixture")).toBe(false);
 	});
 
 	test("does not treat ordinary tool result output keys as opaque compaction", () => {

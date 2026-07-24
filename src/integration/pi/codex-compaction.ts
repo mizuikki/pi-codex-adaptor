@@ -1,3 +1,4 @@
+import { calculateCost, type Usage } from "@earendil-works/pi-ai";
 import type {
 	CompactionResult,
 	ExtensionAPI,
@@ -11,9 +12,12 @@ import {
 	CODEX_AUTO_COMPACTION_KIND,
 	CodexCompactionCoordinator,
 	type CodexCompactionStore,
-	createCodexCompactionDetails,
-	parseCodexAutoCompactionCheckpoint,
-	parseCodexCompactionDetails,
+	createPortableCompactionDetails,
+	isStructuredJsonValue,
+	isSupportedStructuredResponseItem,
+	matchingOpaqueSnapshotOutput,
+	type StructuredResponseItem,
+	validateCommittedCompactionEntry,
 	validateCompactionOutput,
 } from "../../application/compaction.ts";
 import type { ConfigurationService } from "../../application/configuration.ts";
@@ -28,7 +32,7 @@ import {
 	registerCodexCompactionReplay,
 } from "./codex-compaction-replay.ts";
 import { responseItemsFromMessages } from "./codex-provider.ts";
-import type { CodexProviderRequestGuard } from "./codex-provider-request-guard.ts";
+import { type CodexProviderRequestGuard, sha256Hex } from "./codex-provider-request-guard.ts";
 import {
 	type CodexToolProfileCoordinator,
 	createUnavailableCodexToolProfile,
@@ -36,7 +40,6 @@ import {
 import { selectCodexToolSurface } from "./codex-tool-surface.ts";
 import { resolveProviderConnection } from "./provider-connection.ts";
 
-const COMPACTION_SUMMARY = "Context compacted by the OpenAI Codex Responses API.";
 const CODEX_COMPACTION_FAILED =
 	"OpenAI Codex compaction failed; the session context was left unchanged.";
 
@@ -58,6 +61,9 @@ export function registerCodexCompaction(
 	pi.on("model_select", () => {});
 	pi.on("session_compact", (event, ctx) => {
 		acceptCompaction(event, ctx, store);
+	});
+	pi.on("session_compact_indeterminate", (_event, ctx) => {
+		store.markReplayInvalid(ctx.sessionManager.getSessionId());
 	});
 	pi.on("session_shutdown", (_event, ctx) => {
 		const sessionId = ctx.sessionManager.getSessionId();
@@ -117,7 +123,7 @@ async function compactForPi(
 		return { cancel: true };
 	}
 	// Pi's post-run threshold event aborts the active retry path. Inline automatic
-	// compaction is owned by before_provider_request; overflow remains Pi-owned.
+	// compaction is owned by before_provider_payload; overflow remains Pi-owned.
 	if (event.reason === "threshold") {
 		return { cancel: true };
 	}
@@ -168,56 +174,113 @@ async function compactForPi(
 			state.pi.getActiveTools(),
 			state.pi.getAllTools(),
 		);
-		const previous = matchingSnapshot(state.store.getForSession(sessionId), identity);
+		const previousSnapshot = state.store.getForSession(sessionId);
+		const previousOutput = matchingOpaqueSnapshotOutput(
+			previousSnapshot,
+			identity,
+			previousSnapshot?.source === "manual" ? sha256Hex(previousSnapshot.summary) : undefined,
+		);
 		const messages = [
 			...event.preparation.messagesToSummarize,
 			...event.preparation.turnPrefixMessages,
 		];
-		const input = [...(previous?.output ?? []), ...responseItemsFromMessages(messages)];
+		const inputCandidate = [...(previousOutput ?? []), ...responseItemsFromMessages(messages)];
+		if (
+			!inputCandidate.every(
+				(item) => isStructuredJsonValue(item) && isSupportedStructuredResponseItem(item),
+			)
+		) {
+			throw new Error("OpenAI Codex compaction input is invalid");
+		}
+		const input = inputCandidate as readonly StructuredResponseItem[];
 		const remoteV2Context = remoteCompactionV2Context(
-			capabilitySnapshot.compaction.implementation,
-			sessionId,
+			previousOutput === undefined ? null : capabilitySnapshot.compaction.implementation,
+			previousOutput === undefined ? undefined : sessionId,
 			"manual",
 		);
-		const result = await state.runtime.compact({
-			connection,
-			request: {
-				model: model.id,
-				input,
-				instructions: withSupplementalSessionInstructions(
-					ctx.getSystemPrompt(),
-					capabilitySnapshot,
-				),
-				tools: tools.length === 0 ? null : tools,
-				parallel_tool_calls: true,
-				reasoning: reasoningFor(model, state.pi.getThinkingLevel()),
-				service_tier: config.codex.serviceTier,
-				prompt_cache_key: sessionId,
-				text: { verbosity: config.codex.verbosity },
-			},
-			implementation: capabilitySnapshot.compaction.implementation ?? "compact_endpoint",
-			transportMode: config.codex.transport.mode,
-			providerSupportsWebsockets: capabilitySnapshot.providerSupportsWebsockets,
-			...(remoteV2Context === undefined ? {} : { remoteCompactionV2Context: remoteV2Context }),
-			signal: event.signal,
-		});
-		if (event.signal.aborted || result.status === "aborted") {
-			state.coordinator.end(sessionId, "cancel");
-			return { cancel: true };
-		}
-		if (result.status !== "completed")
-			throw new Error(`OpenAI Codex compaction ended with status ${result.status}`);
-		const output = validateCompactionOutput(record(result.result)?.output);
-		const details = createCodexCompactionDetails(identity, output);
-		state.coordinator.end(sessionId, "success");
-		return {
-			compaction: {
-				summary: COMPACTION_SUMMARY,
-				firstKeptEntryId: event.preparation.firstKeptEntryId,
-				tokensBefore: event.preparation.tokensBefore,
-				details,
-			},
+		const compactRequest = {
+			model: model.id,
+			input,
+			instructions: withSupplementalSessionInstructions(ctx.getSystemPrompt(), capabilitySnapshot),
+			tools: tools.length === 0 ? null : tools,
+			parallel_tool_calls: true,
+			reasoning: reasoningFor(model, state.pi.getThinkingLevel()),
+			service_tier: config.codex.serviceTier,
+			prompt_cache_key: sessionId,
+			text: { verbosity: config.codex.verbosity },
 		};
+		const sharedAbort = new AbortController();
+		const releaseAbort = linkAbortSignal(event.signal, sharedAbort);
+		try {
+			const summaryPromise = state.runtime.summarizeContext({
+				connection,
+				modelId: model.id,
+				input,
+				transportMode: config.codex.transport.mode,
+				providerSupportsWebsockets: capabilitySnapshot.providerSupportsWebsockets,
+				...(remoteV2Context === undefined ? {} : { remoteCompactionV2Context: remoteV2Context }),
+				signal: sharedAbort.signal,
+			});
+			const compactPromise = state.runtime
+				.compact({
+					connection,
+					request: compactRequest,
+					implementation: capabilitySnapshot.compaction.implementation ?? "compact_endpoint",
+					transportMode: config.codex.transport.mode,
+					providerSupportsWebsockets: capabilitySnapshot.providerSupportsWebsockets,
+					...(remoteV2Context === undefined ? {} : { remoteCompactionV2Context: remoteV2Context }),
+					signal: sharedAbort.signal,
+				})
+				.catch(() => undefined);
+			let summaryResult: Awaited<ReturnType<CodexRuntime["summarizeContext"]>>;
+			try {
+				summaryResult = await summaryPromise;
+			} catch (error) {
+				sharedAbort.abort();
+				throw error;
+			}
+			if (event.signal.aborted || summaryResult.status === "aborted") {
+				sharedAbort.abort();
+				state.coordinator.end(sessionId, "cancel");
+				return { cancel: true };
+			}
+			if (summaryResult.status !== "completed") {
+				sharedAbort.abort();
+				throw new Error(`OpenAI Codex summarization ended with status ${summaryResult.status}`);
+			}
+			const compactResult = await compactPromise;
+			if (event.signal.aborted) {
+				state.coordinator.end(sessionId, "cancel");
+				return { cancel: true };
+			}
+			let usage = usageFromNormalized(summaryResult.result.usage);
+			let details = createPortableCompactionDetails(sha256Hex(summaryResult.result.summary));
+			if (compactResult?.status === "completed") {
+				try {
+					const output = validateCompactionOutput(record(compactResult.result)?.output);
+					usage = combineUsage(usage, usageFromNormalized(compactResult.result.usage));
+					details = createPortableCompactionDetails(sha256Hex(summaryResult.result.summary), {
+						identity,
+						output,
+					});
+				} catch {
+					// A malformed or failed accelerator is ignored; the portable summary still commits.
+				}
+			}
+			if (usage !== undefined) calculateCost(model, usage);
+			state.coordinator.end(sessionId, "success");
+			return {
+				compaction: {
+					summary: summaryResult.result.summary,
+					firstKeptEntryId: event.preparation.firstKeptEntryId,
+					tokensBefore: event.preparation.tokensBefore,
+					...(usage === undefined ? {} : { usage }),
+					details,
+				},
+			};
+		} finally {
+			releaseAbort();
+		}
 	} catch {
 		if (event.signal.aborted) {
 			if (ownsExecution) state.coordinator.end(sessionId, "cancel");
@@ -243,25 +306,49 @@ function restoreCompaction(ctx: ExtensionContext, store: CodexCompactionStore): 
 	const sessionId = ctx.sessionManager.getSessionId();
 	const branch = ctx.sessionManager.getBranch();
 	for (let index = branch.length - 1; index >= 0; index -= 1) {
-		const entry = record(branch[index]);
-		if (entry?.type === "custom" && entry.customType === CODEX_AUTO_COMPACTION_KIND) {
-			const checkpoint = parseCodexAutoCompactionCheckpoint(entry.data);
-			if (checkpoint === undefined) store.markReplayInvalid(sessionId);
-			else if (typeof entry.id === "string") store.setAutomatic(sessionId, checkpoint, entry.id);
-			else store.markReplayInvalid(sessionId);
-			return;
-		}
-		if (entry?.type !== "compaction") continue;
-		const details = parseCodexCompactionDetails(entry.details);
-		if (details === undefined || details.version !== 2 || typeof entry.summary !== "string") {
-			store.clear(sessionId);
-			return;
-		}
-		if (typeof entry.id !== "string") {
+		const raw = branch[index];
+		if (raw === undefined || (raw.type !== "compaction" && raw.type !== "custom")) continue;
+		if (raw.type === "custom" && raw.customType !== CODEX_AUTO_COMPACTION_KIND) continue;
+		const validated = validateCommittedCompactionEntry(
+			toPersistedEntryView(raw),
+			undefined,
+			raw.type === "compaction" ? sha256Hex(raw.summary) : undefined,
+		);
+		if (!validated.ok) {
 			store.markReplayInvalid(sessionId);
 			return;
 		}
-		store.setManual(sessionId, entry.summary, details, entry.id);
+		const kind = validated.kind;
+		if (kind.source === "portable_pi") {
+			store.clear(sessionId);
+			return;
+		}
+		if (kind.source === "legacy_opaque") {
+			if (kind.details.kind === CODEX_AUTO_COMPACTION_KIND) {
+				if (typeof raw.id !== "string") {
+					store.markReplayInvalid(sessionId);
+					return;
+				}
+				store.setAutomatic(sessionId, kind.details, raw.id);
+				return;
+			}
+			if (
+				raw.type !== "compaction" ||
+				kind.details.version === 1 ||
+				typeof raw.summary !== "string" ||
+				typeof raw.id !== "string"
+			) {
+				store.clear(sessionId);
+				return;
+			}
+			store.setManual(sessionId, raw.summary, kind.details, raw.id);
+			return;
+		}
+		if (kind.source !== "adaptor_v3" || raw.type !== "compaction" || typeof raw.id !== "string") {
+			store.markReplayInvalid(sessionId);
+			return;
+		}
+		store.setManual(sessionId, raw.summary, kind.details, raw.id);
 		return;
 	}
 	store.clear(sessionId);
@@ -272,43 +359,78 @@ function acceptCompaction(
 	ctx: ExtensionContext,
 	store: CodexCompactionStore,
 ): void {
-	const details = parseCodexCompactionDetails(event.compactionEntry.details);
-	if (details === undefined || details.version !== 2) {
-		store.clear(ctx.sessionManager.getSessionId());
+	const sessionId = ctx.sessionManager.getSessionId();
+	const entry = event.compactionEntry;
+	const pending =
+		event.trigger === "provider_inline" ? store.getPendingCommit(sessionId) : undefined;
+	const validated = validateCommittedCompactionEntry(
+		{
+			type: "compaction",
+			id: entry.id,
+			parentId: entry.parentId,
+			summary: entry.summary,
+			...(entry.details === undefined ? {} : { details: entry.details }),
+			...(entry.firstKeptEntryId === undefined ? {} : { firstKeptEntryId: entry.firstKeptEntryId }),
+			...(entry.usage === undefined ? {} : { usage: entry.usage }),
+			...(entry.retainedTail === undefined ? {} : { retainedTail: entry.retainedTail }),
+		},
+		pending,
+		sha256Hex(entry.summary),
+	);
+	if (!validated.ok) {
+		store.markReplayInvalid(sessionId);
 		return;
 	}
-	store.setManual(
-		ctx.sessionManager.getSessionId(),
-		event.compactionEntry.summary,
-		details,
-		event.compactionEntry.id,
-	);
+	store.clearPendingCommit(sessionId);
+	if (validated.kind.source === "adaptor_v3") {
+		store.setManual(sessionId, entry.summary, validated.kind.details, entry.id);
+		return;
+	}
+	if (
+		validated.kind.source === "legacy_opaque" &&
+		validated.kind.details.kind !== CODEX_AUTO_COMPACTION_KIND
+	) {
+		if (validated.kind.details.version === 1) {
+			store.clear(sessionId);
+			return;
+		}
+		store.setManual(sessionId, entry.summary, validated.kind.details, entry.id);
+		return;
+	}
+	store.clear(sessionId);
 }
 
-function matchingSnapshot(
-	snapshot: ReturnType<CodexCompactionStore["getForSession"]>,
-	identity: {
-		readonly sessionFingerprint: string;
-		readonly providerId: string;
-		readonly api: string;
-		readonly baseUrl: string;
-		readonly modelId: string;
-		readonly authenticationBinding: unknown;
-	},
-): { readonly output: readonly unknown[] } | undefined {
-	if (snapshot === undefined) return undefined;
-	const value = snapshot.source === "manual" ? snapshot.details : snapshot.checkpoint;
-	if (
-		value.sessionFingerprint !== identity.sessionFingerprint ||
-		value.providerId !== identity.providerId ||
-		value.api !== identity.api ||
-		value.baseUrl !== identity.baseUrl ||
-		value.modelId !== identity.modelId ||
-		JSON.stringify(value.authenticationBinding) !== JSON.stringify(identity.authenticationBinding)
-	) {
-		return undefined;
+function toPersistedEntryView(entry: {
+	readonly type: string;
+	readonly id?: string;
+	readonly parentId?: string | null;
+	readonly summary?: string;
+	readonly details?: unknown;
+	readonly firstKeptEntryId?: string;
+	readonly usage?: unknown;
+	readonly retainedTail?: unknown;
+	readonly customType?: string;
+	readonly data?: unknown;
+}) {
+	if (entry.type === "custom") {
+		return {
+			type: "custom" as const,
+			...(entry.id === undefined ? {} : { id: entry.id }),
+			...(entry.parentId === undefined ? {} : { parentId: entry.parentId }),
+			...(entry.customType === undefined ? {} : { customType: entry.customType }),
+			...(entry.data === undefined ? {} : { data: entry.data }),
+		};
 	}
-	return { output: snapshot.output };
+	return {
+		type: "compaction" as const,
+		...(entry.id === undefined ? {} : { id: entry.id }),
+		...(entry.parentId === undefined ? {} : { parentId: entry.parentId }),
+		...(entry.summary === undefined ? {} : { summary: entry.summary }),
+		...(entry.details === undefined ? {} : { details: entry.details }),
+		...(entry.firstKeptEntryId === undefined ? {} : { firstKeptEntryId: entry.firstKeptEntryId }),
+		...(entry.usage === undefined ? {} : { usage: entry.usage }),
+		...(entry.retainedTail === undefined ? {} : { retainedTail: entry.retainedTail }),
+	};
 }
 
 function reasoningFor(
@@ -324,6 +446,63 @@ function record(value: unknown): Record<string, unknown> | undefined {
 	return typeof value === "object" && value !== null && !Array.isArray(value)
 		? (value as Record<string, unknown>)
 		: undefined;
+}
+
+function linkAbortSignal(signal: AbortSignal, controller: AbortController): () => void {
+	if (signal.aborted) {
+		controller.abort(signal.reason);
+		return () => {};
+	}
+	const abort = () => controller.abort(signal.reason);
+	signal.addEventListener("abort", abort, { once: true });
+	return () => signal.removeEventListener("abort", abort);
+}
+
+function usageFromNormalized(
+	value:
+		| {
+				inputTokens: number;
+				outputTokens: number;
+				cachedInputTokens: number;
+				reasoningTokens?: number;
+		  }
+		| undefined,
+): Usage | undefined {
+	if (value === undefined) return undefined;
+	const cachedInputTokens = integer(value.cachedInputTokens);
+	const inputTokens = Math.max(0, integer(value.inputTokens) - cachedInputTokens);
+	const usage: Usage = {
+		input: inputTokens,
+		output: integer(value.outputTokens),
+		cacheRead: cachedInputTokens,
+		cacheWrite: 0,
+		totalTokens: inputTokens + integer(value.outputTokens) + cachedInputTokens,
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+	};
+	if (typeof value.reasoningTokens === "number") {
+		usage.reasoning = integer(value.reasoningTokens);
+	}
+	return usage;
+}
+
+function combineUsage(left: Usage | undefined, right: Usage | undefined): Usage | undefined {
+	if (left === undefined) return right;
+	if (right === undefined) return left;
+	return {
+		input: left.input + right.input,
+		output: left.output + right.output,
+		cacheRead: left.cacheRead + right.cacheRead,
+		cacheWrite: left.cacheWrite + right.cacheWrite,
+		totalTokens: left.totalTokens + right.totalTokens,
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		...(left.reasoning === undefined && right.reasoning === undefined
+			? {}
+			: { reasoning: (left.reasoning ?? 0) + (right.reasoning ?? 0) }),
+	};
+}
+
+function integer(value: number): number {
+	return Number.isFinite(value) ? Math.max(0, Math.trunc(value)) : 0;
 }
 
 export type { SessionBeforeCompactEvent };

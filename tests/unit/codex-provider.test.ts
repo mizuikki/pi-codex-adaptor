@@ -16,7 +16,7 @@ import { extractAccountId } from "../../src/application/codex-runtime.ts";
 import {
 	CodexCompactionStore,
 	createCodexAutoCompactionCheckpoint,
-	createCodexCompactionDetails,
+	createPortableCompactionDetails,
 } from "../../src/application/compaction.ts";
 import type { ConfigurationService } from "../../src/application/configuration.ts";
 import { ProviderActivationPolicy } from "../../src/application/provider-activation.ts";
@@ -34,6 +34,7 @@ import {
 	encodeResponseItemSignature,
 	responseItemsFromMessages,
 } from "../../src/integration/pi/codex-provider.ts";
+import { sha256Hex } from "../../src/integration/pi/codex-provider-request-guard.ts";
 import type {
 	CodexToolProfileCoordinator,
 	CodexToolProfileReadiness,
@@ -111,7 +112,11 @@ class FixtureRuntime implements CodexRuntime {
 		};
 	}
 
-	async compact(): Promise<CreateResponseResult> {
+	async summarizeContext(): Promise<never> {
+		throw new Error("fixture summary is not configured");
+	}
+
+	async compact(): Promise<never> {
 		throw new Error("fixture compaction is not configured");
 	}
 
@@ -120,6 +125,7 @@ class FixtureRuntime implements CodexRuntime {
 			capabilities: [
 				"responses_sse",
 				"responses_websocket",
+				"portable_context_summary",
 				"remote_compaction_v2",
 				"compact_endpoint",
 				"update_plan",
@@ -290,10 +296,10 @@ function configuration(config: CodexConfig = createDefaultConfig()): Configurati
 	} as ConfigurationService;
 }
 
-function fixtureToken(): string {
+function fixtureToken(accountId = "account-fixture"): string {
 	const payload = Buffer.from(
 		JSON.stringify({
-			"https://api.openai.com/auth": { chatgpt_account_id: "account-fixture" },
+			"https://api.openai.com/auth": { chatgpt_account_id: accountId },
 		}),
 	).toString("base64url");
 	return `header.${payload}.signature`;
@@ -1055,9 +1061,10 @@ describe("Pi Codex provider adapter", () => {
 		compactions.set(
 			"session-fixture",
 			summary,
-			createCodexCompactionDetails(identity, [
-				{ type: "compaction", encrypted_content: "synthetic-opaque-content" },
-			]),
+			createPortableCompactionDetails(sha256Hex(summary), {
+				identity,
+				output: [{ type: "compaction", encrypted_content: "synthetic-opaque-content" }],
+			}),
 		);
 		const streamSimple = createFixtureStream(
 			runtime,
@@ -1090,6 +1097,250 @@ describe("Pi Codex provider adapter", () => {
 				content: [{ type: "input_text", text: "kept input" }],
 			},
 		]);
+	});
+
+	test("falls back to the portable summary text when a v3 accelerator identity no longer matches", async () => {
+		const runtime = new FixtureRuntime();
+		const compactions = new CodexCompactionStore();
+		const summary = "Portable summary for a different identity";
+		const mismatchedConnection = createProviderConnection(model, {
+			apiKey: fixtureToken("other-account"),
+		});
+		const mismatchedIdentity = providerCompactionIdentityFromValues({
+			sessionId: "session-fixture",
+			model,
+			connection: mismatchedConnection,
+		});
+		if (mismatchedIdentity === undefined) throw new Error("fixture identity unavailable");
+		compactions.set(
+			"session-fixture",
+			summary,
+			createPortableCompactionDetails(sha256Hex(summary), {
+				identity: mismatchedIdentity,
+				output: [{ type: "compaction", encrypted_content: "synthetic-opaque-content" }],
+			}),
+		);
+		const streamSimple = createFixtureStream(
+			runtime,
+			configuration(),
+			new ProviderActivationPolicy(configuration()),
+			compactions,
+		);
+		for await (const _event of streamSimple(
+			model,
+			{
+				messages: [
+					{
+						role: "user",
+						content: `The conversation history before this point was compacted into the following summary:\n\n<summary>\n${summary}\n</summary>`,
+						timestamp: 1,
+					},
+					{ role: "user", content: "keep using the portable checkpoint", timestamp: 2 },
+				],
+			},
+			{ apiKey: fixtureToken(), sessionId: "session-fixture" },
+		)) {
+			// Consume the stream to completion.
+		}
+		const request = runtime.request?.request as Record<string, unknown>;
+		expect(request.input).toEqual([
+			{
+				type: "message",
+				role: "user",
+				content: [
+					{
+						type: "input_text",
+						text: `The conversation history before this point was compacted into the following summary:\n\n<summary>\n${summary}\n</summary>`,
+					},
+				],
+			},
+			{
+				type: "message",
+				role: "user",
+				content: [{ type: "input_text", text: "keep using the portable checkpoint" }],
+			},
+		]);
+	});
+
+	test.each([
+		{
+			name: "matching v3 identity replays the opaque accelerator",
+			storeSessionId: "session-fixture",
+			storedTokenAccount: "account-fixture",
+			requestTokenAccount: "account-fixture",
+			expectedFirstType: "compaction",
+		},
+		{
+			name: "changed auth identity falls back to portable text",
+			storeSessionId: "session-fixture",
+			storedTokenAccount: "other-account",
+			requestTokenAccount: "account-fixture",
+			expectedFirstType: "message",
+		},
+		{
+			name: "changed session identity falls back to portable text",
+			storeSessionId: "other-session",
+			storedTokenAccount: "account-fixture",
+			requestTokenAccount: "account-fixture",
+			expectedFirstType: "message",
+		},
+	])("$name", async ({
+		storeSessionId,
+		storedTokenAccount,
+		requestTokenAccount,
+		expectedFirstType,
+	}) => {
+		const runtime = new FixtureRuntime();
+		const compactions = new CodexCompactionStore();
+		const summary = "Portable summary matrix";
+		const storedConnection = createProviderConnection(model, {
+			apiKey: fixtureToken(storedTokenAccount),
+		});
+		const storedIdentity = providerCompactionIdentityFromValues({
+			sessionId: storeSessionId,
+			model,
+			connection: storedConnection,
+		});
+		if (storedIdentity === undefined) throw new Error("fixture identity unavailable");
+		compactions.set(
+			storeSessionId,
+			summary,
+			createPortableCompactionDetails(sha256Hex(summary), {
+				identity: storedIdentity,
+				output: [{ type: "compaction", encrypted_content: "synthetic-opaque-content" }],
+			}),
+		);
+		const streamSimple = createFixtureStream(
+			runtime,
+			configuration(),
+			new ProviderActivationPolicy(configuration()),
+			compactions,
+		);
+		for await (const _event of streamSimple(
+			model,
+			{
+				messages: [
+					{
+						role: "user",
+						content: `The conversation history before this point was compacted into the following summary:\n\n<summary>\n${summary}\n</summary>`,
+						timestamp: 1,
+					},
+				],
+			},
+			{ apiKey: fixtureToken(requestTokenAccount), sessionId: "session-fixture" },
+		)) {
+			// Consume the stream to completion.
+		}
+		const request = runtime.request?.request as Record<string, unknown>;
+		expect((request.input as Array<{ type: string }>)[0]?.type).toBe(expectedFirstType);
+	});
+
+	test("falls back to portable text for provider, model, API, base URL, session, and auth mismatches", async () => {
+		const summary = "Portable summary mismatch matrix";
+		const baseConnection = createProviderConnection(model, { apiKey: fixtureToken() });
+		const baseIdentity = providerCompactionIdentityFromValues({
+			sessionId: "session-fixture",
+			model,
+			connection: baseConnection,
+		});
+		if (baseIdentity === undefined) throw new Error("fixture identity unavailable");
+		const cases: Array<{
+			name: string;
+			storeSessionId: string;
+			identity: typeof baseIdentity;
+			requestModel?: typeof model;
+			requestOptions?: { apiKey?: string; sessionId?: string };
+		}> = [
+			{
+				name: "provider",
+				storeSessionId: "session-fixture",
+				identity: { ...baseIdentity, providerId: "other-provider" },
+			},
+			{
+				name: "model",
+				storeSessionId: "session-fixture",
+				identity: { ...baseIdentity, modelId: "other-model" },
+			},
+			{
+				name: "api",
+				storeSessionId: "session-fixture",
+				identity: { ...baseIdentity, api: "other-api" },
+			},
+			{
+				name: "baseUrl",
+				storeSessionId: "session-fixture",
+				identity: { ...baseIdentity, baseUrl: "https://other.invalid" },
+			},
+			{
+				name: "session",
+				storeSessionId: "other-session",
+				identity: baseIdentity,
+			},
+			{
+				name: "authentication",
+				storeSessionId: "session-fixture",
+				identity: {
+					...baseIdentity,
+					authenticationBinding: { kind: "jwt_account", fingerprint: "sha256:other-account" },
+				},
+			},
+		];
+
+		for (const testCase of cases) {
+			const runtime = new FixtureRuntime();
+			const compactions = new CodexCompactionStore();
+			compactions.set(
+				testCase.storeSessionId,
+				summary,
+				createPortableCompactionDetails(sha256Hex(summary), {
+					identity: testCase.identity,
+					output: [{ type: "compaction", encrypted_content: "synthetic-opaque-content" }],
+				}),
+			);
+			const streamSimple = createFixtureStream(
+				runtime,
+				configuration(),
+				new ProviderActivationPolicy(configuration()),
+				compactions,
+			);
+			for await (const _event of streamSimple(
+				testCase.requestModel ?? model,
+				{
+					messages: [
+						{
+							role: "user",
+							content: `The conversation history before this point was compacted into the following summary:\n\n<summary>\n${summary}\n</summary>`,
+							timestamp: 1,
+						},
+						{ role: "user", content: `continue ${testCase.name}`, timestamp: 2 },
+					],
+				},
+				{
+					apiKey: testCase.requestOptions?.apiKey ?? fixtureToken(),
+					sessionId: testCase.requestOptions?.sessionId ?? "session-fixture",
+				},
+			)) {
+				// Consume the stream to completion.
+			}
+			const request = runtime.request?.request as Record<string, unknown>;
+			expect(request.input, testCase.name).toEqual([
+				{
+					type: "message",
+					role: "user",
+					content: [
+						{
+							type: "input_text",
+							text: `The conversation history before this point was compacted into the following summary:\n\n<summary>\n${summary}\n</summary>`,
+						},
+					],
+				},
+				{
+					type: "message",
+					role: "user",
+					content: [{ type: "input_text", text: `continue ${testCase.name}` }],
+				},
+			]);
+		}
 	});
 
 	test("does not treat automatic checkpoints as manual compaction markers", async () => {

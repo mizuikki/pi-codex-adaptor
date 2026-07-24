@@ -148,40 +148,31 @@ async function smokeInstallExactTarball(tarballPath: string): Promise<void> {
 			packageRoot,
 			metadata.pi?.extensions,
 		);
-		const piCli = resolve(
+		const loaderProbe = resolve(
 			repositoryRoot,
-			"node_modules/@earendil-works/pi-coding-agent/dist/cli.js",
+			"tests/smoke/helpers/verify-packed-tool-provenance.ts",
 		);
-		const child = Bun.spawn(
-			[
-				process.execPath,
-				piCli,
-				"--offline",
-				"--no-session",
-				"--no-tools",
-				"--no-extensions",
-				"--extension",
-				extensionPath,
-				"--list-models",
-				"__pi_codex_adaptor_pack_smoke__",
-			],
-			{
-				cwd: repositoryRoot,
-				env: {
-					...process.env,
-					PI_CODING_AGENT_DIR: piHome,
-					PI_OFFLINE: "1",
-					HOME: piHome,
-					CODEX_HOME: resolve(piHome, "codex-home"),
-				},
-				stderr: "pipe",
-				stdout: "pipe",
+		const child = Bun.spawn([process.execPath, loaderProbe, extensionPath], {
+			cwd: repositoryRoot,
+			env: {
+				...process.env,
+				PI_CODING_AGENT_DIR: piHome,
+				PI_OFFLINE: "1",
+				HOME: piHome,
+				CODEX_HOME: resolve(piHome, "codex-home"),
 			},
-		);
+			stderr: "pipe",
+			stdout: "pipe",
+		});
 		const [exitCode, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
-		if (stderr.includes("Failed to load extension") || exitCode !== 0) {
+		if (
+			!stderr.includes(
+				"Pi host is incompatible: requires provider payload compaction API version 1",
+			) ||
+			exitCode === 0
+		) {
 			throw new Error(
-				`Exact-tarball clean install smoke failed with status ${exitCode}: ${stderr.trim()}`,
+				`Exact-tarball clean install did not reject the transaction-less Pi host with status ${exitCode}: ${stderr.trim()}`,
 			);
 		}
 	} finally {

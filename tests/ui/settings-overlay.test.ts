@@ -19,7 +19,7 @@ function diagnostics(): DiagnosticsSnapshot {
 			providerCount: 1,
 			supportedApis: ["openai-responses", "openai-codex-responses"],
 		},
-		bridge: { bridgeProtocolVersion: 3, capabilities: ["responses"] },
+		bridge: { bridgeProtocolVersion: 5, capabilities: ["responses"] },
 	};
 }
 
@@ -172,7 +172,7 @@ function createOverlayForDialog(
 		baseline: "0.144.3",
 		provider: "openai-codex",
 		model: "test-model",
-		bridge: "protocol v4",
+		bridge: "protocol v5",
 	});
 	const overlay = new SettingsOverlay(model, service, ctx, diagnostics(), exporter, () => {});
 	return { ctx, model, overlay };
@@ -201,7 +201,7 @@ describe("settings overlay disposal", () => {
 			baseline: "0.144.3",
 			provider: "openai-codex",
 			model: "test-model",
-			bridge: "protocol v4",
+			bridge: "protocol v5",
 		});
 		let done = false;
 		const overlay = new SettingsOverlay(model, service, ctx, diagnostics(), undefined, () => {
@@ -231,7 +231,7 @@ describe("settings overlay disposal", () => {
 			baseline: "0.144.3",
 			provider: "openai-codex",
 			model: "test-model",
-			bridge: "protocol v4",
+			bridge: "protocol v5",
 		});
 		const overlay = new SettingsOverlay(model, service, ctx, diagnostics(), undefined, () => {
 			done = true;
@@ -266,7 +266,7 @@ describe("settings overlay disposal", () => {
 			baseline: "0.144.3",
 			provider: "openai-codex",
 			model: "test-model",
-			bridge: "protocol v4",
+			bridge: "protocol v5",
 		});
 		const overlay = new SettingsOverlay(model, service, ctx, diagnostics(), undefined, () => {});
 
@@ -288,7 +288,7 @@ describe("settings overlay disposal", () => {
 			baseline: "0.144.3",
 			provider: "openai-codex",
 			model: "test-model",
-			bridge: "protocol v4",
+			bridge: "protocol v5",
 		});
 		const overlay = new SettingsOverlay(model, service, ctx, diagnostics(), undefined, () => {});
 		model.moveCategory(1);
@@ -307,7 +307,7 @@ describe("settings overlay disposal", () => {
 			baseline: "0.144.3",
 			provider: "openai-codex",
 			model: "test-model",
-			bridge: "protocol v4",
+			bridge: "protocol v5",
 		});
 		const overlay = new SettingsOverlay(model, service, ctx, diagnostics(), undefined, () => {});
 
@@ -337,7 +337,7 @@ describe("settings overlay disposal", () => {
 			baseline: "0.144.3",
 			provider: "openai-codex",
 			model: "test-model",
-			bridge: "protocol v4",
+			bridge: "protocol v5",
 		});
 		const overlay = new SettingsOverlay(
 			model,
@@ -369,7 +369,7 @@ describe("settings overlay disposal", () => {
 			baseline: "0.144.3",
 			provider: "openai-codex",
 			model: "test-model",
-			bridge: "protocol v4",
+			bridge: "protocol v5",
 		});
 		const overlay = new SettingsOverlay(
 			model,
@@ -401,7 +401,7 @@ describe("settings overlay disposal", () => {
 			baseline: "0.144.3",
 			provider: "custom-codex",
 			model: "test-model",
-			bridge: "protocol v4",
+			bridge: "protocol v5",
 			activationModel: { provider: "custom-codex", api: "openai-responses" },
 		});
 		const overlay = new SettingsOverlay(model, service, ctx, diagnostics(), undefined, () => {});
@@ -444,7 +444,7 @@ describe("settings overlay disposal", () => {
 			baseline: "0.144.3",
 			provider: "custom-codex",
 			model: "test-model",
-			bridge: "protocol v4",
+			bridge: "protocol v5",
 			activationModel: { provider: "custom-codex", api: "openai-responses" },
 		});
 		const overlay = new SettingsOverlay(model, service, ctx, diagnostics(), undefined, () => {});

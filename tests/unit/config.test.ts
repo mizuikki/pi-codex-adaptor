@@ -168,7 +168,7 @@ describe("versioned product configuration", () => {
 
 		expect(() =>
 			validateConfigForSave(draft, {
-				bridgeCapabilities: ["responses_sse", "compact_endpoint"],
+				bridgeCapabilities: ["responses_sse", "portable_context_summary", "compact_endpoint"],
 				remoteCompactionV2: false,
 				compactEndpoint: false,
 			}),
@@ -190,7 +190,7 @@ describe("versioned product configuration", () => {
 			{
 				path: "codex.webSearch.mode",
 				context: {
-					bridgeCapabilities: ["responses_sse", "remote_compaction_v2"],
+					bridgeCapabilities: ["responses_sse", "portable_context_summary", "remote_compaction_v2"],
 					webSearchAvailable: false,
 				},
 			},
@@ -204,7 +204,11 @@ describe("versioned product configuration", () => {
 			{
 				path: "codex.transport.mode",
 				context: {
-					bridgeCapabilities: ["remote_compaction_v2", "standalone_web_search"],
+					bridgeCapabilities: [
+						"portable_context_summary",
+						"remote_compaction_v2",
+						"standalone_web_search",
+					],
 					transportAvailable: false,
 					providerSupportsWebsockets: false,
 				},
@@ -232,7 +236,7 @@ describe("versioned product configuration", () => {
 		config.tools.backgroundSessions = true;
 		const evaluations = evaluateConfigSettings(config, {
 			shellSurface: "shell-command",
-			bridgeCapabilities: ["responses_sse", "compact_endpoint"],
+			bridgeCapabilities: ["responses_sse", "portable_context_summary", "compact_endpoint"],
 			providerSupportsWebsockets: false,
 			modelAutoCompactTokenLimit: 48_000,
 		});
@@ -281,7 +285,7 @@ describe("versioned product configuration", () => {
 		expect(
 			validateConfigForSave(draft, {
 				contextWindow: 100_000,
-				bridgeCapabilities: ["responses_sse", "compact_endpoint"],
+				bridgeCapabilities: ["responses_sse", "portable_context_summary", "compact_endpoint"],
 			}),
 		).toEqual(draft);
 	});

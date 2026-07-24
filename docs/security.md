@@ -72,6 +72,10 @@ atomic patch commit checks remain mandatory. Preauthorization for an unsupported
   as a summary, error message, fixture assertion message, or diagnostic value. An official JWT account
   claim may survive credential refresh; an explicit conflicting account header, non-JWT bearer, or
   missing bearer fails closed or binds to the exact credential as defined by the provider contract.
+- Portable summaries are also treated as sensitive context. They are persisted only on the Pi
+  compaction entry, never logged or exported in diagnostics by default, and never inferred from
+  opaque output. A cross-provider or cross-identity request may reuse only the portable Pi boundary;
+  it must not replay an opaque accelerator implicitly.
 - The request guard is extension-instance local. The process router stores only weak session leases;
   it does not retain credentials, opaque windows, payload approvals, or compaction state. A replaced,
   stale, ambiguous, or mismatched route cannot reach compact, append, fallback, or Responses dispatch.

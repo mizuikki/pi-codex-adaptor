@@ -94,6 +94,30 @@ try {
 			throw new Error("Native responses.create did not complete against the fake Responses server");
 		}
 
+		const summary = await client.request("contexts.summarize", {
+			modelId: "fixture-model",
+			input: [
+				{
+					type: "message",
+					role: "user",
+					content: [{ type: "input_text", text: "summarize this context" }],
+				},
+			],
+			transportMode: "sse",
+			providerSupportsWebsockets: false,
+			connection,
+		});
+		if (
+			summary.status !== "completed" ||
+			typeof summary.result !== "object" ||
+			summary.result === null ||
+			(summary.result as { summary?: unknown }).summary !== "fixture"
+		) {
+			throw new Error(
+				"Native contexts.summarize did not complete against the fake Responses server",
+			);
+		}
+
 		const tools = await client.request("tools.resolve", {
 			model: {
 				slug: "fixture-model",
@@ -227,6 +251,7 @@ function isExpectedDiagnostics(value: unknown, target: string): boolean {
 			JSON.stringify([
 				"responses_sse",
 				"responses_websocket",
+				"portable_context_summary",
 				"compact_endpoint",
 				"remote_compaction_v2",
 				"model_metadata",

@@ -33,7 +33,7 @@ describe("settings view model", () => {
 			baseline: "0.144.3",
 			provider: "openai-codex",
 			model: "fixture-model",
-			bridge: "protocol v4",
+			bridge: "protocol v5",
 		});
 
 		view.setCategory("Tools");

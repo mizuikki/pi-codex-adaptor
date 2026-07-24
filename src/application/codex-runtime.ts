@@ -1,3 +1,5 @@
+import type { StructuredResponseItem } from "./compaction.ts";
+
 /** Official JWT claim used by OpenAI ChatGPT account tokens. */
 export const OFFICIAL_ACCOUNT_CLAIM = "https://api.openai.com/auth";
 
@@ -63,6 +65,35 @@ export interface CreateResponseResult {
 	result: unknown;
 }
 
+export interface SummarizeContextOptions {
+	connection: CodexProviderConnection;
+	modelId: string;
+	input: readonly StructuredResponseItem[];
+	transportMode: "auto" | "sse";
+	providerSupportsWebsockets: boolean;
+	remoteCompactionV2Context?: CodexRemoteCompactionV2Context;
+	signal?: AbortSignal;
+}
+
+export interface NormalizedResponseUsage {
+	inputTokens: number;
+	outputTokens: number;
+	cachedInputTokens: number;
+	reasoningTokens?: number;
+}
+
+export type NonCompletedResponseStatus = "incomplete" | "failed" | "aborted" | "timed_out";
+
+export type SummarizeContextResult =
+	| {
+			status: "completed";
+			result: {
+				summary: string;
+				usage?: NormalizedResponseUsage;
+			};
+	  }
+	| { status: NonCompletedResponseStatus };
+
 export interface CompactResponseOptions {
 	connection: CodexProviderConnection;
 	request: unknown;
@@ -72,6 +103,16 @@ export interface CompactResponseOptions {
 	remoteCompactionV2Context?: CodexRemoteCompactionV2Context;
 	signal?: AbortSignal;
 }
+
+export type CompactResponseResult =
+	| {
+			status: "completed";
+			result: {
+				output: readonly StructuredResponseItem[];
+				usage?: NormalizedResponseUsage;
+			};
+	  }
+	| { status: NonCompletedResponseStatus };
 
 /**
  * Stable Pi session identity used by Codex Remote Compaction V2 requests.
@@ -125,7 +166,8 @@ export interface ExecuteToolOptions {
 
 export interface CodexRuntime {
 	createResponse(options: CreateResponseOptions): Promise<CreateResponseResult>;
-	compact(options: CompactResponseOptions): Promise<CreateResponseResult>;
+	summarizeContext(options: SummarizeContextOptions): Promise<SummarizeContextResult>;
+	compact(options: CompactResponseOptions): Promise<CompactResponseResult>;
 	readDiagnostics?(): Promise<unknown>;
 	resolveModel(modelId: string): Promise<unknown>;
 	resolveTools(params: unknown): Promise<unknown>;

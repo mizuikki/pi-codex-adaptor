@@ -123,7 +123,7 @@ describe("Codex provider request guard", () => {
 		expect(guard.activeRecordCount).toBe(2);
 	});
 
-	test("requires same-object, unchanged, current approval before dispatch", async () => {
+	test("requires structurally unchanged current approval before dispatch", async () => {
 		const guard = new CodexProviderRequestGuard();
 		const record = openRecord(guard, "session-approval");
 		const request = { model: model.id, input: [{ type: "message", role: "user", content: [] }] };
@@ -132,7 +132,10 @@ describe("Codex provider request guard", () => {
 		expect(Object.isFrozen(approved)).toBe(true);
 		expect(Object.isFrozen(approved.input)).toBe(true);
 		guard.assertApproved(record, approved);
-		expect(() => guard.assertApproved(record, { ...approved })).toThrow("approval");
+		guard.assertApproved(record, structuredClone(approved));
+		expect(() => guard.assertApproved(record, { ...approved, model: "changed" })).toThrow(
+			"approval",
+		);
 		guard.consume(record);
 		expect(() => guard.assertApproved(record, approved)).toThrow("approval");
 	});

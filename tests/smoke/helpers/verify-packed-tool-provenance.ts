@@ -6,7 +6,11 @@ if (extensionPath === undefined) throw new Error("Packed extension path is requi
 
 const result = await discoverAndLoadExtensions([extensionPath], process.cwd(), process.env.HOME);
 if (result.errors.length > 0 || result.extensions.length !== 1) {
-	throw new Error("Packed extension provenance fixture failed to load");
+	throw new Error(
+		`Packed extension provenance fixture failed to load: ${result.errors
+			.map((entry) => entry.error)
+			.join("; ")}`,
+	);
 }
 
 const extension = result.extensions[0];
