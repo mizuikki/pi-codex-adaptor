@@ -724,13 +724,17 @@ describe("manual Pi compaction", () => {
 		]);
 	});
 
-	test("preserves existing compaction state until commit", async () => {
+	test("uses one summary request even after an opaque checkpoint", async () => {
 		const runtime = new FixtureRuntime();
 		const store = new CodexCompactionStore();
+		const previousSummary = "Synthetic stored summary";
 		store.setManual(
 			"session-fixture",
-			"Synthetic stored summary",
-			createCodexCompactionDetails(identity(), [{ type: "compaction", encrypted_content: OPAQUE }]),
+			previousSummary,
+			createPortableCompactionDetails(sha256Hex(previousSummary), {
+				identity: identity(),
+				output: [{ type: "compaction", encrypted_content: OPAQUE }],
+			}),
 			"stored-entry",
 		);
 		const before = structuredClone(store.getForSession("session-fixture"));

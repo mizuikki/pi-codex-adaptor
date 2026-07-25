@@ -18,14 +18,12 @@ import {
 	matchingOpaqueSnapshotOutput,
 	type StructuredResponseItem,
 	validateCommittedCompactionEntry,
-	validateCompactionOutput,
 } from "../../application/compaction.ts";
 import type { ConfigurationService } from "../../application/configuration.ts";
 import type { ProviderActivationPolicy } from "../../application/provider-activation.ts";
 import {
 	capabilityCacheKey,
 	ResolveEffectiveCapabilities,
-	withSupplementalSessionInstructions,
 } from "../../application/resolve-effective-capabilities.ts";
 import {
 	providerCompactionIdentity,
@@ -37,7 +35,6 @@ import {
 	type CodexToolProfileCoordinator,
 	createUnavailableCodexToolProfile,
 } from "./codex-tool-profile.ts";
-import { selectCodexToolSurface } from "./codex-tool-surface.ts";
 import { resolveProviderConnection } from "./provider-connection.ts";
 import {
 	onProviderPayloadCompactionIndeterminate,
@@ -75,7 +72,6 @@ export function registerCodexCompaction(
 	});
 	pi.on("session_before_compact", async (event, ctx) => {
 		return compactForPi(event, ctx, {
-			pi,
 			runtime,
 			configuration,
 			store,
@@ -104,7 +100,6 @@ async function compactForPi(
 	event: SessionBeforeCompactEvent,
 	ctx: ExtensionContext,
 	state: {
-		pi: ExtensionAPI;
 		runtime: CodexRuntime;
 		configuration: ConfigurationService;
 		store: CodexCompactionStore;
@@ -172,12 +167,6 @@ async function compactForPi(
 		});
 		if (identity === undefined)
 			throw new Error("OpenAI Codex compaction credentials are unsupported");
-		const officialTools = capabilitySnapshot.modelTools;
-		const tools = selectCodexToolSurface(
-			officialTools,
-			state.pi.getActiveTools(),
-			state.pi.getAllTools(),
-		);
 		const previousSnapshot = state.store.getForSession(sessionId);
 		const previousOutput = matchingOpaqueSnapshotOutput(
 			previousSnapshot,
@@ -202,17 +191,6 @@ async function compactForPi(
 			previousOutput === undefined ? undefined : sessionId,
 			"manual",
 		);
-		const compactRequest = {
-			model: model.id,
-			input,
-			instructions: withSupplementalSessionInstructions(ctx.getSystemPrompt(), capabilitySnapshot),
-			tools: tools.length === 0 ? null : tools,
-			parallel_tool_calls: true,
-			reasoning: reasoningFor(model, state.pi.getThinkingLevel()),
-			service_tier: config.codex.serviceTier,
-			prompt_cache_key: sessionId,
-			text: { verbosity: config.codex.verbosity },
-		};
 		const sharedAbort = new AbortController();
 		const releaseAbort = linkAbortSignal(event.signal, sharedAbort);
 		try {
@@ -225,22 +203,6 @@ async function compactForPi(
 				...(remoteV2Context === undefined ? {} : { remoteCompactionV2Context: remoteV2Context }),
 				signal: sharedAbort.signal,
 			});
-			// An opaque compact request is only meaningful when continuing an attributed
-			// Remote V2 checkpoint. Standalone Pi compaction uses one portable-summary request.
-			const compactPromise =
-				remoteV2Context === undefined
-					? Promise.resolve(undefined)
-					: state.runtime
-							.compact({
-								connection,
-								request: compactRequest,
-								implementation: capabilitySnapshot.compaction.implementation ?? "compact_endpoint",
-								transportMode: config.codex.transport.mode,
-								providerSupportsWebsockets: capabilitySnapshot.providerSupportsWebsockets,
-								remoteCompactionV2Context: remoteV2Context,
-								signal: sharedAbort.signal,
-							})
-							.catch(() => undefined);
 			let summaryResult: Awaited<ReturnType<CodexRuntime["summarizeContext"]>>;
 			try {
 				summaryResult = await summaryPromise;
@@ -257,25 +219,12 @@ async function compactForPi(
 				sharedAbort.abort();
 				throw new Error(`OpenAI Codex summarization ended with status ${summaryResult.status}`);
 			}
-			const compactResult = await compactPromise;
 			if (event.signal.aborted) {
 				state.coordinator.end(sessionId, "cancel");
 				return { cancel: true };
 			}
-			let usage = usageFromNormalized(summaryResult.result.usage);
-			let details = createPortableCompactionDetails(sha256Hex(summaryResult.result.summary));
-			if (compactResult?.status === "completed") {
-				try {
-					const output = validateCompactionOutput(record(compactResult.result)?.output);
-					usage = combineUsage(usage, usageFromNormalized(compactResult.result.usage));
-					details = createPortableCompactionDetails(sha256Hex(summaryResult.result.summary), {
-						identity,
-						output,
-					});
-				} catch {
-					// A malformed or failed accelerator is ignored; the portable summary still commits.
-				}
-			}
+			const usage = usageFromNormalized(summaryResult.result.usage);
+			const details = createPortableCompactionDetails(sha256Hex(summaryResult.result.summary));
 			if (usage !== undefined) calculateCost(model, usage);
 			state.coordinator.end(sessionId, "success");
 			return {
@@ -451,21 +400,6 @@ function toPersistedEntryView(entry: {
 	};
 }
 
-function reasoningFor(
-	model: NonNullable<ExtensionContext["model"]>,
-	thinkingLevel: ReturnType<ExtensionAPI["getThinkingLevel"]>,
-): Record<string, unknown> | null {
-	if (!model.reasoning || thinkingLevel === "off") return null;
-	const effort = model.thinkingLevelMap?.[thinkingLevel] ?? thinkingLevel;
-	return effort === null ? null : { effort, summary: "auto", context: "all_turns" };
-}
-
-function record(value: unknown): Record<string, unknown> | undefined {
-	return typeof value === "object" && value !== null && !Array.isArray(value)
-		? (value as Record<string, unknown>)
-		: undefined;
-}
-
 function linkAbortSignal(signal: AbortSignal, controller: AbortController): () => void {
 	if (signal.aborted) {
 		controller.abort(signal.reason);
@@ -501,22 +435,6 @@ function usageFromNormalized(
 		usage.reasoning = integer(value.reasoningTokens);
 	}
 	return usage;
-}
-
-function combineUsage(left: Usage | undefined, right: Usage | undefined): Usage | undefined {
-	if (left === undefined) return right;
-	if (right === undefined) return left;
-	return {
-		input: left.input + right.input,
-		output: left.output + right.output,
-		cacheRead: left.cacheRead + right.cacheRead,
-		cacheWrite: left.cacheWrite + right.cacheWrite,
-		totalTokens: left.totalTokens + right.totalTokens,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		...(left.reasoning === undefined && right.reasoning === undefined
-			? {}
-			: { reasoning: (left.reasoning ?? 0) + (right.reasoning ?? 0) }),
-	};
 }
 
 function integer(value: number): number {
