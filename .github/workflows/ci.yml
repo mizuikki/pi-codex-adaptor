@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 env:
-  PI_FORK_COMMIT: de0c8472c432ca6561657d20ab7b10413da62cc9
+  PI_FORK_COMMIT: 15702b969be73bf115cdbd4694f1ce89782c62af
 
 jobs:
   check:
@@ -47,9 +47,12 @@ jobs:
       - name: Build local Pi SDK
         shell: bash
         run: |
-          npm ci --ignore-scripts --prefix ../pi
-          npm run generate:models --prefix ../pi
-          npm run build:offline --prefix ../pi
+          PI_SDK_DIR=$(mktemp -d)
+          node ../pi/scripts/pack-local-sdk.mjs --out "$PI_SDK_DIR" --ref "$PI_FORK_COMMIT"
+          cp -R "$PI_SDK_DIR/pi/packages/tui/dist" ../pi/packages/tui/dist
+          cp -R "$PI_SDK_DIR/pi/packages/ai/dist" ../pi/packages/ai/dist
+          cp -R "$PI_SDK_DIR/pi/packages/agent/dist" ../pi/packages/agent/dist
+          cp -R "$PI_SDK_DIR/pi/packages/coding-agent/dist" ../pi/packages/coding-agent/dist
       - name: Install Rust toolchain prerequisites
         shell: bash
         run: |
@@ -88,12 +91,6 @@ jobs:
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24.18.0
-      - name: Generate Pi model data
-        run: |
-          npm ci --ignore-scripts --prefix ../pi
-          npm run generate:models --prefix ../pi
-      - name: Install dependencies
-        run: bun ci
       - name: Verify Pi fork compatibility
         run: bun run test:pi-fork -- --pi-dir ../pi --pi-ref "$PI_FORK_COMMIT"
 
