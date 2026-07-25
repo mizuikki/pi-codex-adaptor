@@ -509,7 +509,7 @@ describe("Codex compaction contracts", () => {
 				},
 			});
 			expect(runtime.summaryCalls).toBe(1);
-			expect(runtime.compactCalls).toBe(0);
+			expect(runtime.compactCalls).toBe(1);
 			return;
 		}
 		if (expectation === "cancel") {
@@ -569,7 +569,7 @@ describe("manual Pi compaction", () => {
 			context(),
 		);
 		expect(runtime.summaryCalls).toBe(1);
-		expect(runtime.compactCalls).toBe(0);
+		expect(runtime.compactCalls).toBe(1);
 
 		const blockedRuntime = new FixtureRuntime();
 		const blocked = register(blockedRuntime);
@@ -590,7 +590,7 @@ describe("manual Pi compaction", () => {
 		expect(notifications).toEqual([{ message: COMPACTION_FAILURE_NOTIFICATION, type: "error" }]);
 	});
 
-	test("returns portable-primary v3 details, usage, and never registers a turn-end scheduler", async () => {
+	test("commits opaque remote state with a portable summary and no turn-end scheduler", async () => {
 		const runtime = new FixtureRuntime();
 		const { handlers, store } = register(runtime);
 		const result = (await handlers.get("session_before_compact")?.[0]?.(
@@ -609,6 +609,9 @@ describe("manual Pi compaction", () => {
 		expect(parseCodexCompactionDetails(result.compaction.details)).toMatchObject({
 			version: 3,
 			portable: { summarySha256: sha256Hex("fixture portable summary") },
+			opaque: {
+				output: [{ type: "compaction", encrypted_content: OPAQUE }],
+			},
 		});
 		expect(result.compaction.usage).toMatchObject({
 			input: 8,
@@ -619,7 +622,17 @@ describe("manual Pi compaction", () => {
 		expect(result.compaction.retainedTail).toEqual([]);
 		expect(handlers.has("turn_end")).toBe(false);
 		expect(runtime.summaryCalls).toBe(1);
-		expect(runtime.compactCalls).toBe(0);
+		expect(runtime.compactCalls).toBe(1);
+		expect(runtime.compaction?.remoteCompactionV2Context).toEqual({
+			sessionId: "session-fixture",
+			compactionTrigger: "manual",
+		});
+		expect(runtime.summaryOptions[0]?.input).toEqual([
+			{ type: "compaction", encrypted_content: OPAQUE },
+		]);
+		expect(runtime.summaryOptions[0]?.remoteCompactionV2Context).toEqual(
+			runtime.compaction?.remoteCompactionV2Context,
+		);
 		await handlers.get("session_compact")?.[0]?.(
 			{
 				type: "session_compact",
@@ -652,7 +665,7 @@ describe("manual Pi compaction", () => {
 		)) as { compaction: { details: unknown } };
 		expect(parseCodexCompactionDetails(result.compaction.details)?.version).toBe(3);
 		expect(runtime.summaryCalls).toBe(1);
-		expect(runtime.compactCalls).toBe(0);
+		expect(runtime.compactCalls).toBe(1);
 		expect(coordinator.isBusy("session-fixture")).toBe(false);
 	});
 
@@ -666,7 +679,7 @@ describe("manual Pi compaction", () => {
 		expect(threshold).toEqual({ cancel: true });
 		expect(runtime.compactCalls).toBe(0);
 		await handlers.get("session_before_compact")?.[0]?.(compactEvent("overflow"), context());
-		expect(runtime.compactCalls).toBe(0);
+		expect(runtime.compactCalls).toBe(1);
 		const controller = new AbortController();
 		controller.abort();
 		const cancelled = await handlers.get("session_before_compact")?.[0]?.(
@@ -674,11 +687,14 @@ describe("manual Pi compaction", () => {
 			context(),
 		);
 		expect(cancelled).toEqual({ cancel: true });
-		expect(runtime.compactCalls).toBe(0);
+		expect(runtime.compactCalls).toBe(1);
 	});
 
-	test("uses one portable summary request when no opaque checkpoint is available", async () => {
+	test("uses one portable summary request when remote compaction is unavailable", async () => {
 		const malformed = new FixtureRuntime();
+		malformed.bridgeCapabilities = malformed.bridgeCapabilities.filter(
+			(capability) => capability !== "remote_compaction_v2",
+		);
 		const malformedRegistration = register(malformed);
 		const malformedNotifications: Array<{ message: string; type: string | undefined }> = [];
 		const malformedResult = (await malformedRegistration.handlers.get(
@@ -697,7 +713,7 @@ describe("manual Pi compaction", () => {
 		);
 	});
 
-	test("terminally cancels authentication and summary failures", async () => {
+	test("terminally cancels authentication, remote-compaction, and summary failures", async () => {
 		const authRuntime = new FixtureRuntime();
 		const authRegistration = register(authRuntime);
 		const authNotifications: Array<{ message: string; type: string | undefined }> = [];
@@ -713,6 +729,22 @@ describe("manual Pi compaction", () => {
 			{ message: COMPACTION_FAILURE_NOTIFICATION, type: "error" },
 		]);
 
+		const compactRuntime = new FixtureRuntime();
+		compactRuntime.compactImpl = async () => ({ status: "failed" });
+		const compactRegistration = register(compactRuntime);
+		const compactNotifications: Array<{ message: string; type: string | undefined }> = [];
+		expect(
+			await compactRegistration.handlers.get("session_before_compact")?.[0]?.(
+				compactEvent("manual"),
+				context({ notifications: compactNotifications }),
+			),
+		).toEqual({ cancel: true });
+		expect(compactRuntime.compactCalls).toBe(1);
+		expect(compactRuntime.summaryCalls).toBe(0);
+		expect(compactNotifications).toEqual([
+			{ message: COMPACTION_FAILURE_NOTIFICATION, type: "error" },
+		]);
+
 		const summaryRuntime = new FixtureRuntime();
 		summaryRuntime.summaryImpl = async () => ({ status: "failed" });
 		const summaryRegistration = register(summaryRuntime);
@@ -724,13 +756,13 @@ describe("manual Pi compaction", () => {
 			),
 		).toEqual({ cancel: true });
 		expect(summaryRuntime.summaryCalls).toBe(1);
-		expect(summaryRuntime.compactCalls).toBe(0);
+		expect(summaryRuntime.compactCalls).toBe(1);
 		expect(summaryNotifications).toEqual([
 			{ message: COMPACTION_FAILURE_NOTIFICATION, type: "error" },
 		]);
 	});
 
-	test("uses one summary request after an active opaque checkpoint", async () => {
+	test("refreshes the opaque remote checkpoint before generating the portable summary", async () => {
 		const runtime = new FixtureRuntime();
 		const store = new CodexCompactionStore();
 		const previousSummary = "Synthetic stored summary";
@@ -761,13 +793,14 @@ describe("manual Pi compaction", () => {
 		)) as { compaction: { summary: string; details: unknown } };
 
 		expect(result.compaction.summary).toBe("fixture portable summary");
-		expect(runtime.compactCalls).toBe(0);
+		expect(runtime.compactCalls).toBe(1);
 		expect(runtime.summaryCalls).toBe(1);
 		expect(registration.coordinator.isBusy("session-fixture")).toBe(false);
 		expect(store.getForSession("session-fixture")).toEqual(before);
-		expect(parseCodexCompactionDetails(result.compaction.details)).toEqual(
-			createPortableCompactionDetails(sha256Hex("fixture portable summary")),
-		);
+		expect(parseCodexCompactionDetails(result.compaction.details)).toMatchObject({
+			version: 3,
+			opaque: { output: [{ type: "compaction", encrypted_content: OPAQUE }] },
+		});
 		expect(notifications).toEqual([]);
 	});
 
@@ -785,6 +818,12 @@ describe("manual Pi compaction", () => {
 			"other-branch-entry",
 		);
 		const registration = register(runtime, configuration(), store);
+		runtime.compactImpl = async () => ({
+			status: "completed",
+			result: {
+				output: [{ type: "compaction", encrypted_content: "fresh-opaque-content" }],
+			},
+		});
 
 		await registration.handlers.get("session_before_compact")?.[0]?.(
 			compactEvent("manual"),
@@ -792,7 +831,7 @@ describe("manual Pi compaction", () => {
 		);
 
 		expect(runtime.summaryCalls).toBe(1);
-		expect(runtime.compactCalls).toBe(0);
+		expect(runtime.compactCalls).toBe(1);
 		expect(runtime.summaryOptions[0]?.remoteCompactionV2Context).toEqual({
 			sessionId: "session-fixture",
 			compactionTrigger: "manual",
@@ -800,6 +839,9 @@ describe("manual Pi compaction", () => {
 		expect(runtime.summaryOptions[0]?.input).not.toContainEqual({
 			type: "compaction",
 			encrypted_content: OPAQUE,
+		});
+		expect(runtime.compaction?.request).not.toMatchObject({
+			input: [{ type: "compaction", encrypted_content: OPAQUE }],
 		});
 	});
 
@@ -895,8 +937,11 @@ describe("manual Pi compaction", () => {
 		}
 	});
 
-	test("commits portable-only details before an opaque checkpoint exists", async () => {
+	test("commits portable-only details through the compact-endpoint fallback", async () => {
 		const runtime = new FixtureRuntime();
+		runtime.bridgeCapabilities = runtime.bridgeCapabilities.filter(
+			(capability) => capability !== "remote_compaction_v2",
+		);
 		const { handlers } = register(runtime);
 		const result = (await handlers.get("session_before_compact")?.[0]?.(
 			compactEvent("manual"),
@@ -908,8 +953,20 @@ describe("manual Pi compaction", () => {
 		);
 	});
 
-	test("reports portable summary usage without opaque acceleration", async () => {
+	test("combines remote compaction and portable summary usage", async () => {
 		const runtime = new FixtureRuntime();
+		runtime.compactImpl = async () => ({
+			status: "completed",
+			result: {
+				output: [{ type: "compaction", encrypted_content: OPAQUE }],
+				usage: {
+					inputTokens: 13,
+					outputTokens: 3,
+					cachedInputTokens: 4,
+					reasoningTokens: 1,
+				},
+			},
+		});
 		const { handlers } = register(runtime);
 		const result = (await handlers.get("session_before_compact")?.[0]?.(
 			compactEvent("manual"),
@@ -926,11 +983,11 @@ describe("manual Pi compaction", () => {
 			};
 		};
 		expect(result.compaction.usage).toMatchObject({
-			input: 8,
-			output: 5,
-			cacheRead: 3,
-			totalTokens: 16,
-			reasoning: 2,
+			input: 17,
+			output: 8,
+			cacheRead: 7,
+			totalTokens: 32,
+			reasoning: 3,
 		});
 	});
 
@@ -966,9 +1023,7 @@ describe("manual Pi compaction", () => {
 				compactEvent("manual"),
 				context({ notifyFailure: true }),
 			),
-		).toMatchObject({
-			compaction: { summary: "fixture portable summary" },
-		});
+		).toEqual({ cancel: true });
 		expect(notificationRegistration.coordinator.isBusy("session-fixture")).toBe(false);
 	});
 
@@ -982,9 +1037,8 @@ describe("manual Pi compaction", () => {
 				compactEvent("manual"),
 				context({ notifications: nativeAbortNotifications }),
 			),
-		).toMatchObject({
-			compaction: { summary: "fixture portable summary" },
-		});
+		).toEqual({ cancel: true });
+		expect(nativeAbort.summaryCalls).toBe(0);
 		expect(nativeAbortNotifications).toEqual([]);
 
 		const controller = new AbortController();
@@ -1114,7 +1168,7 @@ describe("manual Pi compaction", () => {
 			cancel: true,
 		});
 		expect(coordinator.isBusy("session-fixture")).toBe(true);
-		expect(runtime.compactCalls).toBe(0);
+		expect(runtime.compactCalls).toBe(1);
 		expect(notifications).toEqual([{ message: COMPACTION_FAILURE_NOTIFICATION, type: "error" }]);
 
 		release();
@@ -1142,12 +1196,10 @@ describe("manual Pi compaction", () => {
 				compactEvent("manual"),
 				context({ sessionId: "session-owner", notifications }),
 			),
-		).toMatchObject({
-			compaction: { summary: "fixture portable summary" },
-		});
+		).toEqual({ cancel: true });
 		expect(coordinator.isBusy("session-owner")).toBe(false);
 		expect(coordinator.isBusy("session-other")).toBe(true);
-		expect(notifications).toEqual([]);
+		expect(notifications).toEqual([{ message: COMPACTION_FAILURE_NOTIFICATION, type: "error" }]);
 		coordinator.end("session-other", "cancel");
 	});
 

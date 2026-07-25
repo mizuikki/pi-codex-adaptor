@@ -316,7 +316,7 @@ describe("public Pi compaction failure ownership", () => {
 
 		await expect(harness.session.compact()).rejects.toThrow("Compaction cancelled");
 
-		expect(harness.runtime.compactCalls).toBe(0);
+		expect(harness.runtime.compactCalls).toBe(1);
 		expect(harness.getFallbackCalls()).toBe(0);
 		expect(harness.session.sessionManager.getEntries()).toEqual(entriesBefore);
 		expect(harness.session.sessionManager.getLeafId()).toBe(leafBefore);
@@ -345,7 +345,7 @@ describe("public Pi compaction failure ownership", () => {
 			unsubscribe();
 		}
 
-		expect(harness.runtime.compactCalls).toBe(0);
+		expect(harness.runtime.compactCalls).toBe(1);
 		expect(harness.getFallbackCalls()).toBe(0);
 		expect(harness.session.sessionManager.getEntries()).toEqual(entriesBefore);
 		expect(harness.session.sessionManager.getLeafId()).toBe(leafBefore);
