@@ -3,18 +3,22 @@
 ## Local Pi Fork
 
 - This private extension targets sibling `../pi`. Every direct Pi SDK import is
-  an exact `0.81.1-local.1` peer and a `file:../pi/packages/...` development
-  dependency. Do not add Pi SDK packages to production dependencies or import
-  Pi source paths.
+  a wildcard peer and a `file:../pi/packages/...` development dependency. Pi
+  product versions do not define extension compatibility. Do not add Pi SDK
+  packages to production dependencies or import Pi source paths.
 - Install through `pi install -l <absolute-source-path>` and remove through
   `pi remove <absolute-source-path> -l`. Do not restore registry installation or
   npm publication automation.
 - Fork verification uses `mkdtemp` with `<temp>/pi` and `<temp>/project`. Read
   the Pi SDK manifest, verify its SHA-256 entries, and add all four SDK tarballs
   directly to positive consumers. Do not infer provenance from filenames.
-- Preflight `providerPayloadCompactionApiVersion` before provider registration.
+- Preflight `extensionSdkApiVersion` and
+  `providerPayloadCompactionApiVersion` before provider registration.
   Validate loader aliasing with poison packages through the real Pi loader, not
   `import.meta.resolve()`.
+- Blocking compatibility CI must use an immutable protected
+  `pi-extension-sdk-v<major>.<minor>.<patch>` tag after the stacked migration;
+  branch refs are only for the current coordination phase.
 
 ## Scope and architecture
 

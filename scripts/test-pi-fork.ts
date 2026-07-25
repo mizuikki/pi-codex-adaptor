@@ -113,12 +113,16 @@ async function packLocalSdk(options: ForkOptions, tempRoot: string): Promise<Pac
 	) as {
 		forkCommit?: unknown;
 		sdkVersion?: unknown;
-		capabilities?: { providerPayloadCompactionApiVersion?: unknown };
+		capabilities?: {
+			extensionSdkApiVersion?: unknown;
+			providerPayloadCompactionApiVersion?: unknown;
+		};
 		packages?: { name?: unknown; path?: unknown; sha256?: unknown; version?: unknown }[];
 	};
 	if (
 		typeof manifest.forkCommit !== "string" ||
 		typeof manifest.sdkVersion !== "string" ||
+		manifest.capabilities?.extensionSdkApiVersion !== 1 ||
 		manifest.capabilities?.providerPayloadCompactionApiVersion !== 1 ||
 		manifest.packages?.length !== piPackages.length
 	) {
@@ -317,7 +321,7 @@ async function runFocusedTests(
 		cwd: projectDirectory,
 		env: {
 			...process.env,
-			PI_FORK_COMMIT: forkCommit,
+			PI_EXTENSION_SDK_COMMIT: forkCommit,
 			PI_FORK_PROJECT_ROOT: projectDirectory,
 			PI_FORK_SDK_VERSION: sdkVersion,
 			PI_OFFLINE: "1",

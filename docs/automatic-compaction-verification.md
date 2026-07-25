@@ -6,8 +6,9 @@ provider output.
 
 ## Locked dependency graph
 
-The adaptor's `package.json` and `bun.lock` retain sibling Pi `0.81.1-local.1` file development
-dependencies. It is not a compatible runtime host for this feature: the paired Pi fork must expose
+The adaptor's `package.json` and `bun.lock` retain sibling Pi file development dependencies and
+wildcard runtime peers. An upstream public Pi host is not a compatible runtime host for this feature:
+the paired Pi fork must expose `extensionSdkApiVersion === 1` and
 `providerPayloadCompactionApiVersion === 1` to extension factories. Run from the repository:
 
 ```sh
@@ -45,16 +46,18 @@ bun test tests/integration/automatic-compaction-continuation.test.ts
 
 ## Fork-pinned host
 
-The paired Pi fork is verified in a clean consumer through `pack-local-sdk.mjs`. Its manifest records
-the exact commit, private SDK versions, capability levels, relative tarball paths, and SHA-256 values.
-The harness validates that manifest before installation, creates `<temp>/pi` plus `<temp>/project`, and
-installs all four SDK tarballs directly in the positive consumer. It does not reuse the checkout's
-`node_modules` or the adaptor's `bun.lock` resolutions.
+The paired Pi fork is verified in a clean consumer through `scripts/local-fork-fixture.mjs`. Its
+`prepare` command delegates SDK packing to `pack-local-sdk.mjs`; the harness then uses `install-sdk`
+and `create-consumer` with the resulting manifest. The manifest records the exact commit, private SDK
+versions, capability levels, relative tarball paths, and SHA-256 values. The harness validates that
+manifest before installation, creates `<temp>/pi` plus `<temp>/project`, and installs all four SDK
+tarballs directly in the positive consumer. It does not reuse the checkout's `node_modules` or the
+adaptor's `bun.lock` resolutions.
 
 ```sh
-PI_FORK_DIR=<clean-checkout-of-mizuikki-pi>
-PI_FORK_COMMIT=<immutable-commit>
-bun run test:pi-fork -- --pi-dir "$PI_FORK_DIR" --pi-ref "$PI_FORK_COMMIT"
+PI_EXTENSION_SDK_DIR=<clean-pi-sdk-checkout>
+PI_EXTENSION_SDK_REF=<immutable-sdk-tag-or-commit>
+bun run test:pi-fork -- --pi-dir "$PI_EXTENSION_SDK_DIR" --pi-ref "$PI_EXTENSION_SDK_REF"
 ```
 
 The delivery record must contain the resolved commit and the manifest SHA-256 values for all four SDK
@@ -67,9 +70,9 @@ checkpoint replay to normal agent requests.
 
 ## Upstream-host rejection
 
-An upstream `0.81.1` host lacks the paired transaction marker. Tarball and loader smoke tests require a
-clear incompatibility error from that host. This is intentional: upstream package version equality is
-not evidence that a fork contains the required transaction contract.
+An upstream host lacks the private extension SDK and paired transaction markers. Tarball and loader
+smoke tests require a clear incompatibility error from that host. This is intentional: package
+version equality is not evidence that a host contains the required runtime contracts.
 
 ## Observable residuals
 

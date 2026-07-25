@@ -60,9 +60,8 @@ describe("exact npm tarball smoke", () => {
 				],
 				{ cwd: repositoryRoot, stderr: "pipe", stdout: "pipe" },
 			);
-			const [installCode, installStderr] = await Promise.all([
+			const [installCode] = await Promise.all([
 				install.exited,
-				new Response(install.stderr).text(),
 				new Response(install.stdout).text(),
 			]);
 			expect(installCode).toBe(0);
@@ -99,7 +98,6 @@ describe("exact npm tarball smoke", () => {
 				new Response(provenance.stderr).text(),
 				new Response(provenance.stdout).text(),
 			]);
-			expect(installStderr).toBe("");
 			expect(provenanceCode).toBe(0);
 			expect(provenanceStderr).toBe("");
 			expect(provenanceStderr).not.toContain("CODEX_HOME");

@@ -102,10 +102,11 @@ The product contract, security boundary, and upstream source pin are documented 
 Capabilities outside the first release are tracked in
 [`docs/remaining-gaps.md`](./docs/remaining-gaps.md).
 
-This development branch expects the sibling `../pi` host at private SDK version
-`0.81.1-local.1`, with provider payload compaction API version `1`. The local
-development dependencies are `file:../pi/packages/...`; they are never runtime
-production dependencies. Verify a clean immutable Pi commit with
+This development branch expects the sibling `../pi` host with extension SDK
+API version `1` and provider payload compaction API version `1`. Pi product
+versions do not define compatibility. The local development dependencies are
+`file:../pi/packages/...`; they are never runtime production dependencies.
+Verify a clean immutable Pi SDK ref with
 `bun run test:pi-fork -- --pi-dir ../pi --pi-ref <commit>`. The verifier reads
 Pi's SDK manifest, checks every digest, and creates `<temp>/pi` plus
 `<temp>/project` rather than a repository-local fixture.

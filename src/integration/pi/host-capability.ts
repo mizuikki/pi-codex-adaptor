@@ -1,10 +1,17 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
+export const REQUIRED_EXTENSION_SDK_API_VERSION = 1;
 export const REQUIRED_PROVIDER_PAYLOAD_COMPACTION_API_VERSION = 1;
 
 export function assertProviderPayloadCompactionHost(pi: ExtensionAPI): void {
+	if (capabilityVersion(pi, "extensionSdkApiVersion") !== REQUIRED_EXTENSION_SDK_API_VERSION) {
+		throw new Error(
+			`Pi host is incompatible: requires extension SDK API version ${REQUIRED_EXTENSION_SDK_API_VERSION}`,
+		);
+	}
 	if (
-		providerPayloadCompactionApiVersion(pi) === REQUIRED_PROVIDER_PAYLOAD_COMPACTION_API_VERSION
+		capabilityVersion(pi, "providerPayloadCompactionApiVersion") ===
+		REQUIRED_PROVIDER_PAYLOAD_COMPACTION_API_VERSION
 	) {
 		return;
 	}
@@ -13,7 +20,7 @@ export function assertProviderPayloadCompactionHost(pi: ExtensionAPI): void {
 	);
 }
 
-function providerPayloadCompactionApiVersion(value: unknown): unknown {
+function capabilityVersion(value: unknown, name: string): unknown {
 	if (typeof value !== "object" || value === null) return undefined;
-	return (value as Record<string, unknown>).providerPayloadCompactionApiVersion;
+	return (value as Record<string, unknown>)[name];
 }

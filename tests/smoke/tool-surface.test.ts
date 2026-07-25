@@ -10,6 +10,7 @@ describe("extension tool smoke", () => {
 		let allToolsCalls = 0;
 		const events: string[] = [];
 		await piCodexAdaptor({
+			extensionSdkApiVersion: 1,
 			providerPayloadCompactionApiVersion: 1,
 			registerCommand: () => {},
 			registerProvider: () => {},

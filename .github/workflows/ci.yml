@@ -10,7 +10,8 @@ permissions:
   contents: read
 
 env:
-  PI_FORK_COMMIT: 15702b969be73bf115cdbd4694f1ce89782c62af
+  PI_EXTENSION_SDK_REF: local-fork-extension-unification
+  PI_EXTENSION_SDK_API_VERSION: "1"
 
 jobs:
   check:
@@ -42,13 +43,13 @@ jobs:
       - name: Check out local Pi fork
         shell: bash
         run: |
-          git clone --filter=blob:none --branch local-fork-extension-unification https://github.com/mizuikki/pi.git ../pi
-          git -C ../pi checkout --detach "$PI_FORK_COMMIT"
+          git clone --filter=blob:none --branch "$PI_EXTENSION_SDK_REF" https://github.com/mizuikki/pi.git ../pi
+          git -C ../pi checkout --detach
       - name: Build local Pi SDK
         shell: bash
         run: |
           PI_SDK_DIR=$(mktemp -d)
-          node ../pi/scripts/pack-local-sdk.mjs --out "$PI_SDK_DIR" --ref "$PI_FORK_COMMIT"
+          node ../pi/scripts/pack-local-sdk.mjs --out "$PI_SDK_DIR" --ref "$(git -C ../pi rev-parse HEAD)"
           cp -R "$PI_SDK_DIR/pi/packages/tui/dist" ../pi/packages/tui/dist
           cp -R "$PI_SDK_DIR/pi/packages/ai/dist" ../pi/packages/ai/dist
           cp -R "$PI_SDK_DIR/pi/packages/agent/dist" ../pi/packages/agent/dist
@@ -81,8 +82,8 @@ jobs:
           persist-credentials: false
       - name: Check out local Pi fork
         run: |
-          git clone --filter=blob:none --branch local-fork-extension-unification https://github.com/mizuikki/pi.git ../pi
-          git -C ../pi checkout --detach "$PI_FORK_COMMIT"
+          git clone --filter=blob:none --branch "$PI_EXTENSION_SDK_REF" https://github.com/mizuikki/pi.git ../pi
+          git -C ../pi checkout --detach
       - name: Set up Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
@@ -92,7 +93,7 @@ jobs:
         with:
           node-version: 24.18.0
       - name: Verify Pi fork compatibility
-        run: bun run test:pi-fork -- --pi-dir ../pi --pi-ref "$PI_FORK_COMMIT"
+        run: bun run test:pi-fork -- --pi-dir ../pi --pi-ref "$(git -C ../pi rev-parse HEAD)"
 
   pull-request-contract:
     name: Pull request contract

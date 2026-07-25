@@ -17,6 +17,12 @@ interface PackResult {
 }
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const piSdkPackages = [
+	"@earendil-works/pi-agent-core",
+	"@earendil-works/pi-ai",
+	"@earendil-works/pi-coding-agent",
+	"@earendil-works/pi-tui",
+] as const;
 
 export function normalizePackagePath(path: string): string {
 	return path.startsWith("package/") ? path.slice("package/".length) : path;
@@ -55,12 +61,10 @@ async function main(): Promise<void> {
 		: undefined;
 
 	try {
-		if (nativeArtifactsDir !== undefined || !tarball) {
-			await runBunScript([
-				"scripts/assemble-package.ts",
-				...(nativeArtifactsDir === undefined ? [] : ["--native-artifacts-dir", nativeArtifactsDir]),
-			]);
-		}
+		await runBunScript([
+			"scripts/assemble-package.ts",
+			...(nativeArtifactsDir === undefined ? [] : ["--native-artifacts-dir", nativeArtifactsDir]),
+		]);
 
 		const packOutput = await run(["npm", "pack", "./dist/package", "--dry-run", "--json"]);
 		const result = parsePackResult(packOutput);
@@ -79,11 +83,25 @@ async function main(): Promise<void> {
 		const packageJson = JSON.parse(
 			await readFile(resolve(repositoryRoot, "dist/package/package.json"), "utf8"),
 		) as {
+			dependencies?: Record<string, unknown>;
 			name?: unknown;
+			peerDependencies?: Record<string, unknown>;
 			version?: unknown;
 		};
 		if (packageJson.name !== "pi-codex-adaptor" || typeof packageJson.version !== "string") {
 			throw new Error("Staged package metadata is invalid");
+		}
+		for (const packageName of piSdkPackages) {
+			if (packageJson.peerDependencies?.[packageName] !== "*") {
+				throw new Error(
+					`Staged package must declare ${packageName} as a host-provided wildcard peer`,
+				);
+			}
+			if (packageJson.dependencies?.[packageName] !== undefined) {
+				throw new Error(
+					`Staged package must not include ${packageName} as a production dependency`,
+				);
+			}
 		}
 
 		const nativeFiles = paths.filter((path) => path.startsWith("native/bin/"));
@@ -150,7 +168,7 @@ async function smokeInstallManifestTarball(
 	fixtureRoot: string,
 ): Promise<void> {
 	const piDirectory = resolve(process.env.PI_FORK_DIR ?? join(repositoryRoot, "../pi"));
-	const piRef = process.env.PI_FORK_REF ?? process.env.PI_FORK_COMMIT ?? "HEAD";
+	const piRef = process.env.PI_EXTENSION_SDK_REF ?? process.env.PI_FORK_REF ?? "HEAD";
 	const piFixture = resolve(fixtureRoot, "pi-fixture");
 	const consumerDirectory = resolve(fixtureRoot, "manifest-consumer");
 	const helper = resolve(piDirectory, "scripts/local-fork-fixture.mjs");
@@ -207,12 +225,7 @@ async function smokeInstallManifestTarball(
 }
 
 async function installPoisonPackages(packageRoot: string): Promise<void> {
-	for (const packageName of [
-		"@earendil-works/pi-agent-core",
-		"@earendil-works/pi-ai",
-		"@earendil-works/pi-coding-agent",
-		"@earendil-works/pi-tui",
-	]) {
+	for (const packageName of piSdkPackages) {
 		const packageDirectory = resolve(packageRoot, "node_modules", packageName);
 		await mkdir(packageDirectory, { recursive: true });
 		await Bun.write(
@@ -311,15 +324,13 @@ async function smokeInstallExactTarball(tarballPath: string): Promise<void> {
 
 export function assertIncompatiblePiHostRejected(exitCode: number, stderr: string): void {
 	if (
-		stderr.includes(
-			"Pi host is incompatible: requires provider payload compaction API version 1",
-		) &&
+		stderr.includes("Pi host is incompatible: requires extension SDK API version 1") &&
 		exitCode !== 0
 	) {
 		return;
 	}
 	throw new Error(
-		`Exact-tarball clean install did not reject the transaction-less Pi host (status ${exitCode})`,
+		`Exact-tarball clean install did not reject the incompatible Pi host (status ${exitCode})`,
 	);
 }
 

@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const projectRoot = process.env.PI_FORK_PROJECT_ROOT;
-const forkCommit = process.env.PI_FORK_COMMIT;
+const forkCommit = process.env.PI_EXTENSION_SDK_COMMIT;
 const sdkVersion = process.env.PI_FORK_SDK_VERSION;
 const packages = [
 	"@earendil-works/pi-ai",

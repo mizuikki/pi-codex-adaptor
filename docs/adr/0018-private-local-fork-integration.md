@@ -13,9 +13,9 @@ whose declared compatibility does not match its required runtime host.
 ## Decision
 
 Treat the adaptor as a private local extension for the sibling Pi fork. Direct Pi SDK imports remain
-exact peers at `0.81.1-local.1`; development dependencies resolve from `file:../pi/packages/...`.
-The Pi host must advertise provider payload compaction API version `1` before the adaptor registers
-providers.
+wildcard peers; development dependencies resolve from `file:../pi/packages/...`. The Pi host must
+advertise extension SDK API version `1` and provider payload compaction API version `1` before the
+adaptor registers providers.
 
 Install the extension only as a local Pi source. Remove npm publication, GitHub Release, and Release
 Please automation. Package assembly remains available only for manifest-driven isolated consumer
@@ -29,5 +29,7 @@ runtime capability rejection through the real Pi loader.
 
 - The sibling Pi checkout is part of the required development environment.
 - The repository has no supported npm registry installation or release path.
-- SDK package versions and runtime capability versions jointly define compatibility.
+- Runtime capability versions define compatibility; Pi product/package versions do not.
+- Blocking compatibility CI consumes an immutable extension SDK tag and verifies its resolved
+  commit and manifest digests.
 - Local package tarballs are disposable verification artifacts, not releases.

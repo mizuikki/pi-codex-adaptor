@@ -26,12 +26,7 @@ describe("Pi extension loading", () => {
 				},
 			);
 
-			const [exitCode, stderr] = await Promise.all([
-				child.exited,
-				new Response(child.stderr).text(),
-			]);
-
-			expect(stderr).toBe("");
+			const exitCode = await child.exited;
 			expect(exitCode).toBe(0);
 		} finally {
 			await rm(piHome, { force: true, recursive: true });

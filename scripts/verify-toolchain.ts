@@ -11,7 +11,6 @@ interface ToolchainFixture {
 		bun: string;
 		node: string;
 		npm: string;
-		pi: string;
 		rust: string;
 		typebox: string;
 		typesNode: string;

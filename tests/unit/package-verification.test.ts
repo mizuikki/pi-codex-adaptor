@@ -16,7 +16,7 @@ describe("package verification helpers", () => {
 			expect.unreachable();
 		} catch (error) {
 			expect(String(error)).toContain(
-				"Exact-tarball clean install did not reject the transaction-less Pi host (status 0)",
+				"Exact-tarball clean install did not reject the incompatible Pi host (status 0)",
 			);
 			expect(String(error)).not.toContain("/private/fixture");
 		}
