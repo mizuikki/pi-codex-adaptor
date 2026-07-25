@@ -192,8 +192,8 @@ async function compactForPi(
 		}
 		const input = inputCandidate as readonly StructuredResponseItem[];
 		const remoteV2Context = remoteCompactionV2Context(
-			previousOutput === undefined ? null : capabilitySnapshot.compaction.implementation,
-			previousOutput === undefined ? undefined : sessionId,
+			capabilitySnapshot.compaction.implementation,
+			sessionId,
 			"manual",
 		);
 		const sharedAbort = new AbortController();

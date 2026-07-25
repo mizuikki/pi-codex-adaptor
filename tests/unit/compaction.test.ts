@@ -793,7 +793,10 @@ describe("manual Pi compaction", () => {
 
 		expect(runtime.summaryCalls).toBe(1);
 		expect(runtime.compactCalls).toBe(0);
-		expect(runtime.summaryOptions[0]?.remoteCompactionV2Context).toBeUndefined();
+		expect(runtime.summaryOptions[0]?.remoteCompactionV2Context).toEqual({
+			sessionId: "session-fixture",
+			compactionTrigger: "manual",
+		});
 		expect(runtime.summaryOptions[0]?.input).not.toContainEqual({
 			type: "compaction",
 			encrypted_content: OPAQUE,
