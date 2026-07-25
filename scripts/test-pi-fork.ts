@@ -1,6 +1,6 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, dirname, resolve } from "node:path";
+import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 interface ForkOptions {
@@ -140,6 +140,10 @@ async function packLocalSdk(options: ForkOptions, tempRoot: string): Promise<Pac
 				throw new Error("Pi SDK manifest contains an invalid package entry");
 			}
 			const tarball = resolve(tempRoot, entry.path);
+			const relativeTarball = relative(tempRoot, tarball);
+			if (relativeTarball.startsWith("..") || isAbsolute(relativeTarball)) {
+				throw new Error("Pi SDK manifest package path escapes the fixture directory");
+			}
 			const digest = new Bun.CryptoHasher("sha256").update(await readFile(tarball)).digest("hex");
 			if (digest !== entry.sha256) throw new Error(`Pi SDK digest mismatch: ${entry.name}`);
 			return entry.name as (typeof piPackages)[number];
@@ -187,6 +191,30 @@ async function installForkConsumer(
 	await run(process.execPath, ["install", "--ignore-scripts", "--no-save"], {
 		cwd: projectDirectory,
 	});
+	const packageJsonPath = resolve(projectDirectory, "package.json");
+	const packageJson = JSON.parse(await readFile(packageJsonPath, "utf8")) as {
+		devDependencies?: Record<string, string>;
+		overrides?: Record<string, string>;
+	};
+	const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as {
+		packages?: Array<{ name?: unknown; path?: unknown }>;
+	};
+	if (packageJson.devDependencies === undefined || manifest.packages === undefined) {
+		throw new Error("Fork consumer metadata is missing development dependencies or SDK packages");
+	}
+	for (const entry of manifest.packages) {
+		if (
+			typeof entry.name !== "string" ||
+			!piPackages.includes(entry.name as (typeof piPackages)[number]) ||
+			typeof entry.path !== "string"
+		) {
+			throw new Error("Pi SDK manifest contains an invalid package entry");
+		}
+		packageJson.devDependencies[entry.name] = `file:${resolve(dirname(manifestPath), entry.path)}`;
+		const packageName = entry.name;
+		delete packageJson.overrides?.[packageName];
+	}
+	await writeFile(packageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`);
 	await run(process.execPath, [
 		resolve(piDirectory, "scripts/local-fork-fixture.mjs"),
 		"install-sdk",

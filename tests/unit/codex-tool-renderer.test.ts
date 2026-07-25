@@ -174,7 +174,9 @@ describe("codex tool renderer contract", () => {
 			theme as never,
 			{ ...exportCallContext, isPartial: false } as never,
 		);
-		const plain = (result?.render(100) ?? []).map((line) => line.replace(THEME_TAG, "").trimEnd());
+		const plain = (result?.render(100) ?? []).map((line: string) =>
+			line.replace(THEME_TAG, "").trimEnd(),
+		);
 		expect(headerLines(plain)).toEqual([`${CODEX_TOOL_MARKER} *Ran bun test*`]);
 		expect(plain.join("\n")).not.toContain("Running");
 	});

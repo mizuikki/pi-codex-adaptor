@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 env:
-  PI_EXTENSION_SDK_REF: local-fork-extension-unification
+  PI_EXTENSION_SDK_REF: pi-extension-sdk-v1.0.0
   PI_EXTENSION_SDK_API_VERSION: "1"
 
 jobs:
@@ -38,22 +38,26 @@ jobs:
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24.18.0
-      - name: Set up npm
-        run: npm install --global npm@12.0.1
       - name: Check out local Pi fork
         shell: bash
         run: |
           git clone --filter=blob:none --branch "$PI_EXTENSION_SDK_REF" https://github.com/mizuikki/pi.git ../pi
           git -C ../pi checkout --detach
+          test "$(git -C ../pi rev-parse HEAD)" = "$(git -C ../pi rev-parse "$PI_EXTENSION_SDK_REF^{commit}")"
       - name: Build local Pi SDK
         shell: bash
         run: |
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            export TAR_OPTIONS=--force-local
+          fi
           PI_SDK_DIR=$(mktemp -d)
           node ../pi/scripts/pack-local-sdk.mjs --out "$PI_SDK_DIR" --ref "$(git -C ../pi rev-parse HEAD)"
           cp -R "$PI_SDK_DIR/pi/packages/tui/dist" ../pi/packages/tui/dist
           cp -R "$PI_SDK_DIR/pi/packages/ai/dist" ../pi/packages/ai/dist
           cp -R "$PI_SDK_DIR/pi/packages/agent/dist" ../pi/packages/agent/dist
           cp -R "$PI_SDK_DIR/pi/packages/coding-agent/dist" ../pi/packages/coding-agent/dist
+      - name: Set up npm
+        run: npm install --global npm@12.0.1
       - name: Install Rust toolchain prerequisites
         shell: bash
         run: |
@@ -65,7 +69,7 @@ jobs:
             sudo apt-get install --yes musl-tools
           fi
       - name: Install dependencies
-        run: bun ci
+        run: bun install --frozen-lockfile --force
       - name: Run checks
         run: bun run check
       - name: Verify pinned upstream source
@@ -84,6 +88,7 @@ jobs:
         run: |
           git clone --filter=blob:none --branch "$PI_EXTENSION_SDK_REF" https://github.com/mizuikki/pi.git ../pi
           git -C ../pi checkout --detach
+          test "$(git -C ../pi rev-parse HEAD)" = "$(git -C ../pi rev-parse "$PI_EXTENSION_SDK_REF^{commit}")"
       - name: Set up Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:

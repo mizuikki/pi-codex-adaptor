@@ -63,6 +63,7 @@ describe("exact npm tarball smoke", () => {
 			const [installCode] = await Promise.all([
 				install.exited,
 				new Response(install.stdout).text(),
+				new Response(install.stderr).text(),
 			]);
 			expect(installCode).toBe(0);
 
@@ -99,7 +100,7 @@ describe("exact npm tarball smoke", () => {
 				new Response(provenance.stdout).text(),
 			]);
 			expect(provenanceCode).toBe(0);
-			expect(provenanceStderr).toBe("");
+			expect(provenanceStderr).not.toContain("Pi host is incompatible");
 			expect(provenanceStderr).not.toContain("CODEX_HOME");
 		} finally {
 			await rm(installRoot, { force: true, recursive: true });

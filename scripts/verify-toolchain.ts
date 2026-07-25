@@ -51,7 +51,7 @@ const expectedPackageVersions: Record<string, string> = {
 	"@earendil-works/pi-ai": "file:../pi/packages/ai",
 	"@earendil-works/pi-coding-agent": "file:../pi/packages/coding-agent",
 	"@earendil-works/pi-tui": "file:../pi/packages/tui",
-	"@types/node": `^${fixture.runtime.typesNode}`,
+	"@types/node": fixture.runtime.typesNode,
 	typebox: fixture.runtime.typebox,
 	typescript: `^${fixture.runtime.typescript}`,
 };

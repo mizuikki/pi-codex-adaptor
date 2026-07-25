@@ -26,8 +26,13 @@ describe("Pi extension loading", () => {
 				},
 			);
 
-			const exitCode = await child.exited;
+			const [exitCode, stderr] = await Promise.all([
+				child.exited,
+				new Response(child.stderr).text(),
+				new Response(child.stdout).text(),
+			]);
 			expect(exitCode).toBe(0);
+			expect(stderr).not.toContain("Pi host is incompatible");
 		} finally {
 			await rm(piHome, { force: true, recursive: true });
 		}

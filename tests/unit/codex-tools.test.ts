@@ -644,7 +644,7 @@ describe("Pi core tool activation", () => {
 				"exec-call",
 				{ cmd: "fixture command", workdir: "/workspace" } as never,
 				undefined,
-				(update) => updates.push(update),
+				(update: unknown) => updates.push(update),
 				ctx,
 			);
 		expect(runtime.execution).toEqual({
@@ -1261,7 +1261,7 @@ describe("Pi core tool activation", () => {
 			const text =
 				call
 					?.render(120)
-					.map((line) => line.trimEnd())
+					.map((line: string) => line.trimEnd())
 					.join("\n") ?? "";
 			expect(text).toContain(fragment);
 			expect(text).not.toContain("hidden-prompt");
@@ -1295,7 +1295,7 @@ describe("Pi core tool activation", () => {
 		const resultText =
 			result
 				?.render(120)
-				.map((line) => line.trimEnd())
+				.map((line: string) => line.trimEnd())
 				.join("\n") ?? "";
 		expect(resultText).toContain("Ran fixture command");
 		expect(resultText).toContain("fixture output");

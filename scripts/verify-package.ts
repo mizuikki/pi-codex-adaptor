@@ -437,11 +437,14 @@ async function run(
 	const child = Bun.spawn(command, {
 		cwd: options.cwd ?? repositoryRoot,
 		...(options.env === undefined ? {} : { env: options.env }),
-		stderr: "inherit",
+		stderr: "pipe",
 		stdout: "pipe",
 	});
-	const output = await new Response(child.stdout).text();
-	const exitCode = await child.exited;
+	const [output, exitCode] = await Promise.all([
+		new Response(child.stdout).text(),
+		child.exited,
+		new Response(child.stderr).text(),
+	]);
 	if (exitCode !== 0) throw new Error(`${command[0]} exited with status ${exitCode}`);
 	return output;
 }
