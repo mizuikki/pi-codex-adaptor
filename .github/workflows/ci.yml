@@ -53,6 +53,7 @@ jobs:
           npm run build:offline --prefix ../pi/packages/ai
           npm run build --prefix ../pi/packages/agent
           npm run build --prefix ../pi/packages/coding-agent
+          git -C ../pi restore .
       - name: Set up npm
         run: npm install --global npm@12.0.1
       - name: Install Rust toolchain prerequisites
