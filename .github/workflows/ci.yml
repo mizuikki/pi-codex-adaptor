@@ -47,15 +47,12 @@ jobs:
       - name: Build local Pi SDK
         shell: bash
         run: |
-          if [[ "$RUNNER_OS" == "Windows" ]]; then
-            export TAR_OPTIONS=--force-local
-          fi
-          PI_SDK_DIR=$(mktemp -d)
-          node ../pi/scripts/pack-local-sdk.mjs --out "$PI_SDK_DIR" --ref "$(git -C ../pi rev-parse HEAD)"
-          cp -R "$PI_SDK_DIR/pi/packages/tui/dist" ../pi/packages/tui/dist
-          cp -R "$PI_SDK_DIR/pi/packages/ai/dist" ../pi/packages/ai/dist
-          cp -R "$PI_SDK_DIR/pi/packages/agent/dist" ../pi/packages/agent/dist
-          cp -R "$PI_SDK_DIR/pi/packages/coding-agent/dist" ../pi/packages/coding-agent/dist
+          npm install --ignore-scripts --prefix ../pi
+          npm run generate:models --prefix ../pi
+          npm run build --prefix ../pi/packages/tui
+          npm run build:offline --prefix ../pi/packages/ai
+          npm run build --prefix ../pi/packages/agent
+          npm run build --prefix ../pi/packages/coding-agent
       - name: Set up npm
         run: npm install --global npm@12.0.1
       - name: Install Rust toolchain prerequisites
