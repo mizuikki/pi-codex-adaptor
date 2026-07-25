@@ -76,7 +76,10 @@ jobs:
             bun run typecheck
           fi
       - name: Run checks
-        run: bun run check
+        run: bun run check:core
+      - name: Verify package
+        if: runner.os == 'Linux'
+        run: bun run pack:verify
       - name: Verify pinned upstream source
         if: runner.os == 'Linux'
         run: bun run check:upstream-source

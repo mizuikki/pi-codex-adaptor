@@ -39,7 +39,8 @@
     "@earendil-works/pi-tui": "file:../pi/packages/tui"
   },
   "scripts": {
-    "check": "bun run lint && bun run typecheck && bun run check:architecture && bun run check:native && bun test && bun run check:toolchain && bun run check:app-server-schema && bun run check:upstream && bun run check:official-workspace && bun run check:sbom && bun run test:official && bun run pack:verify",
+    "check": "bun run check:core && bun run pack:verify",
+    "check:core": "bun run lint && bun run typecheck && bun run check:architecture && bun run check:native && bun test && bun run check:toolchain && bun run check:app-server-schema && bun run check:upstream && bun run check:official-workspace && bun run check:sbom && bun run test:official",
     "lint": "biome check .",
     "format": "biome check --write .",
     "typecheck": "tsc -p tsconfig.json --noEmit",
