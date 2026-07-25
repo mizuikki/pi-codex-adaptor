@@ -22,6 +22,7 @@ uses the same structure: context, decision, and consequences.
 | [0015](./0015-inline-automatic-compaction-and-opaque-replay.md) | Superseded inline automatic compaction and opaque replay design |
 | [0016](./0016-activated-compaction-failure-ownership.md) | Terminal ownership of activated compaction failures |
 | [0017](./0017-portable-primary-compaction-checkpoints.md) | Portable-primary v3 checkpoints and paired Pi compaction transaction |
+| [0018](./0018-private-local-fork-integration.md) | Private local Pi fork integration and removal of publication automation |
 
 Accepted ADRs are changed only to correct factual errors. A decision change requires a new ADR that
 explicitly supersedes the earlier record. Baseline upgrades and product-boundary changes must remain

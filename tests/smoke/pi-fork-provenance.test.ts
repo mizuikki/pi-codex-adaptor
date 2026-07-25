@@ -1,11 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
-import { dirname, resolve, sep } from "node:path";
+import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const projectRoot = process.env.PI_FORK_PROJECT_ROOT;
 const forkCommit = process.env.PI_FORK_COMMIT;
+const sdkVersion = process.env.PI_FORK_SDK_VERSION;
 const packages = [
 	"@earendil-works/pi-ai",
 	"@earendil-works/pi-agent-core",
@@ -13,11 +14,14 @@ const packages = [
 	"@earendil-works/pi-tui",
 ] as const;
 
-const forkTest = projectRoot === undefined || forkCommit === undefined ? test.skip : test;
+const forkTest =
+	projectRoot === undefined || forkCommit === undefined || sdkVersion === undefined
+		? test.skip
+		: test;
 
 describe("isolated Pi fork provenance", () => {
-	forkTest("uses the selected Pi 0.81.1 tarballs from the temporary consumer", async () => {
-		if (projectRoot === undefined || forkCommit === undefined) {
+	forkTest("uses the selected private Pi SDK tarballs from the temporary consumer", async () => {
+		if (projectRoot === undefined || forkCommit === undefined || sdkVersion === undefined) {
 			throw new Error("Pi fork provenance environment is unavailable");
 		}
 		expect(repositoryRoot).toBe(resolve(projectRoot));
@@ -25,13 +29,11 @@ describe("isolated Pi fork provenance", () => {
 
 		for (const packageName of packages) {
 			const packageDirectory = resolve(repositoryRoot, "node_modules", packageName);
-			const resolved = fileURLToPath(import.meta.resolve(packageName));
-			expect(resolved).toStartWith(`${packageDirectory}${sep}`);
-
 			const manifest = JSON.parse(
 				await readFile(resolve(packageDirectory, "package.json"), "utf8"),
-			) as { version?: unknown };
-			expect(manifest.version).toBe("0.81.1");
+			) as { name?: unknown; version?: unknown };
+			expect(manifest.name).toBe(packageName);
+			expect(manifest.version).toBe(sdkVersion);
 		}
 	});
 });

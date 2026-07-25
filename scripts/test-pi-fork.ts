@@ -1,4 +1,4 @@
-import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7,6 +7,12 @@ interface ForkOptions {
 	readonly piDir: string;
 	readonly piRef: string;
 	readonly keepTemp: boolean;
+}
+
+interface PackedPiSdk {
+	readonly forkCommit: string;
+	readonly manifestPath: string;
+	readonly sdkVersion: string;
 }
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -37,23 +43,17 @@ async function main(): Promise<void> {
 	const tempRoot = await mkdtemp(resolve(tmpdir(), "pi-codex-adaptor-pi-fork-"));
 	let succeeded = false;
 	try {
-		const forkCommit = await resolvedCommit(options.piDir, options.piRef);
-		await assertCleanCurrentPiCheckout(options.piDir, forkCommit);
-		console.log(`Pi fork commit: ${forkCommit} (${options.piRef})`);
-
-		const forkDirectory = resolve(tempRoot, "pi");
+		const sdk = await packLocalSdk(options, tempRoot);
+		console.log(`Pi fork commit: ${sdk.forkCommit} (${options.piRef})`);
 		const tarballDirectory = resolve(tempRoot, "tarballs");
 		const projectDirectory = resolve(tempRoot, "project");
-		await archivePiFork(options.piDir, forkCommit, forkDirectory, tempRoot);
-		await copyGeneratedPiModelData(options.piDir, forkDirectory);
-		await buildAndPackPi(forkDirectory, tarballDirectory);
 		await copyProject(projectDirectory, tempRoot);
-		await installForkConsumer(projectDirectory, tarballDirectory);
+		await installForkConsumer(projectDirectory, sdk.manifestPath, options.piDir);
 		const adaptorTarball = await assembleAndPackAdaptor(projectDirectory, tarballDirectory);
-		await verifyPackagedAdaptorConsumer(tempRoot, tarballDirectory, adaptorTarball);
-		await runFocusedTests(projectDirectory, forkCommit);
+		await verifyPackagedAdaptorConsumer(tempRoot, sdk.manifestPath, adaptorTarball, options.piDir);
+		await runFocusedTests(projectDirectory, sdk.forkCommit, sdk.sdkVersion);
 		succeeded = true;
-		console.log(`Pi fork compatibility passed: ${forkCommit}`);
+		console.log(`Pi fork compatibility passed: ${sdk.forkCommit}`);
 	} finally {
 		if (succeeded || !options.keepTemp) {
 			await rm(tempRoot, { force: true, recursive: true });
@@ -99,109 +99,56 @@ function requiredValue(args: readonly string[], index: number, option: string): 
 	return value;
 }
 
-async function resolvedCommit(piDir: string, piRef: string): Promise<string> {
-	const commit = await commandOutput("git", [
-		"-C",
-		piDir,
-		"rev-parse",
-		"--verify",
-		`${piRef}^{commit}`,
+async function packLocalSdk(options: ForkOptions, tempRoot: string): Promise<PackedPiSdk> {
+	await run("node", [
+		resolve(options.piDir, "scripts/local-fork-fixture.mjs"),
+		"prepare",
+		"--out",
+		tempRoot,
+		"--ref",
+		options.piRef,
 	]);
-	if (!/^[0-9a-f]{40}$/.test(commit)) throw new Error("Pi fork ref did not resolve to a commit");
-	return commit;
-}
-
-async function assertCleanCurrentPiCheckout(piDir: string, commit: string): Promise<void> {
-	const [head, status] = await Promise.all([
-		commandOutput("git", ["-C", piDir, "rev-parse", "HEAD"]),
-		commandOutput("git", ["-C", piDir, "status", "--porcelain", "--untracked-files=all"]),
-	]);
-	if (head !== commit) {
-		throw new Error(
-			"Pi fork verification requires the selected immutable commit to be checked out at HEAD",
-		);
+	const manifest = JSON.parse(
+		await readFile(resolve(tempRoot, "pi-sdk-manifest.json"), "utf8"),
+	) as {
+		forkCommit?: unknown;
+		sdkVersion?: unknown;
+		capabilities?: { providerPayloadCompactionApiVersion?: unknown };
+		packages?: { name?: unknown; path?: unknown; sha256?: unknown; version?: unknown }[];
+	};
+	if (
+		typeof manifest.forkCommit !== "string" ||
+		typeof manifest.sdkVersion !== "string" ||
+		manifest.capabilities?.providerPayloadCompactionApiVersion !== 1 ||
+		manifest.packages?.length !== piPackages.length
+	) {
+		throw new Error("Pi SDK manifest has an invalid commit, capability level, or package count");
 	}
-	if (status.length > 0) {
-		throw new Error(
-			"Pi fork verification requires a clean checkout so the archived commit is the tested host",
-		);
-	}
-}
-
-async function archivePiFork(
-	piDir: string,
-	commit: string,
-	forkDirectory: string,
-	tempRoot: string,
-) {
-	const archive = resolve(tempRoot, "pi.tar");
-	await mkdir(forkDirectory, { recursive: true });
-	await run("git", ["-C", piDir, "archive", "--format=tar", "--output", archive, commit]);
-	await run("tar", ["-xf", archive, "-C", forkDirectory]);
-}
-
-async function copyGeneratedPiModelData(piDir: string, forkDirectory: string): Promise<void> {
-	// Pi intentionally omits generated model JSON from Git. A CI checkout therefore uses the
-	// pinned development package's generated catalog without querying external providers.
-	const source = await firstExistingDirectory([
-		resolve(piDir, "packages/ai/src/providers/data"),
-		resolve(repositoryRoot, "node_modules/@earendil-works/pi-ai/dist/providers/data"),
-	]);
-	if (source === undefined) {
-		throw new Error("Pi model data is unavailable for fork compatibility verification");
-	}
-	await cp(source, resolve(forkDirectory, "packages/ai/src/providers/data"), { recursive: true });
-}
-
-async function firstExistingDirectory(candidates: readonly string[]): Promise<string | undefined> {
-	for (const candidate of candidates) {
-		try {
-			const metadata = await Bun.file(candidate).stat();
-			if (metadata.isDirectory()) return candidate;
-		} catch {
-			// Try the next checked-in or installed catalog source.
-		}
-	}
-	return undefined;
-}
-
-async function buildAndPackPi(forkDirectory: string, tarballDirectory: string): Promise<void> {
-	console.log("Installing and packing the archived Pi workspaces.");
-	await mkdir(tarballDirectory, { recursive: true });
-	await run("npm", ["ci", "--ignore-scripts", "--prefix", forkDirectory]);
-	await run("npm", ["run", "build", "--prefix", resolve(forkDirectory, "packages/tui")]);
-	await run(resolve(forkDirectory, "node_modules/.bin/tsgo"), [
-		"-p",
-		resolve(forkDirectory, "packages/ai/tsconfig.build.json"),
-	]);
-	await rm(resolve(forkDirectory, "packages/ai/dist/providers/data"), {
-		force: true,
-		recursive: true,
-	});
-	await cp(
-		resolve(forkDirectory, "packages/ai/src/providers/data"),
-		resolve(forkDirectory, "packages/ai/dist/providers/data"),
-		{ recursive: true },
+	const packageNames = await Promise.all(
+		manifest.packages.map(async (entry): Promise<(typeof piPackages)[number]> => {
+			if (
+				typeof entry.name !== "string" ||
+				!piPackages.includes(entry.name as (typeof piPackages)[number]) ||
+				entry.version !== manifest.sdkVersion ||
+				typeof entry.path !== "string" ||
+				typeof entry.sha256 !== "string"
+			) {
+				throw new Error("Pi SDK manifest contains an invalid package entry");
+			}
+			const tarball = resolve(tempRoot, entry.path);
+			const digest = new Bun.CryptoHasher("sha256").update(await readFile(tarball)).digest("hex");
+			if (digest !== entry.sha256) throw new Error(`Pi SDK digest mismatch: ${entry.name}`);
+			return entry.name as (typeof piPackages)[number];
+		}),
 	);
-	await run("npm", ["run", "build", "--prefix", resolve(forkDirectory, "packages/agent")]);
-	await run("npm", ["run", "build", "--prefix", resolve(forkDirectory, "packages/coding-agent")]);
-
-	for (const packageName of piPackages) {
-		const workspace = packageName.replace("@earendil-works/pi-", "");
-		await run(
-			"npm",
-			["pack", "--silent", "--ignore-scripts", "--pack-destination", tarballDirectory],
-			{
-				cwd: resolve(forkDirectory, "packages", workspace === "agent-core" ? "agent" : workspace),
-			},
-		);
+	if (new Set(packageNames).size !== piPackages.length) {
+		throw new Error("Pi SDK manifest contains duplicate packages");
 	}
-
-	for (const packageName of piPackages) {
-		const tarball = await findTarball(tarballDirectory, packageName);
-		const digest = new Bun.CryptoHasher("sha256").update(await readFile(tarball)).digest("hex");
-		console.log(`Pi tarball sha256: ${digest}  ${basename(tarball)}`);
-	}
+	return {
+		forkCommit: manifest.forkCommit,
+		manifestPath: resolve(tempRoot, "pi-sdk-manifest.json"),
+		sdkVersion: manifest.sdkVersion,
+	};
 }
 
 async function copyProject(projectDirectory: string, tempRoot: string): Promise<void> {
@@ -227,28 +174,23 @@ async function copyProject(projectDirectory: string, tempRoot: string): Promise<
 
 async function installForkConsumer(
 	projectDirectory: string,
-	tarballDirectory: string,
+	manifestPath: string,
+	piDirectory: string,
 ): Promise<void> {
 	console.log(
-		"Installing the adaptor copy without its Bun lockfile, then unpacking fork tarballs.",
+		"Installing the adaptor copy, then replacing its SDK with verified manifest tarballs.",
 	);
 	await run(process.execPath, ["install", "--ignore-scripts", "--no-save"], {
 		cwd: projectDirectory,
 	});
-	const tarballs = await Promise.all(
-		piPackages.map((packageName) => findTarball(tarballDirectory, packageName)),
-	);
-	for (let index = 0; index < piPackages.length; index += 1) {
-		const packageName = piPackages[index];
-		const tarball = tarballs[index];
-		if (packageName === undefined || tarball === undefined) {
-			throw new Error("Pi package and tarball lists are inconsistent");
-		}
-		const packageDirectory = resolve(projectDirectory, "node_modules", packageName);
-		await rm(packageDirectory, { force: true, recursive: true });
-		await mkdir(packageDirectory, { recursive: true });
-		await run("tar", ["-xzf", tarball, "--strip-components=1", "-C", packageDirectory]);
-	}
+	await run(process.execPath, [
+		resolve(piDirectory, "scripts/local-fork-fixture.mjs"),
+		"install-sdk",
+		"--manifest",
+		manifestPath,
+		"--prefix",
+		projectDirectory,
+	]);
 }
 
 async function assembleAndPackAdaptor(
@@ -269,28 +211,26 @@ async function assembleAndPackAdaptor(
 		],
 		{ cwd: projectDirectory },
 	);
-	return findTarball(tarballDirectory, "pi-codex-adaptor");
+	return findAdaptorTarball(tarballDirectory);
 }
 
 async function verifyPackagedAdaptorConsumer(
 	tempRoot: string,
-	tarballDirectory: string,
+	manifestPath: string,
 	adaptorTarball: string,
+	piDirectory: string,
 ): Promise<void> {
 	console.log("Loading the assembled adaptor tarball with the packed Pi fork.");
 	const consumerDirectory = resolve(tempRoot, "consumer");
-	const piTarballs = await Promise.all(
-		piPackages.map((packageName) => findTarball(tarballDirectory, packageName)),
-	);
-	await run("npm", [
-		"install",
-		"--ignore-scripts",
-		"--no-fund",
-		"--no-audit",
-		"--prefix",
+	await run(process.execPath, [
+		resolve(piDirectory, "scripts/local-fork-fixture.mjs"),
+		"create-consumer",
+		"--manifest",
+		manifestPath,
+		"--directory",
 		consumerDirectory,
-		...piTarballs,
-		adaptorTarball,
+		"--dependency",
+		`pi-codex-adaptor=file:${adaptorTarball}`,
 	]);
 
 	const loaderPath = resolve(consumerDirectory, "verify-extension-load.mjs");
@@ -311,6 +251,8 @@ async function verifyPackagedAdaptorConsumer(
 		"src",
 		"extension.ts",
 	);
+	await verifyPackagedProviderDispatch(consumerDirectory, dirname(dirname(extensionPath)));
+	await installPoisonPackages(dirname(dirname(extensionPath)));
 	await run(process.execPath, [loaderPath, extensionPath], {
 		cwd: consumerDirectory,
 		env: {
@@ -320,7 +262,21 @@ async function verifyPackagedAdaptorConsumer(
 			CODEX_HOME: resolve(consumerDirectory, "codex-home"),
 		},
 	});
-	await verifyPackagedProviderDispatch(consumerDirectory, dirname(dirname(extensionPath)));
+}
+
+async function installPoisonPackages(packageRoot: string): Promise<void> {
+	for (const packageName of piPackages) {
+		const packageDirectory = resolve(packageRoot, "node_modules", packageName);
+		await mkdir(packageDirectory, { recursive: true });
+		await writeFile(
+			resolve(packageDirectory, "package.json"),
+			`${JSON.stringify({ name: packageName, type: "module", exports: "./index.js" })}\n`,
+		);
+		await writeFile(
+			resolve(packageDirectory, "index.js"),
+			`throw new Error(${JSON.stringify(`poison package imported: ${packageName}`)});\n`,
+		);
+	}
 }
 
 async function verifyPackagedProviderDispatch(
@@ -349,7 +305,11 @@ async function verifyPackagedProviderDispatch(
 	});
 }
 
-async function runFocusedTests(projectDirectory: string, forkCommit: string): Promise<void> {
+async function runFocusedTests(
+	projectDirectory: string,
+	forkCommit: string,
+	sdkVersion: string,
+): Promise<void> {
 	console.log(
 		"Running loader, provider-route, tool-profile, and compaction tests against the fork tarballs.",
 	);
@@ -359,35 +319,22 @@ async function runFocusedTests(projectDirectory: string, forkCommit: string): Pr
 			...process.env,
 			PI_FORK_COMMIT: forkCommit,
 			PI_FORK_PROJECT_ROOT: projectDirectory,
+			PI_FORK_SDK_VERSION: sdkVersion,
 			PI_OFFLINE: "1",
 		},
 	});
 }
 
-async function findTarball(tarballDirectory: string, packageName: string): Promise<string> {
-	const packageStem = packageName.startsWith("@")
-		? packageName.slice(1).replace("/", "-")
-		: packageName;
-	const glob = new Bun.Glob(`${packageStem}-*.tgz`);
+async function findAdaptorTarball(tarballDirectory: string): Promise<string> {
+	const glob = new Bun.Glob("pi-codex-adaptor-*.tgz");
 	const matches: string[] = [];
 	for await (const entry of glob.scan({ cwd: tarballDirectory, onlyFiles: true })) {
 		matches.push(resolve(tarballDirectory, entry));
 	}
 	if (matches.length !== 1 || matches[0] === undefined) {
-		throw new Error(`Expected one packed tarball for ${packageName}`);
+		throw new Error("Expected one packed adaptor tarball");
 	}
 	return matches[0];
-}
-
-async function commandOutput(command: string, args: readonly string[]): Promise<string> {
-	const child = Bun.spawn([command, ...args], { stderr: "pipe", stdout: "pipe" });
-	const [exitCode, stdout] = await Promise.all([
-		child.exited,
-		new Response(child.stdout).text(),
-		new Response(child.stderr).text(),
-	]);
-	if (exitCode !== 0) throw new Error(`${basename(command)} exited with status ${exitCode}`);
-	return stdout.trim();
 }
 
 async function run(
@@ -409,9 +356,9 @@ async function run(
 function printHelp(): void {
 	console.log(`Usage: bun run test:pi-fork -- --pi-dir <checkout> --pi-ref <commit> [options]
 
-Archive an exact Pi commit, build and pack the four consumed workspaces, install them into an isolated
-adaptor copy without this checkout's Bun lockfile or node_modules, install the assembled adaptor tarball
-into a separate clean consumer, then run focused compatibility tests.
+	Consume the exact Pi SDK manifest, install it into an isolated adaptor copy without this checkout's
+	Bun lockfile or node_modules, install the assembled adaptor tarball into a separate clean consumer,
+	then run focused compatibility tests.
 
 Options:
   --pi-dir <checkout>  Clean Pi Git checkout with the selected ref at HEAD

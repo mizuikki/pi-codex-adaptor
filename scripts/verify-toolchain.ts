@@ -45,13 +45,13 @@ if (fixture.schemaVersion !== 1) {
 }
 
 const expectedPackageVersions: Record<string, string> = {
-	"@biomejs/biome": `^${fixture.runtime.biome}`,
+	"@biomejs/biome": fixture.runtime.biome,
 	"@openai/codex": "0.144.3",
 	"@openai/codex-sdk": "0.144.3",
-	"@earendil-works/pi-agent-core": fixture.runtime.pi,
-	"@earendil-works/pi-ai": fixture.runtime.pi,
-	"@earendil-works/pi-coding-agent": fixture.runtime.pi,
-	"@earendil-works/pi-tui": fixture.runtime.pi,
+	"@earendil-works/pi-agent-core": "file:../pi/packages/agent",
+	"@earendil-works/pi-ai": "file:../pi/packages/ai",
+	"@earendil-works/pi-coding-agent": "file:../pi/packages/coding-agent",
+	"@earendil-works/pi-tui": "file:../pi/packages/tui",
 	"@types/node": `^${fixture.runtime.typesNode}`,
 	typebox: fixture.runtime.typebox,
 	typescript: `^${fixture.runtime.typescript}`,

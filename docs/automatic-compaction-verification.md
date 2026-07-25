@@ -6,8 +6,8 @@ provider output.
 
 ## Locked dependency graph
 
-The adaptor's `package.json` and `bun.lock` retain Pi `0.81.1` as a public development baseline. It is
-not a compatible runtime host for this feature: the paired Pi fork must expose
+The adaptor's `package.json` and `bun.lock` retain sibling Pi `0.81.1-local.1` file development
+dependencies. It is not a compatible runtime host for this feature: the paired Pi fork must expose
 `providerPayloadCompactionApiVersion === 1` to extension factories. Run from the repository:
 
 ```sh
@@ -45,33 +45,20 @@ bun test tests/integration/automatic-compaction-continuation.test.ts
 
 ## Fork-pinned host
 
-The paired Pi fork is verified in a clean consumer. The harness requires the selected immutable commit
-to be checked out at `HEAD` with no local changes, archives it, installs dependencies with lifecycle
-scripts disabled, builds the necessary `tui`, `ai`, `agent`, and `coding-agent` workspaces, and packs
-those tarballs. It then installs the assembled adaptor tarball and the packed Pi workspaces into a
-separate consumer, confirms the package can load through the transaction-bearing host, and runs loader
-plus focused request and compaction suites from an isolated adaptor copy. Pi intentionally omits
-generated model JSON from Git, so the harness copies the checkout's already-generated data without
-querying model catalogs or providers; those catalogs are outside this compatibility proof. It does not
-reuse the checkout's `node_modules` or the adaptor's `bun.lock` resolutions.
+The paired Pi fork is verified in a clean consumer through `pack-local-sdk.mjs`. Its manifest records
+the exact commit, private SDK versions, capability levels, relative tarball paths, and SHA-256 values.
+The harness validates that manifest before installation, creates `<temp>/pi` plus `<temp>/project`, and
+installs all four SDK tarballs directly in the positive consumer. It does not reuse the checkout's
+`node_modules` or the adaptor's `bun.lock` resolutions.
 
 ```sh
 PI_FORK_DIR=<clean-checkout-of-mizuikki-pi>
-PI_FORK_COMMIT=44a2567c5d3c183e7af4375b195d15df468181c3
+PI_FORK_COMMIT=<immutable-commit>
 bun run test:pi-fork -- --pi-dir "$PI_FORK_DIR" --pi-ref "$PI_FORK_COMMIT"
 ```
 
-The recorded host is [`mizuikki/pi`](https://github.com/mizuikki/pi) commit
-`44a2567c5d3c183e7af4375b195d15df468181c3` (no tag), which exposes
-`providerPayloadCompactionApiVersion === 1`. The delivery record must contain the resolved commit and
-the SHA-256 of every packed Pi workspace tarball printed by the harness:
-
-| Pi workspace tarball | SHA-256 |
-| --- | --- |
-| `@earendil-works/pi-tui@0.81.1` | `2dce48d35ae44dae1653f0e0e41b305a5583993ba121ba2880a47f891fc19008` |
-| `@earendil-works/pi-ai@0.81.1` | `d2879f7be568b612408d30a4300abbcf500e36337efb833c51ce3a269f4c887d` |
-| `@earendil-works/pi-agent-core@0.81.1` | `7f2b1d5c034ea5be316581b8bf9222097a8a570e28087b96a03591cfe0496b56` |
-| `@earendil-works/pi-coding-agent@0.81.1` | `548e78b70b3a67e0946540542861be8d0448a70a16fdf097212c2f66f8ade655` |
+The delivery record must contain the resolved commit and the manifest SHA-256 values for all four SDK
+tarballs. Tarball names are not provenance.
 
 The paired attribution contract supplies the same non-empty session id, explicit `agent`,
 `compaction_summary`, or `branch_summary` origin, and request-scoped abort signal to the provider

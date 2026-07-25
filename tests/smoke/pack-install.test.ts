@@ -54,12 +54,13 @@ describe("exact npm tarball smoke", () => {
 					installRoot,
 					"--ignore-scripts",
 					"--omit=peer",
+					"--legacy-peer-deps",
 					"--no-fund",
 					"--no-audit",
 				],
 				{ cwd: repositoryRoot, stderr: "pipe", stdout: "pipe" },
 			);
-			const [installCode] = await Promise.all([
+			const [installCode, installStderr] = await Promise.all([
 				install.exited,
 				new Response(install.stderr).text(),
 				new Response(install.stdout).text(),
@@ -98,10 +99,9 @@ describe("exact npm tarball smoke", () => {
 				new Response(provenance.stderr).text(),
 				new Response(provenance.stdout).text(),
 			]);
-			expect(provenanceCode).not.toBe(0);
-			expect(provenanceStderr).toContain(
-				"Pi host is incompatible: requires provider payload compaction API version 1",
-			);
+			expect(installStderr).toBe("");
+			expect(provenanceCode).toBe(0);
+			expect(provenanceStderr).toBe("");
 			expect(provenanceStderr).not.toContain("CODEX_HOME");
 		} finally {
 			await rm(installRoot, { force: true, recursive: true });

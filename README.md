@@ -47,8 +47,7 @@ official tool fixtures, app-server schema snapshot, source replay, SBOM, and npm
 
 ## Installation
 
-The package has not been published to npm yet. Install from a local source checkout, or use the
-planned npm source after the first release.
+The package is private and is installed only from a local source checkout.
 
 ### From source (local path)
 
@@ -78,9 +77,7 @@ Cross-target builds verify the manifest and checksum but skip executing the fore
 2. Install into Pi:
 
 ```sh
-pi install /absolute/path/to/pi-codex-adaptor
-# project-local:
-# pi install /absolute/path/to/pi-codex-adaptor -l
+pi install -l /absolute/path/to/pi-codex-adaptor
 # one-shot without writing settings:
 # pi -e /absolute/path/to/pi-codex-adaptor
 ```
@@ -96,13 +93,7 @@ enough unless it is copied into `native/bin/`.
 Remove with:
 
 ```sh
-pi remove /absolute/path/to/pi-codex-adaptor
-```
-
-### Planned npm install
-
-```sh
-pi install npm:pi-codex-adaptor
+pi remove /absolute/path/to/pi-codex-adaptor -l
 ```
 
 The product contract, security boundary, and upstream source pin are documented in
@@ -111,9 +102,13 @@ The product contract, security boundary, and upstream source pin are documented 
 Capabilities outside the first release are tracked in
 [`docs/remaining-gaps.md`](./docs/remaining-gaps.md).
 
-This development branch expects the paired [`mizuikki/pi`](https://github.com/mizuikki/pi) host at
-commit `44a2567c5d3c183e7af4375b195d15df468181c3`, with provider payload compaction API version `1`.
-The public Pi `0.81.1` package graph is a development baseline, not a compatible runtime host.
+This development branch expects the sibling `../pi` host at private SDK version
+`0.81.1-local.1`, with provider payload compaction API version `1`. The local
+development dependencies are `file:../pi/packages/...`; they are never runtime
+production dependencies. Verify a clean immutable Pi commit with
+`bun run test:pi-fork -- --pi-dir ../pi --pi-ref <commit>`. The verifier reads
+Pi's SDK manifest, checks every digest, and creates `<temp>/pi` plus
+`<temp>/project` rather than a repository-local fixture.
 
 ## Configuration and security
 
