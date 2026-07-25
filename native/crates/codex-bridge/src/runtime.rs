@@ -3806,6 +3806,17 @@ async fn contexts_summarize_inner(
     cancellation: &CancellationToken,
     remote_v2_context: Option<RemoteCompactionV2Context>,
 ) -> Result<Value, RequestFailure> {
+    // A summary over a freshly created opaque checkpoint is a continuation turn,
+    // not a second compaction operation. Repeating compaction metadata with that
+    // item causes compatible Remote V2 providers to reject stream processing.
+    let remote_v2_request_kind = if input
+        .iter()
+        .any(|item| matches!(item, ResponseItem::Compaction { .. }))
+    {
+        RemoteCompactionV2RequestKind::Turn
+    } else {
+        RemoteCompactionV2RequestKind::Compaction
+    };
     let mut request = ResponsesApiRequest {
         model: model_id,
         instructions: PORTABLE_SUMMARY_V1_INSTRUCTIONS.to_owned(),
@@ -3827,7 +3838,7 @@ async fn contexts_summarize_inner(
         client_metadata: None,
     };
     if let Some(context) = remote_v2_context.as_ref() {
-        context.apply_to_request(&mut request, RemoteCompactionV2RequestKind::Compaction)?;
+        context.apply_to_request(&mut request, remote_v2_request_kind)?;
     }
     let websocket_connect_timeout = connection.websocket_connect_timeout;
     let mut response = await_with_cancellation(
@@ -3840,7 +3851,7 @@ async fn contexts_summarize_inner(
             websocket_connect_timeout,
             RemoteCompactionV2RequestMetadata {
                 context: remote_v2_context.as_ref(),
-                kind: RemoteCompactionV2RequestKind::Compaction,
+                kind: remote_v2_request_kind,
             },
             "portable_context_summary",
         )),
@@ -4965,7 +4976,7 @@ mod tests {
 
     #[tokio::test]
     #[allow(clippy::large_futures)]
-    async fn summary_remote_v2_attribution_matches_the_compaction_prefix_policy() {
+    async fn summary_after_remote_checkpoint_uses_turn_attribution() {
         let (base_url, request, server) = spawn_capturing_fixture_http_server(
             concat!(
                 "event: response.output_item.done\n",
@@ -5015,9 +5026,8 @@ mod tests {
                 .expect("turn metadata should be a string"),
         )
         .expect("turn metadata should be JSON");
-        assert_eq!(turn["request_kind"], "compaction");
-        assert_eq!(turn["compaction"]["trigger"], "manual");
-        assert_eq!(turn["compaction"]["reason"], "user_requested");
+        assert_eq!(turn["request_kind"], "turn");
+        assert!(turn.get("compaction").is_none());
         server.await.expect("fixture server should join");
     }
 
