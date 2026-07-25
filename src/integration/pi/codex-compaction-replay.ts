@@ -499,7 +499,15 @@ function findLatestCheckpoint(
 			};
 		}
 		const retainedTail = projectRetainedTail(entry);
-		if (retainedTail === undefined) return { blocked: true };
+		if (retainedTail === undefined) {
+			// Earlier portable-only manual entries did not persist Pi's retained tail.
+			// They remain safe to replay as ordinary Pi summaries because they carry no
+			// opaque provider state. Entries that claim opaque state still fail closed.
+			if (kind.details.opaque === undefined && !hasPersistedRetainedTail(entry)) {
+				return { blocked: false };
+			}
+			return { blocked: true };
+		}
 		if (kind.details.opaque === undefined || identity === undefined) {
 			return {
 				blocked: false,
@@ -533,6 +541,10 @@ function findLatestCheckpoint(
 				};
 	}
 	return { blocked: false };
+}
+
+function hasPersistedRetainedTail(entry: SessionEntry): boolean {
+	return entry.type === "compaction" && Object.hasOwn(entry, "retainedTail");
 }
 
 function fullActivePath(

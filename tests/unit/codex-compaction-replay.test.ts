@@ -798,6 +798,29 @@ describe("active-branch Codex compaction replay", () => {
 		expect(value.runtime.responseCalls).toBe(1);
 	});
 
+	test("continues through an earlier portable v3 entry without a retained tail", async () => {
+		const summary = "Earlier portable summary";
+		const session = new SessionFixture();
+		session.appendCompaction(createPortableCompactionDetails(sha256Hex(summary)), {
+			summary,
+		});
+		session.appendUser("user-after-portable-v3", "continue after the portable v3 checkpoint");
+		session.contextTokens = 1_000;
+		const value = harness({ session });
+		value.store.setManual(
+			SESSION_ID,
+			summary,
+			createPortableCompactionDetails(sha256Hex(summary)),
+			session.entries.find((entry) => entry.type === "compaction")?.id,
+		);
+
+		const events = await value.run(false);
+
+		expect(events.at(-1)).toMatchObject({ type: "done" });
+		expect(value.runtime.compactCalls).toBe(0);
+		expect(value.runtime.responseCalls).toBe(1);
+	});
+
 	test.each([
 		{
 			name: "ordinary Pi compaction -> portable request boundary",

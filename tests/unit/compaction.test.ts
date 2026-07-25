@@ -8,6 +8,7 @@ import type {
 	CompactResponseResult,
 	CreateResponseResult,
 	ExecuteToolOptions,
+	SummarizeContextOptions,
 	SummarizeContextResult,
 } from "../../src/application/codex-runtime.ts";
 import {
@@ -48,6 +49,7 @@ class FixtureRuntime implements CodexRuntime {
 	compaction: CompactResponseOptions | undefined;
 	summaryCalls = 0;
 	compactCalls = 0;
+	readonly summaryOptions: SummarizeContextOptions[] = [];
 	summaryImpl: (() => Promise<SummarizeContextResult>) | undefined;
 	compactImpl: ((options: CompactResponseOptions) => Promise<CompactResponseResult>) | undefined;
 	bridgeCapabilities = [
@@ -70,8 +72,9 @@ class FixtureRuntime implements CodexRuntime {
 		return { status: "completed", result: {} };
 	}
 
-	async summarizeContext(): Promise<SummarizeContextResult> {
+	async summarizeContext(options: SummarizeContextOptions): Promise<SummarizeContextResult> {
 		this.summaryCalls += 1;
+		this.summaryOptions.push(options);
 		if (this.summaryImpl !== undefined) return this.summaryImpl();
 		return {
 			status: "completed",
@@ -232,6 +235,7 @@ function compactEvent(
 			firstKeptEntryId: "kept-entry",
 			messagesToSummarize,
 			turnPrefixMessages,
+			retainedTail: [],
 			isSplitTurn: false,
 			tokensBefore,
 			fileOps: { read: [], written: [] },
@@ -598,6 +602,7 @@ describe("manual Pi compaction", () => {
 				details: unknown;
 				firstKeptEntryId: string;
 				usage: { input: number; output: number; cacheRead: number; reasoning?: number };
+				retainedTail: unknown[];
 			};
 		};
 		expect(result.compaction.summary).toBe("fixture portable summary");
@@ -611,6 +616,7 @@ describe("manual Pi compaction", () => {
 			cacheRead: 3,
 			reasoning: 2,
 		});
+		expect(result.compaction.retainedTail).toEqual([]);
 		expect(handlers.has("turn_end")).toBe(false);
 		expect(runtime.summaryCalls).toBe(1);
 		expect(runtime.compactCalls).toBe(0);
@@ -724,24 +730,33 @@ describe("manual Pi compaction", () => {
 		]);
 	});
 
-	test("uses one summary request even after an opaque checkpoint", async () => {
+	test("uses one summary request after an active opaque checkpoint", async () => {
 		const runtime = new FixtureRuntime();
 		const store = new CodexCompactionStore();
 		const previousSummary = "Synthetic stored summary";
-		store.setManual(
-			"session-fixture",
-			previousSummary,
-			createPortableCompactionDetails(sha256Hex(previousSummary), {
-				identity: identity(),
-				output: [{ type: "compaction", encrypted_content: OPAQUE }],
-			}),
-			"stored-entry",
-		);
+		const activeDetails = createPortableCompactionDetails(sha256Hex(previousSummary), {
+			identity: identity(),
+			output: [{ type: "compaction", encrypted_content: OPAQUE }],
+		});
+		store.setManual("session-fixture", previousSummary, activeDetails, "stored-entry");
 		const before = structuredClone(store.getForSession("session-fixture"));
 		const registration = register(runtime, configuration(), store);
 		const notifications: Array<{ message: string; type: string | undefined }> = [];
 		const result = (await registration.handlers.get("session_before_compact")?.[0]?.(
-			compactEvent("overflow"),
+			{
+				...compactEvent("overflow"),
+				branchEntries: [
+					{
+						type: "compaction",
+						id: "stored-entry",
+						parentId: "parent-entry",
+						timestamp: new Date(0).toISOString(),
+						summary: previousSummary,
+						tokensBefore: 50_000,
+						details: activeDetails,
+					},
+				],
+			},
 			context({ notifications }),
 		)) as { compaction: { summary: string; details: unknown } };
 
@@ -754,6 +769,35 @@ describe("manual Pi compaction", () => {
 			createPortableCompactionDetails(sha256Hex("fixture portable summary")),
 		);
 		expect(notifications).toEqual([]);
+	});
+
+	test("does not reuse an opaque checkpoint after changing branches", async () => {
+		const runtime = new FixtureRuntime();
+		const store = new CodexCompactionStore();
+		const previousSummary = "Synthetic stored summary";
+		store.setManual(
+			"session-fixture",
+			previousSummary,
+			createPortableCompactionDetails(sha256Hex(previousSummary), {
+				identity: identity(),
+				output: [{ type: "compaction", encrypted_content: OPAQUE }],
+			}),
+			"other-branch-entry",
+		);
+		const registration = register(runtime, configuration(), store);
+
+		await registration.handlers.get("session_before_compact")?.[0]?.(
+			compactEvent("manual"),
+			context(),
+		);
+
+		expect(runtime.summaryCalls).toBe(1);
+		expect(runtime.compactCalls).toBe(0);
+		expect(runtime.summaryOptions[0]?.remoteCompactionV2Context).toBeUndefined();
+		expect(runtime.summaryOptions[0]?.input).not.toContainEqual({
+			type: "compaction",
+			encrypted_content: OPAQUE,
+		});
 	});
 
 	test("terminally cancels profile, capability, and identity failures", async () => {
@@ -1001,12 +1045,12 @@ describe("manual Pi compaction", () => {
 	test("rejects concurrent manual operations and clears the coordinator after failure", async () => {
 		const runtime = new FixtureRuntime();
 		let release: (() => void) | undefined;
-		runtime.compactImpl = () =>
+		runtime.summaryImpl = () =>
 			new Promise((resolve) => {
 				release = () =>
 					resolve({
 						status: "completed",
-						result: { output: [{ type: "compaction", encrypted_content: OPAQUE }] },
+						result: { summary: "fixture portable summary" },
 					});
 			});
 		const { handlers, coordinator } = register(runtime);
@@ -1031,12 +1075,12 @@ describe("manual Pi compaction", () => {
 	test("does not let early cancellation or setup failure release another execution", async () => {
 		const runtime = new FixtureRuntime();
 		let release: (() => void) | undefined;
-		runtime.compactImpl = () =>
+		runtime.summaryImpl = () =>
 			new Promise((resolve) => {
 				release = () =>
 					resolve({
 						status: "completed",
-						result: { output: [{ type: "compaction", encrypted_content: OPAQUE }] },
+						result: { summary: "fixture portable summary" },
 					});
 			});
 		let configurationLoads = 0;
@@ -1067,7 +1111,7 @@ describe("manual Pi compaction", () => {
 			cancel: true,
 		});
 		expect(coordinator.isBusy("session-fixture")).toBe(true);
-		expect(runtime.compactCalls).toBe(1);
+		expect(runtime.compactCalls).toBe(0);
 		expect(notifications).toEqual([{ message: COMPACTION_FAILURE_NOTIFICATION, type: "error" }]);
 
 		release();

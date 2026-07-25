@@ -168,11 +168,16 @@ async function compactForPi(
 		if (identity === undefined)
 			throw new Error("OpenAI Codex compaction credentials are unsupported");
 		const previousSnapshot = state.store.getForSession(sessionId);
-		const previousOutput = matchingOpaqueSnapshotOutput(
-			previousSnapshot,
-			identity,
-			previousSnapshot?.source === "manual" ? sha256Hex(previousSnapshot.summary) : undefined,
-		);
+		const previousOutput = isSnapshotOnActiveCompactionBoundary(
+			previousSnapshot?.entryId,
+			event.branchEntries,
+		)
+			? matchingOpaqueSnapshotOutput(
+					previousSnapshot,
+					identity,
+					previousSnapshot?.source === "manual" ? sha256Hex(previousSnapshot.summary) : undefined,
+				)
+			: undefined;
 		const messages = [
 			...event.preparation.messagesToSummarize,
 			...event.preparation.turnPrefixMessages,
@@ -232,6 +237,7 @@ async function compactForPi(
 					summary: summaryResult.result.summary,
 					firstKeptEntryId: event.preparation.firstKeptEntryId,
 					tokensBefore: event.preparation.tokensBefore,
+					retainedTail: event.preparation.retainedTail,
 					...(usage === undefined ? {} : { usage }),
 					details,
 				},
@@ -250,6 +256,26 @@ async function compactForPi(
 		notifyCompactionFailure(ctx);
 		return { cancel: true };
 	}
+}
+
+function isSnapshotOnActiveCompactionBoundary(
+	entryId: string | undefined,
+	branchEntries: readonly {
+		readonly id: string;
+		readonly type: string;
+		readonly customType?: string;
+	}[],
+): boolean {
+	if (entryId === undefined) return false;
+	for (let index = branchEntries.length - 1; index >= 0; index -= 1) {
+		const entry = branchEntries[index];
+		if (entry === undefined) continue;
+		if (entry.type === "compaction") return entry.id === entryId;
+		if (entry.type === "custom" && entry.customType === CODEX_AUTO_COMPACTION_KIND) {
+			return entry.id === entryId;
+		}
+	}
+	return false;
 }
 
 function notifyCompactionFailure(ctx: ExtensionContext): void {
