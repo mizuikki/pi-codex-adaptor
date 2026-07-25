@@ -30,6 +30,7 @@ async function main(): Promise<void> {
 
 	delete packageJson.devDependencies;
 	delete packageJson.files;
+	delete packageJson.overrides;
 	delete packageJson.scripts;
 
 	await writeFile(

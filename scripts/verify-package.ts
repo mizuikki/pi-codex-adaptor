@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, realpath, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { SUPPORTED_NATIVE_TARGETS } from "../src/infrastructure/codex-bridge/identity.ts";
 
@@ -17,6 +17,12 @@ interface PackResult {
 }
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const piSdkPackages = [
+	"@earendil-works/pi-agent-core",
+	"@earendil-works/pi-ai",
+	"@earendil-works/pi-coding-agent",
+	"@earendil-works/pi-tui",
+] as const;
 
 export function normalizePackagePath(path: string): string {
 	return path.startsWith("package/") ? path.slice("package/".length) : path;
@@ -49,70 +55,188 @@ async function main(): Promise<void> {
 	const nativeArtifactsDir = argument("--native-artifacts-dir");
 	const requireNative = process.argv.includes("--require-native");
 	const smokeInstall = process.argv.includes("--smoke-install");
+	const runCleanConsumerFixtures = tarball === undefined || smokeInstall;
+	const fixtureRoot = runCleanConsumerFixtures
+		? await mkdtemp(resolve(tmpdir(), "pi-codex-adaptor-pack-verify-"))
+		: undefined;
 
-	if (nativeArtifactsDir !== undefined || !tarball) {
+	try {
 		await runBunScript([
 			"scripts/assemble-package.ts",
 			...(nativeArtifactsDir === undefined ? [] : ["--native-artifacts-dir", nativeArtifactsDir]),
 		]);
-	}
 
-	const packOutput = await run(["npm", "pack", "./dist/package", "--dry-run", "--json"]);
-	const result = parsePackResult(packOutput);
-	const paths = result.files.map((file) => normalizePackagePath(file.path));
-	const unexpected = unexpectedPackagePaths(paths, PACKAGE_PATH_ALLOWLIST);
-	if (unexpected.length > 0) {
-		throw new Error(`Unexpected npm package files: ${unexpected.join(", ")}`);
-	}
-
-	for (const requiredFile of REQUIRED_PACKAGE_FILES) {
-		if (!paths.includes(requiredFile)) {
-			throw new Error(`Required npm package file is missing: ${requiredFile}`);
+		const packOutput = await run(["npm", "pack", "./dist/package", "--dry-run", "--json"]);
+		const result = parsePackResult(packOutput);
+		const paths = result.files.map((file) => normalizePackagePath(file.path));
+		const unexpected = unexpectedPackagePaths(paths, PACKAGE_PATH_ALLOWLIST);
+		if (unexpected.length > 0) {
+			throw new Error(`Unexpected npm package files: ${unexpected.join(", ")}`);
 		}
-	}
 
-	const packageJson = JSON.parse(
-		await readFile(resolve(repositoryRoot, "dist/package/package.json"), "utf8"),
-	) as {
+		for (const requiredFile of REQUIRED_PACKAGE_FILES) {
+			if (!paths.includes(requiredFile)) {
+				throw new Error(`Required npm package file is missing: ${requiredFile}`);
+			}
+		}
+
+		const packageJson = JSON.parse(
+			await readFile(resolve(repositoryRoot, "dist/package/package.json"), "utf8"),
+		) as {
+			dependencies?: Record<string, unknown>;
+			name?: unknown;
+			peerDependencies?: Record<string, unknown>;
+			version?: unknown;
+		};
+		if (packageJson.name !== "pi-codex-adaptor" || typeof packageJson.version !== "string") {
+			throw new Error("Staged package metadata is invalid");
+		}
+		for (const packageName of piSdkPackages) {
+			if (packageJson.peerDependencies?.[packageName] !== "*") {
+				throw new Error(
+					`Staged package must declare ${packageName} as a host-provided wildcard peer`,
+				);
+			}
+			if (packageJson.dependencies?.[packageName] !== undefined) {
+				throw new Error(
+					`Staged package must not include ${packageName} as a production dependency`,
+				);
+			}
+		}
+
+		const nativeFiles = paths.filter((path) => path.startsWith("native/bin/"));
+		if (requireNative && !hasCompleteNativeArtifact(nativeFiles)) {
+			throw new Error("Release package must contain native bridge artifacts");
+		}
+		let exactTarball: string;
+		if (tarball === undefined) {
+			if (fixtureRoot === undefined) throw new Error("Clean consumer fixture root is unavailable");
+			exactTarball = await packStagedTarball(resolve(fixtureRoot, "adaptor-tarball"));
+		} else {
+			exactTarball = resolve(tarball);
+		}
+		const tarballResult = await verifyTarball(exactTarball, paths);
+		const maximumUnpackedSize = requireNative ? 250 * 1024 * 1024 : 5 * 1024 * 1024;
+		const unpackedSize =
+			tarballResult.unpackedSize ?? tarballResult.files.reduce((sum, file) => sum + file.size, 0);
+		if (unpackedSize > maximumUnpackedSize) {
+			throw new Error(`Package is too large: ${unpackedSize} bytes`);
+		}
+		if (runCleanConsumerFixtures) {
+			if (fixtureRoot === undefined) throw new Error("Clean consumer fixture root is unavailable");
+			await smokeInstallManifestTarball(exactTarball, fixtureRoot);
+			await smokeInstallExactTarball(exactTarball);
+		}
+
+		console.log(
+			JSON.stringify(
+				{
+					files: result.files.length,
+					unpackedSize,
+					native: nativeFiles.length > 0,
+					smokeInstall: runCleanConsumerFixtures,
+					...(tarball === undefined ? {} : { tarball: resolve(tarball) }),
+				},
+				null,
+				2,
+			),
+		);
+	} finally {
+		if (fixtureRoot !== undefined) await rm(fixtureRoot, { force: true, recursive: true });
+	}
+}
+
+async function packStagedTarball(destination: string): Promise<string> {
+	await mkdir(destination, { recursive: true });
+	const output = await run([
+		"npm",
+		"pack",
+		"./dist/package",
+		"--json",
+		"--ignore-scripts",
+		"--pack-destination",
+		destination,
+	]);
+	const filename = parsePackResult(output).filename;
+	if (typeof filename !== "string")
+		throw new Error("npm pack returned no adaptor tarball filename");
+	return resolve(destination, filename);
+}
+
+async function smokeInstallManifestTarball(
+	tarballPath: string,
+	fixtureRoot: string,
+): Promise<void> {
+	const piDirectory = resolve(process.env.PI_FORK_DIR ?? join(repositoryRoot, "../pi"));
+	const piRef = process.env.PI_EXTENSION_SDK_REF ?? process.env.PI_FORK_REF ?? "HEAD";
+	const piFixture = resolve(fixtureRoot, "pi-fixture");
+	const consumerDirectory = resolve(fixtureRoot, "manifest-consumer");
+	const helper = resolve(piDirectory, "scripts/local-fork-fixture.mjs");
+	await run([process.execPath, helper, "prepare", "--out", piFixture, "--ref", piRef]);
+	await run([
+		process.execPath,
+		helper,
+		"create-consumer",
+		"--manifest",
+		resolve(piFixture, "pi-sdk-manifest.json"),
+		"--directory",
+		consumerDirectory,
+		"--dependency",
+		`pi-codex-adaptor=file:${tarballPath}`,
+	]);
+
+	const packageRoot = resolve(consumerDirectory, "node_modules", "pi-codex-adaptor");
+	const metadata = JSON.parse(await readFile(resolve(packageRoot, "package.json"), "utf8")) as {
 		name?: unknown;
-		version?: unknown;
+		pi?: { extensions?: unknown[] };
 	};
-	if (packageJson.name !== "pi-codex-adaptor" || typeof packageJson.version !== "string") {
-		throw new Error("Staged package metadata is invalid");
-	}
-
-	const nativeFiles = paths.filter((path) => path.startsWith("native/bin/"));
-	if (requireNative && !hasCompleteNativeArtifact(nativeFiles)) {
-		throw new Error("Release package must contain native bridge artifacts");
-	}
-	const tarballResult =
-		tarball === undefined ? undefined : await verifyTarball(resolve(tarball), paths);
-	const maximumUnpackedSize = requireNative ? 250 * 1024 * 1024 : 5 * 1024 * 1024;
-	const unpackedSize =
-		tarballResult?.unpackedSize ??
-		tarballResult?.files.reduce((sum, file) => sum + file.size, 0) ??
-		result.unpackedSize ??
-		result.files.reduce((sum, file) => sum + file.size, 0);
-	if (unpackedSize > maximumUnpackedSize) {
-		throw new Error(`Package is too large: ${unpackedSize} bytes`);
-	}
-	if (tarball !== undefined && smokeInstall) {
-		await smokeInstallExactTarball(resolve(tarball));
-	}
-
-	console.log(
-		JSON.stringify(
-			{
-				files: result.files.length,
-				unpackedSize,
-				native: nativeFiles.length > 0,
-				smokeInstall: Boolean(tarball && smokeInstall),
-				...(tarball === undefined ? {} : { tarball: resolve(tarball) }),
-			},
-			null,
-			2,
-		),
+	if (metadata.name !== "pi-codex-adaptor")
+		throw new Error("Manifest consumer installed an unexpected package");
+	const extensionPath = await resolveInstalledPackageExtension(
+		packageRoot,
+		metadata.pi?.extensions,
 	);
+	await installPoisonPackages(packageRoot);
+	const loaderProbe = resolve(consumerDirectory, "verify-private-host.mjs");
+	await writeFile(
+		loaderProbe,
+		[
+			'import { discoverAndLoadExtensions } from "@earendil-works/pi-coding-agent";',
+			"const extensionPath = process.argv[2];",
+			"const result = await discoverAndLoadExtensions([extensionPath], process.cwd(), process.env.HOME);",
+			'if (result.errors.length > 0 || result.extensions.length !== 1) throw new Error(result.errors.map((entry) => entry.error).join("; "));',
+		].join("\n"),
+	);
+	const piHome = await mkdtemp(resolve(tmpdir(), "pi-codex-adaptor-private-host-"));
+	try {
+		await run([process.execPath, loaderProbe, extensionPath], {
+			cwd: consumerDirectory,
+			env: {
+				...process.env,
+				PI_CODING_AGENT_DIR: piHome,
+				PI_OFFLINE: "1",
+				HOME: piHome,
+				CODEX_HOME: resolve(piHome, "codex-home"),
+			},
+		});
+	} finally {
+		await rm(piHome, { force: true, recursive: true });
+	}
+}
+
+async function installPoisonPackages(packageRoot: string): Promise<void> {
+	for (const packageName of piSdkPackages) {
+		const packageDirectory = resolve(packageRoot, "node_modules", packageName);
+		await mkdir(packageDirectory, { recursive: true });
+		await Bun.write(
+			resolve(packageDirectory, "package.json"),
+			`${JSON.stringify({ name: packageName, type: "module", exports: "./index.js" })}\n`,
+		);
+		await Bun.write(
+			resolve(packageDirectory, "index.js"),
+			`throw new Error(${JSON.stringify(`poison package imported: ${packageName}`)});\n`,
+		);
+	}
 }
 
 async function smokeInstallExactTarball(tarballPath: string): Promise<void> {
@@ -122,10 +246,26 @@ async function smokeInstallExactTarball(tarballPath: string): Promise<void> {
 		await run([
 			"npm",
 			"install",
+			"@earendil-works/pi-agent-core@0.81.1",
+			"@earendil-works/pi-ai@0.81.1",
+			"@earendil-works/pi-coding-agent@0.81.1",
+			"@earendil-works/pi-tui@0.81.1",
+			"typebox@1.3.6",
+			"--prefix",
+			installRoot,
+			"--ignore-scripts",
+			"--legacy-peer-deps",
+			"--no-fund",
+			"--no-audit",
+		]);
+		await run([
+			"npm",
+			"install",
 			tarballPath,
 			"--prefix",
 			installRoot,
 			"--ignore-scripts",
+			"--legacy-peer-deps",
 			"--no-fund",
 			"--no-audit",
 		]);
@@ -148,12 +288,18 @@ async function smokeInstallExactTarball(tarballPath: string): Promise<void> {
 			packageRoot,
 			metadata.pi?.extensions,
 		);
-		const loaderProbe = resolve(
-			repositoryRoot,
-			"tests/smoke/helpers/verify-packed-tool-provenance.ts",
+		const loaderProbe = resolve(installRoot, "verify-upstream-host.mjs");
+		await writeFile(
+			loaderProbe,
+			[
+				'import { discoverAndLoadExtensions } from "@earendil-works/pi-coding-agent";',
+				"const extensionPath = process.argv[2];",
+				"const result = await discoverAndLoadExtensions([extensionPath], process.cwd(), process.env.HOME);",
+				'if (result.errors.length > 0) throw new Error(result.errors.map((entry) => entry.error).join("; "));',
+			].join("\n"),
 		);
 		const child = Bun.spawn([process.execPath, loaderProbe, extensionPath], {
-			cwd: repositoryRoot,
+			cwd: installRoot,
 			env: {
 				...process.env,
 				PI_CODING_AGENT_DIR: piHome,
@@ -178,15 +324,13 @@ async function smokeInstallExactTarball(tarballPath: string): Promise<void> {
 
 export function assertIncompatiblePiHostRejected(exitCode: number, stderr: string): void {
 	if (
-		stderr.includes(
-			"Pi host is incompatible: requires provider payload compaction API version 1",
-		) &&
+		stderr.includes("Pi host is incompatible: requires extension SDK API version 1") &&
 		exitCode !== 0
 	) {
 		return;
 	}
 	throw new Error(
-		`Exact-tarball clean install did not reject the transaction-less Pi host (status ${exitCode})`,
+		`Exact-tarball clean install did not reject the incompatible Pi host (status ${exitCode})`,
 	);
 }
 
@@ -286,10 +430,21 @@ async function runBunScript(args: string[]): Promise<void> {
 	await run(["bun", ...args]);
 }
 
-async function run(command: string[]): Promise<string> {
-	const child = Bun.spawn(command, { cwd: repositoryRoot, stderr: "inherit", stdout: "pipe" });
-	const output = await new Response(child.stdout).text();
-	const exitCode = await child.exited;
+async function run(
+	command: string[],
+	options: { cwd?: string; env?: NodeJS.ProcessEnv } = {},
+): Promise<string> {
+	const child = Bun.spawn(command, {
+		cwd: options.cwd ?? repositoryRoot,
+		...(options.env === undefined ? {} : { env: options.env }),
+		stderr: "pipe",
+		stdout: "pipe",
+	});
+	const [output, exitCode] = await Promise.all([
+		new Response(child.stdout).text(),
+		child.exited,
+		new Response(child.stderr).text(),
+	]);
 	if (exitCode !== 0) throw new Error(`${command[0]} exited with status ${exitCode}`);
 	return output;
 }

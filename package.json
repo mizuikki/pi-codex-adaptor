@@ -1,6 +1,7 @@
 {
   "name": "pi-codex-adaptor",
   "version": "0.0.0",
+  "private": true,
   "description": "A Pi extension that adapts the official OpenAI Codex runtime contract.",
   "type": "module",
   "license": "Apache-2.0",
@@ -30,14 +31,16 @@
       "./src/extension.ts"
     ]
   },
-  "publishConfig": {
-    "access": "public"
-  },
   "overrides": {
-    "@types/node": "24.13.3"
+    "@types/node": "24.13.3",
+    "@earendil-works/pi-agent-core": "file:../pi/packages/agent",
+    "@earendil-works/pi-ai": "file:../pi/packages/ai",
+    "@earendil-works/pi-coding-agent": "file:../pi/packages/coding-agent",
+    "@earendil-works/pi-tui": "file:../pi/packages/tui"
   },
   "scripts": {
-    "check": "bun run lint && bun run typecheck && bun run check:architecture && bun run check:native && bun test && bun run check:toolchain && bun run check:app-server-schema && bun run check:upstream && bun run check:official-workspace && bun run check:sbom && bun run test:official && bun run pack:verify",
+    "check": "bun run check:core && bun run pack:verify",
+    "check:core": "bun run lint && bun run typecheck && bun run check:architecture && bun run check:native && bun test && bun run check:toolchain && bun run check:app-server-schema && bun run check:upstream && bun run check:official-workspace && bun run check:sbom && bun run test:official",
     "lint": "biome check .",
     "format": "biome check --write .",
     "typecheck": "tsc -p tsconfig.json --noEmit",
@@ -53,10 +56,8 @@
     "test:bridge": "bun scripts/check-native.ts",
     "build:native": "bun scripts/build-native.ts",
     "native:local": "bun scripts/prepare-local-native.ts",
-    "pack:assemble": "bun scripts/assemble-package.ts",
+    "pack:prepare-local": "bun scripts/assemble-package.ts",
     "pack:verify": "bun scripts/verify-package.ts",
-    "release:verify": "bun scripts/verify-release.ts",
-    "release": "bun scripts/publish-package.ts",
     "check:architecture": "bun scripts/check-architecture.ts",
     "test:integration": "bun test tests/integration",
     "test:smoke": "bun test tests/smoke",
@@ -70,15 +71,15 @@
     "typebox": "*"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.5.3",
-    "@earendil-works/pi-agent-core": "0.81.1",
-    "@earendil-works/pi-ai": "0.81.1",
-    "@earendil-works/pi-coding-agent": "0.81.1",
-    "@earendil-works/pi-tui": "0.81.1",
+    "@biomejs/biome": "2.5.3",
+    "@earendil-works/pi-agent-core": "file:../pi/packages/agent",
+    "@earendil-works/pi-ai": "file:../pi/packages/ai",
+    "@earendil-works/pi-coding-agent": "file:../pi/packages/coding-agent",
+    "@earendil-works/pi-tui": "file:../pi/packages/tui",
     "@openai/codex": "0.144.3",
     "@openai/codex-sdk": "0.144.3",
     "@types/bun": "1.3.14",
-    "@types/node": "^24.13.3",
+    "@types/node": "24.13.3",
     "smol-toml": "1.7.0",
     "typebox": "1.3.6",
     "typescript": "^7.0.2",

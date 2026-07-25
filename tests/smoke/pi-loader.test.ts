@@ -8,7 +8,7 @@ const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..")
 const loaderProbe = resolve(repositoryRoot, "tests/smoke/helpers/verify-packed-tool-provenance.ts");
 
 describe("Pi extension loading", () => {
-	test("reports an incompatible upstream Pi host without network or credentials", async () => {
+	test("loads against the sibling private Pi host without network or credentials", async () => {
 		const piHome = await mkdtemp(resolve(tmpdir(), "pi-codex-adaptor-smoke-"));
 
 		try {
@@ -29,12 +29,10 @@ describe("Pi extension loading", () => {
 			const [exitCode, stderr] = await Promise.all([
 				child.exited,
 				new Response(child.stderr).text(),
+				new Response(child.stdout).text(),
 			]);
-
-			expect(stderr).toContain(
-				"Pi host is incompatible: requires provider payload compaction API version 1",
-			);
-			expect(exitCode).not.toBe(0);
+			expect(exitCode).toBe(0);
+			expect(stderr).not.toContain("Pi host is incompatible");
 		} finally {
 			await rm(piHome, { force: true, recursive: true });
 		}

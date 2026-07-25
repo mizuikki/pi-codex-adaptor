@@ -1,5 +1,25 @@
 # Repository Instructions
 
+## Local Pi Fork
+
+- This private extension targets sibling `../pi`. Every direct Pi SDK import is
+  a wildcard peer and a `file:../pi/packages/...` development dependency. Pi
+  product versions do not define extension compatibility. Do not add Pi SDK
+  packages to production dependencies or import Pi source paths.
+- Install through `pi install -l <absolute-source-path>` and remove through
+  `pi remove <absolute-source-path> -l`. Do not restore registry installation or
+  npm publication automation.
+- Fork verification uses `mkdtemp` with `<temp>/pi` and `<temp>/project`. Read
+  the Pi SDK manifest, verify its SHA-256 entries, and add all four SDK tarballs
+  directly to positive consumers. Do not infer provenance from filenames.
+- Preflight `extensionSdkApiVersion` and
+  `providerPayloadCompactionApiVersion` before provider registration.
+  Validate loader aliasing with poison packages through the real Pi loader, not
+  `import.meta.resolve()`.
+- Blocking compatibility CI must use an immutable protected
+  `pi-extension-sdk-v<major>.<minor>.<patch>` tag after the stacked migration;
+  branch refs are only for the current coordination phase.
+
 ## Scope and architecture
 
 - Keep all project text, source, tests, commits, and release notes in English.
@@ -26,12 +46,8 @@
 - Use Conventional Commits for commit and pull request titles.
 - Human pull requests require exactly one of `release:major`, `release:minor`, `release:patch`, or
   `release:none`, and the label must agree with the title.
-- Use Release Please to update `package.json`, `.release-please-manifest.json`, and `CHANGELOG.md`.
-  Do not edit versions manually and do not add Changesets.
-- Release Please creates release pull requests only. It must not tag, create GitHub releases, or
-  publish npm packages.
-- Assemble and verify one tarball. Publish that exact tarball, then create its Git tag and GitHub
-  release only after npm succeeds.
+- Do not create releases, tags, GitHub releases, or npm publications for this private extension.
+- Assemble tarballs only for local manifest-driven consumer verification.
 - Pin third-party GitHub Actions by full commit SHA.
 
 ## Verification
