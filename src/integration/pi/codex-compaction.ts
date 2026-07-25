@@ -225,17 +225,22 @@ async function compactForPi(
 				...(remoteV2Context === undefined ? {} : { remoteCompactionV2Context: remoteV2Context }),
 				signal: sharedAbort.signal,
 			});
-			const compactPromise = state.runtime
-				.compact({
-					connection,
-					request: compactRequest,
-					implementation: capabilitySnapshot.compaction.implementation ?? "compact_endpoint",
-					transportMode: config.codex.transport.mode,
-					providerSupportsWebsockets: capabilitySnapshot.providerSupportsWebsockets,
-					...(remoteV2Context === undefined ? {} : { remoteCompactionV2Context: remoteV2Context }),
-					signal: sharedAbort.signal,
-				})
-				.catch(() => undefined);
+			// An opaque compact request is only meaningful when continuing an attributed
+			// Remote V2 checkpoint. Standalone Pi compaction uses one portable-summary request.
+			const compactPromise =
+				remoteV2Context === undefined
+					? Promise.resolve(undefined)
+					: state.runtime
+							.compact({
+								connection,
+								request: compactRequest,
+								implementation: capabilitySnapshot.compaction.implementation ?? "compact_endpoint",
+								transportMode: config.codex.transport.mode,
+								providerSupportsWebsockets: capabilitySnapshot.providerSupportsWebsockets,
+								remoteCompactionV2Context: remoteV2Context,
+								signal: sharedAbort.signal,
+							})
+							.catch(() => undefined);
 			let summaryResult: Awaited<ReturnType<CodexRuntime["summarizeContext"]>>;
 			try {
 				summaryResult = await summaryPromise;

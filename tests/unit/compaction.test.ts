@@ -32,7 +32,6 @@ import { ProviderActivationPolicy } from "../../src/application/provider-activat
 import type { ResolveEffectiveCapabilities } from "../../src/application/resolve-effective-capabilities.ts";
 import { createDefaultConfig } from "../../src/domain/config.ts";
 import { registerCodexCompaction } from "../../src/integration/pi/codex-compaction.ts";
-import { INTERRUPTED_TOOL_RESULT_TEXT } from "../../src/integration/pi/codex-message-normalization.ts";
 import { sha256Hex } from "../../src/integration/pi/codex-provider-request-guard.ts";
 import type {
 	CodexToolProfileCoordinator,
@@ -506,7 +505,7 @@ describe("Codex compaction contracts", () => {
 				},
 			});
 			expect(runtime.summaryCalls).toBe(1);
-			expect(runtime.compactCalls).toBe(1);
+			expect(runtime.compactCalls).toBe(0);
 			return;
 		}
 		if (expectation === "cancel") {
@@ -535,7 +534,7 @@ describe("Codex compaction contracts", () => {
 });
 
 describe("manual Pi compaction", () => {
-	test("repairs one complete preparation sequence and blocks conflicts before compact dispatch", async () => {
+	test("repairs one complete preparation sequence and blocks conflicts before summary dispatch", async () => {
 		const runtime = new FixtureRuntime();
 		const registration = register(runtime);
 		const assistant = {
@@ -565,26 +564,8 @@ describe("manual Pi compaction", () => {
 			),
 			context(),
 		);
-		expect(runtime.compactCalls).toBe(1);
-		const recoveredRequest = runtime.compaction?.request as { input: unknown[] } | undefined;
-		expect(recoveredRequest?.input).toEqual([
-			{
-				type: "function_call",
-				name: "fixture_tool",
-				arguments: "{}",
-				call_id: "compact-call",
-			},
-			{
-				type: "function_call_output",
-				call_id: "compact-call",
-				output: INTERRUPTED_TOOL_RESULT_TEXT,
-			},
-			{
-				type: "message",
-				role: "user",
-				content: [{ type: "input_text", text: "continue compaction" }],
-			},
-		]);
+		expect(runtime.summaryCalls).toBe(1);
+		expect(runtime.compactCalls).toBe(0);
 
 		const blockedRuntime = new FixtureRuntime();
 		const blocked = register(blockedRuntime);
@@ -623,7 +604,6 @@ describe("manual Pi compaction", () => {
 		expect(parseCodexCompactionDetails(result.compaction.details)).toMatchObject({
 			version: 3,
 			portable: { summarySha256: sha256Hex("fixture portable summary") },
-			opaque: { output: [{ type: "compaction", encrypted_content: OPAQUE }] },
 		});
 		expect(result.compaction.usage).toMatchObject({
 			input: 8,
@@ -633,7 +613,7 @@ describe("manual Pi compaction", () => {
 		});
 		expect(handlers.has("turn_end")).toBe(false);
 		expect(runtime.summaryCalls).toBe(1);
-		expect(runtime.compactCalls).toBe(1);
+		expect(runtime.compactCalls).toBe(0);
 		await handlers.get("session_compact")?.[0]?.(
 			{
 				type: "session_compact",
@@ -666,7 +646,7 @@ describe("manual Pi compaction", () => {
 		)) as { compaction: { details: unknown } };
 		expect(parseCodexCompactionDetails(result.compaction.details)?.version).toBe(3);
 		expect(runtime.summaryCalls).toBe(1);
-		expect(runtime.compactCalls).toBe(1);
+		expect(runtime.compactCalls).toBe(0);
 		expect(coordinator.isBusy("session-fixture")).toBe(false);
 	});
 
@@ -680,7 +660,7 @@ describe("manual Pi compaction", () => {
 		expect(threshold).toEqual({ cancel: true });
 		expect(runtime.compactCalls).toBe(0);
 		await handlers.get("session_before_compact")?.[0]?.(compactEvent("overflow"), context());
-		expect(runtime.compactCalls).toBe(1);
+		expect(runtime.compactCalls).toBe(0);
 		const controller = new AbortController();
 		controller.abort();
 		const cancelled = await handlers.get("session_before_compact")?.[0]?.(
@@ -688,15 +668,11 @@ describe("manual Pi compaction", () => {
 			context(),
 		);
 		expect(cancelled).toEqual({ cancel: true });
-		expect(runtime.compactCalls).toBe(1);
+		expect(runtime.compactCalls).toBe(0);
 	});
 
-	test("commits portable-only details when the opaque accelerator output is malformed", async () => {
+	test("uses one portable summary request when no opaque checkpoint is available", async () => {
 		const malformed = new FixtureRuntime();
-		malformed.compactImpl = async () => ({
-			status: "completed",
-			result: { output: [{ type: "message" }] },
-		});
 		const malformedRegistration = register(malformed);
 		const malformedNotifications: Array<{ message: string; type: string | undefined }> = [];
 		const malformedResult = (await malformedRegistration.handlers.get(
@@ -704,7 +680,7 @@ describe("manual Pi compaction", () => {
 		)?.[0]?.(compactEvent("manual"), context({ notifications: malformedNotifications }))) as {
 			compaction: { summary: string; details: unknown };
 		};
-		expect(malformed.compactCalls).toBe(1);
+		expect(malformed.compactCalls).toBe(0);
 		expect(malformed.summaryCalls).toBe(1);
 		expect(malformedRegistration.coordinator.isBusy("session-fixture")).toBe(false);
 		expect(malformedRegistration.store.getForSession("session-fixture")).toBeUndefined();
@@ -742,19 +718,14 @@ describe("manual Pi compaction", () => {
 			),
 		).toEqual({ cancel: true });
 		expect(summaryRuntime.summaryCalls).toBe(1);
-		expect(summaryRuntime.compactCalls).toBe(1);
+		expect(summaryRuntime.compactCalls).toBe(0);
 		expect(summaryNotifications).toEqual([
 			{ message: COMPACTION_FAILURE_NOTIFICATION, type: "error" },
 		]);
 	});
 
-	test("redacts opaque-compact failures and preserves existing compaction state until commit", async () => {
+	test("preserves existing compaction state until commit", async () => {
 		const runtime = new FixtureRuntime();
-		runtime.compactImpl = async () => {
-			throw new Error(
-				"synthetic https://private.invalid token-fixture session-fixture prompt-fixture",
-			);
-		};
 		const store = new CodexCompactionStore();
 		store.setManual(
 			"session-fixture",
@@ -771,7 +742,7 @@ describe("manual Pi compaction", () => {
 		)) as { compaction: { summary: string; details: unknown } };
 
 		expect(result.compaction.summary).toBe("fixture portable summary");
-		expect(runtime.compactCalls).toBe(1);
+		expect(runtime.compactCalls).toBe(0);
 		expect(runtime.summaryCalls).toBe(1);
 		expect(registration.coordinator.isBusy("session-fixture")).toBe(false);
 		expect(store.getForSession("session-fixture")).toEqual(before);
@@ -779,9 +750,6 @@ describe("manual Pi compaction", () => {
 			createPortableCompactionDetails(sha256Hex("fixture portable summary")),
 		);
 		expect(notifications).toEqual([]);
-		expect(JSON.stringify(notifications)).not.toContain("private.invalid");
-		expect(JSON.stringify(notifications)).not.toContain("token-fixture");
-		expect(JSON.stringify(notifications)).not.toContain("prompt-fixture");
 	});
 
 	test("terminally cancels profile, capability, and identity failures", async () => {
@@ -876,9 +844,8 @@ describe("manual Pi compaction", () => {
 		}
 	});
 
-	test("commits portable-only details when the opaque compaction returns a non-completed status", async () => {
+	test("commits portable-only details before an opaque checkpoint exists", async () => {
 		const runtime = new FixtureRuntime();
-		runtime.compactImpl = async () => ({ status: "failed" });
 		const { handlers } = register(runtime);
 		const result = (await handlers.get("session_before_compact")?.[0]?.(
 			compactEvent("manual"),
@@ -890,20 +857,8 @@ describe("manual Pi compaction", () => {
 		);
 	});
 
-	test("aggregates summary and opaque compact usage into one Pi Usage result", async () => {
+	test("reports portable summary usage without opaque acceleration", async () => {
 		const runtime = new FixtureRuntime();
-		runtime.compactImpl = async () => ({
-			status: "completed",
-			result: {
-				output: [{ type: "compaction", encrypted_content: OPAQUE }],
-				usage: {
-					inputTokens: 2,
-					outputTokens: 1,
-					cachedInputTokens: 4,
-					reasoningTokens: 3,
-				},
-			},
-		});
 		const { handlers } = register(runtime);
 		const result = (await handlers.get("session_before_compact")?.[0]?.(
 			compactEvent("manual"),
@@ -921,10 +876,10 @@ describe("manual Pi compaction", () => {
 		};
 		expect(result.compaction.usage).toMatchObject({
 			input: 8,
-			output: 6,
-			cacheRead: 7,
-			totalTokens: 21,
-			reasoning: 5,
+			output: 5,
+			cacheRead: 3,
+			totalTokens: 16,
+			reasoning: 2,
 		});
 	});
 
@@ -983,11 +938,11 @@ describe("manual Pi compaction", () => {
 
 		const controller = new AbortController();
 		const lateRuntime = new FixtureRuntime();
-		lateRuntime.compactImpl = async () => {
+		lateRuntime.summaryImpl = async () => {
 			controller.abort();
 			return {
 				status: "completed",
-				result: { output: [{ type: "compaction", encrypted_content: OPAQUE }] },
+				result: { summary: "fixture portable summary" },
 			};
 		};
 		const lateRegistration = register(lateRuntime);
