@@ -758,8 +758,11 @@ describe("Pi Codex provider adapter", () => {
 			responseId: "response-fixture",
 			responseModel: "resolved-fixture",
 			stopReason: "toolUse",
-			usage: { input: 12, cacheRead: 3, output: 4, reasoning: 1, totalTokens: 16 },
+			usage: { input: 9, cacheRead: 3, output: 4, reasoning: 1, totalTokens: 16 },
 		});
+		expect(
+			done.message.usage.input + done.message.usage.cacheRead + done.message.usage.output,
+		).toBe(done.message.usage.totalTokens);
 		const content = done.message.content;
 		expect(content[0]).toMatchObject({ type: "text", text: "hello" });
 		expect(

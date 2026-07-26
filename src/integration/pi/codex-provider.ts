@@ -866,8 +866,9 @@ function createOutput(model: Model<string>): AssistantMessage {
 function applyUsage(output: AssistantMessage, value: unknown): void {
 	const usage = record(value);
 	if (usage === undefined) return;
-	output.usage.input = integer(usage.input_tokens);
-	output.usage.cacheRead = integer(usage.cached_input_tokens);
+	const cachedInputTokens = integer(usage.cached_input_tokens);
+	output.usage.input = Math.max(0, integer(usage.input_tokens) - cachedInputTokens);
+	output.usage.cacheRead = cachedInputTokens;
 	output.usage.output = integer(usage.output_tokens);
 	output.usage.reasoning = integer(usage.reasoning_output_tokens);
 	output.usage.totalTokens = integer(usage.total_tokens);
