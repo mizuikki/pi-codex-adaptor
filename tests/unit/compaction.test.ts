@@ -31,6 +31,7 @@ import type { ConfigurationService } from "../../src/application/configuration.t
 import { ProviderActivationPolicy } from "../../src/application/provider-activation.ts";
 import type { ResolveEffectiveCapabilities } from "../../src/application/resolve-effective-capabilities.ts";
 import { createDefaultConfig } from "../../src/domain/config.ts";
+import { BridgeRemoteError } from "../../src/infrastructure/codex-bridge/client.ts";
 import { registerCodexCompaction } from "../../src/integration/pi/codex-compaction.ts";
 import { INTERRUPTED_TOOL_RESULT_TEXT } from "../../src/integration/pi/codex-message-normalization.ts";
 import { sha256Hex } from "../../src/integration/pi/codex-provider-request-guard.ts";
@@ -42,8 +43,7 @@ import type {
 type EventHandler = (event: unknown, ctx: ExtensionContext) => unknown | Promise<unknown>;
 
 const OPAQUE = "synthetic-opaque-content";
-const COMPACTION_FAILURE_NOTIFICATION =
-	"OpenAI Codex compaction failed; the session context was left unchanged.";
+const COMPACTION_FAILURE_MESSAGE = "OpenAI Codex request failed";
 
 class FixtureRuntime implements CodexRuntime {
 	compaction: CompactResponseOptions | undefined;
@@ -602,7 +602,7 @@ describe("manual Pi compaction", () => {
 			context({ notifications }),
 		);
 		expect(blockedRuntime.compactCalls).toBe(0);
-		expect(notifications).toEqual([{ message: COMPACTION_FAILURE_NOTIFICATION, type: "error" }]);
+		expect(notifications).toEqual([]);
 	});
 
 	test("returns portable-primary v3 details, usage, and never registers a turn-end scheduler", async () => {
@@ -724,12 +724,10 @@ describe("manual Pi compaction", () => {
 				compactEvent("manual"),
 				context({ authFailure: true, notifications: authNotifications }),
 			),
-		).toEqual({ cancel: true });
+		).toEqual({ cancel: true, errorMessage: COMPACTION_FAILURE_MESSAGE });
 		expect(authRuntime.compactCalls).toBe(0);
 		expect(authRegistration.coordinator.isBusy("session-fixture")).toBe(false);
-		expect(authNotifications).toEqual([
-			{ message: COMPACTION_FAILURE_NOTIFICATION, type: "error" },
-		]);
+		expect(authNotifications).toEqual([]);
 
 		const summaryRuntime = new FixtureRuntime();
 		summaryRuntime.summaryImpl = async () => ({ status: "failed" });
@@ -740,12 +738,33 @@ describe("manual Pi compaction", () => {
 				compactEvent("manual"),
 				context({ notifications: summaryNotifications }),
 			),
-		).toEqual({ cancel: true });
+		).toEqual({ cancel: true, errorMessage: COMPACTION_FAILURE_MESSAGE });
 		expect(summaryRuntime.summaryCalls).toBe(1);
 		expect(summaryRuntime.compactCalls).toBe(1);
-		expect(summaryNotifications).toEqual([
-			{ message: COMPACTION_FAILURE_NOTIFICATION, type: "error" },
-		]);
+		expect(summaryNotifications).toEqual([]);
+	});
+
+	test("forwards a trusted upstream compaction failure through the Pi failure result", async () => {
+		const runtime = new FixtureRuntime();
+		runtime.summaryImpl = async () => {
+			throw new BridgeRemoteError({
+				category: "CapabilityError",
+				code: "upstream_request_failed",
+				message: "503 Service Unavailable: upstream fixture detail",
+				retryable: true,
+			});
+		};
+		const { handlers, coordinator, store } = register(runtime);
+
+		expect(
+			await handlers.get("session_before_compact")?.[0]?.(compactEvent("manual"), context()),
+		).toEqual({
+			cancel: true,
+			errorMessage:
+				"OpenAI provider service unavailable: 503 Service Unavailable: upstream fixture detail",
+		});
+		expect(coordinator.isBusy("session-fixture")).toBe(false);
+		expect(store.getForSession("session-fixture")).toBeUndefined();
 	});
 
 	test("redacts opaque-compact failures and preserves existing compaction state until commit", async () => {
@@ -866,13 +885,14 @@ describe("manual Pi compaction", () => {
 				compactEvent("manual"),
 				ctx,
 			);
-			expect(result, failureCase.name).toEqual({ cancel: true });
+			expect(result, failureCase.name).toEqual({
+				cancel: true,
+				errorMessage: COMPACTION_FAILURE_MESSAGE,
+			});
 			expect(runtime.compactCalls, failureCase.name).toBe(failureCase.expectedCalls);
 			expect(registration.coordinator.isBusy("session-fixture"), failureCase.name).toBe(false);
 			expect(registration.store.getForSession("session-fixture"), failureCase.name).toBeUndefined();
-			expect(notifications, failureCase.name).toEqual([
-				{ message: COMPACTION_FAILURE_NOTIFICATION, type: "error" },
-			]);
+			expect(notifications, failureCase.name).toEqual([]);
 		}
 	});
 
@@ -928,7 +948,7 @@ describe("manual Pi compaction", () => {
 		});
 	});
 
-	test("keeps cancellation, inactive-provider, and notification failures non-throwing", async () => {
+	test("keeps cancellation and inactive-provider behavior non-throwing", async () => {
 		const runtime = new FixtureRuntime();
 		const registration = register(runtime);
 		const inactive = { ...model, provider: "fixture-inactive" };
@@ -945,25 +965,8 @@ describe("manual Pi compaction", () => {
 				compactEvent("manual"),
 				context({ model: undefined, notifications: noModelNotifications }),
 			),
-		).toEqual({ cancel: true });
-		expect(noModelNotifications).toEqual([
-			{ message: COMPACTION_FAILURE_NOTIFICATION, type: "error" },
-		]);
-
-		const failedNotification = new FixtureRuntime();
-		failedNotification.compactImpl = async () => {
-			throw new Error("synthetic native failure");
-		};
-		const notificationRegistration = register(failedNotification);
-		expect(
-			await notificationRegistration.handlers.get("session_before_compact")?.[0]?.(
-				compactEvent("manual"),
-				context({ notifyFailure: true }),
-			),
-		).toMatchObject({
-			compaction: { summary: "fixture portable summary" },
-		});
-		expect(notificationRegistration.coordinator.isBusy("session-fixture")).toBe(false);
+		).toEqual({ cancel: true, errorMessage: COMPACTION_FAILURE_MESSAGE });
+		expect(noModelNotifications).toEqual([]);
 	});
 
 	test("does not notify for native cancellation or a late result after abort", async () => {
@@ -1106,10 +1109,11 @@ describe("manual Pi compaction", () => {
 		).toEqual({ cancel: true });
 		expect(await handler(compactEvent("manual"), context({ notifications }))).toEqual({
 			cancel: true,
+			errorMessage: COMPACTION_FAILURE_MESSAGE,
 		});
 		expect(coordinator.isBusy("session-fixture")).toBe(true);
 		expect(runtime.compactCalls).toBe(1);
-		expect(notifications).toEqual([{ message: COMPACTION_FAILURE_NOTIFICATION, type: "error" }]);
+		expect(notifications).toEqual([]);
 
 		release();
 		await first;

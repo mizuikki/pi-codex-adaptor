@@ -67,6 +67,7 @@ export function createFakePi(options: {
 	const api = {
 		extensionSdkApiVersion: 1,
 		providerPayloadCompactionApiVersion: 1,
+		compactionFailureResultApiVersion: 1,
 		registerTool: (tool: ToolDefinition) => {
 			tools.set(tool.name, tool);
 		},

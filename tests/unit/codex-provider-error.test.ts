@@ -33,14 +33,10 @@ function classifierInput(
 }
 
 describe("toPiProviderErrorMessage", () => {
-	test("maps retryable BridgeRemoteError to the fixed Pi-compatible text", () => {
-		const secretSource = "upstream body contains fixture-secret-token";
-		const message = toPiProviderErrorMessage(
-			bridgeError({ message: secretSource, retryable: true }),
-		);
-		expect(message).toBe(RETRYABLE_TEXT);
-		expect(message).not.toContain("fixture-secret-token");
-		expect(message).not.toContain(secretSource);
+	test("preserves retryable BridgeRemoteError detail after the Pi-compatible prefix", () => {
+		const detail = "upstream fixture detail";
+		const message = toPiProviderErrorMessage(bridgeError({ message: detail, retryable: true }));
+		expect(message).toBe(`${RETRYABLE_TEXT}: ${detail}`);
 		expect(isRetryableAssistantError(classifierInput("error", message))).toBe(true);
 	});
 

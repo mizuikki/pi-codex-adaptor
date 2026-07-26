@@ -79,17 +79,18 @@ atomic patch commit checks remain mandatory. Preauthorization for an unsupported
 - The request guard is extension-instance local. The process router stores only weak session leases;
   it does not retain credentials, opaque windows, payload approvals, or compaction state. A replaced,
   stale, ambiguous, or mismatched route cannot reach compact, append, fallback, or Responses dispatch.
-- Activated Codex compaction failure returns terminal cancellation before Pi can invoke its
-  session-unattributed default summarizer. Recovery never relaxes strict session routing or selects a
-  lease by process order, liveness, model, or request shape. The only failure notification is fixed
-  text; it contains no dynamic exception, provider, credential, URL, session, prompt, path, response,
-  header, or opaque-output data. A missing or failed UI notification does not permit fallback.
+- Activated Codex compaction failure returns a feature-specific Pi terminal failure result before Pi
+  can invoke its session-unattributed default summarizer. Recovery never relaxes strict session routing or
+  selects a lease by process order, liveness, model, or request shape. Pi renders one bounded trusted
+  upstream diagnostic through `compaction_end`; cancellation and local arbitrary errors retain their
+  controlled wording. The detail is not copied into logs, diagnostics, request fixtures, headers,
+  credentials, prompts, paths, or opaque-output data.
 - Responses transport is implemented only by pinned official native modules. TypeScript does not add
-  a second retry, SSE, or WebSocket implementation. When a provider stream fails, the Pi integration
-  maps only a strict, protocol-decoded `BridgeRemoteError.retryable` classification into Pi's existing
-  safe assistant-error text. That mapping is a redacted compatibility surface; it does not schedule a
-  retry, reconnect the bridge, or issue a second provider request. Pi retains host-owned retry
-  scheduling, backoff, cancellation, and UI for normal agent turns.
+  a second retry, SSE, or WebSocket implementation. Native code bounds the eligible provider status,
+  body, or message before the bridge serializes it; the Pi integration forwards only strict,
+  protocol-decoded `BridgeRemoteError` detail. That mapping does not schedule a retry, reconnect the
+  bridge, or issue a second provider request. Pi retains host-owned retry scheduling, backoff,
+  cancellation, UI, and normal failed-assistant persistence behavior.
 - The complete provider contract is declared explicitly for every `tools.resolve` call. Missing
   required contract fields fail with `provider_contract_incomplete`, while provider endpoints that
   respond as unsupported fail with `provider_contract_mismatch`. Errors name only the missing

@@ -87,13 +87,14 @@ cancellation, and coordinator contention remain non-error cancellation paths; in
 remain Pi-owned.
 
 Provider failure ownership is split across three layers. Native bridge code classifies transport and
-provider failures and exposes a bounded, redacted `retryable` bit on protocol v5 `BridgeError`.
-`src/integration/pi` maps only a trusted `BridgeRemoteError.retryable` fact into Pi's string-only
-assistant error surface using a fixed non-sensitive marker; it does not retry, reconnect, or issue a
-second `createResponse` call. For normal agent turns, Pi alone decides whether to remove the failed
-assistant message and restart the turn under its existing retry settings. Auxiliary compaction-summary
-and branch-summary requests may use the same stream mapping, but their host-owned workflows handle
-failure without entering the AgentSession agent-turn retry loop.
+provider failures and emits one bounded provider diagnostic on protocol v5 `BridgeError`; it keeps
+the existing category, code, and retryability. `src/integration/pi` forwards only a trusted decoded
+`BridgeRemoteError` message to Pi's string-only assistant or compaction-error paths, retaining Pi's
+stable retryable prefix without retrying, reconnecting, or issuing a second `createResponse` call.
+For normal agent turns, Pi alone decides whether to remove the failed assistant message and restart
+the turn under its existing retry settings. Pi's feature-specific compaction-failure-result API v1
+converts an extension compaction failure into one `compaction_end` error before
+cancellation/default-compactor handling.
 
 When `remote_v2` is selected, the host sends the same Pi session id with each eligible compact,
 portable-summary, and later Responses request from that session. Compaction also declares its `auto`
@@ -144,6 +145,7 @@ artifacts.
 
 ## Privacy redaction
 
-`src/domain/redaction.ts` owns the reusable redaction policy for logs and safe error surfaces. It
-replaces tokens, authorization headers, user content fields, absolute user paths, and opaque
-compaction payloads with fixed placeholders and never re-emits the original values.
+`src/domain/redaction.ts` owns the reusable redaction policy for logs and diagnostics. It replaces
+tokens, authorization headers, user content fields, absolute user paths, and opaque compaction
+payloads with fixed placeholders. Bounded provider diagnostics are deliberately visible only in Pi's
+live assistant and compaction error surfaces and are not copied into diagnostics.

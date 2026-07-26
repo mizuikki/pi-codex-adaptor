@@ -116,6 +116,7 @@ async function packLocalSdk(options: ForkOptions, tempRoot: string): Promise<Pac
 		capabilities?: {
 			extensionSdkApiVersion?: unknown;
 			providerPayloadCompactionApiVersion?: unknown;
+			compactionFailureResultApiVersion?: unknown;
 		};
 		packages?: { name?: unknown; path?: unknown; sha256?: unknown; version?: unknown }[];
 	};
@@ -124,6 +125,7 @@ async function packLocalSdk(options: ForkOptions, tempRoot: string): Promise<Pac
 		typeof manifest.sdkVersion !== "string" ||
 		manifest.capabilities?.extensionSdkApiVersion !== 1 ||
 		manifest.capabilities?.providerPayloadCompactionApiVersion !== 1 ||
+		manifest.capabilities?.compactionFailureResultApiVersion !== 1 ||
 		manifest.packages?.length !== piPackages.length
 	) {
 		throw new Error("Pi SDK manifest has an invalid commit, capability level, or package count");

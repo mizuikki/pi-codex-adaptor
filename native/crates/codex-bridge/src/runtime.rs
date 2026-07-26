@@ -4754,6 +4754,58 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn responses_and_portable_summary_preserve_bounded_upstream_error_detail() {
+        for operation in ["responses", "portable-summary"] {
+            let (base_url, server) = spawn_error_fixture_http_server(
+                "400 Bad Request",
+                "upstream fixture detail".to_owned(),
+            )
+            .await;
+            let error = match operation {
+                "responses" => {
+                    let (output, _messages) = mpsc::channel(1);
+                    let flow = FlowController::new("request-upstream-error".to_owned(), output);
+                    responses_create(
+                        json!({
+                            "request": fixture_response_request(),
+                            "transportMode": "sse",
+                            "providerSupportsWebsockets": false,
+                            "connection": fixture_connection(base_url),
+                        }),
+                        &flow,
+                        &CancellationToken::new(),
+                    )
+                    .await
+                    .expect_err("Responses fixture request should fail")
+                }
+                "portable-summary" => contexts_summarize(
+                    json!({
+                        "modelId": "fixture-model",
+                        "input": [{
+                            "type": "message",
+                            "role": "user",
+                            "content": [{ "type": "input_text", "text": "x" }]
+                        }],
+                        "transportMode": "sse",
+                        "providerSupportsWebsockets": false,
+                        "connection": fixture_connection(base_url),
+                    }),
+                    &CancellationToken::new(),
+                )
+                .await
+                .expect_err("portable-summary fixture request should fail"),
+                _ => unreachable!(),
+            };
+            assert!(matches!(
+                error,
+                RequestFailure::Bridge(error)
+                    if error.message == "400 Bad Request: upstream fixture detail"
+            ));
+            server.await.expect("fixture server should join");
+        }
+    }
+
+    #[tokio::test]
     async fn falls_back_from_official_websocket_connect_to_sse() {
         let (base_url, _websocket_request, server) = spawn_websocket_fallback_server().await;
         let connection = api::connect(&fixture_connection(base_url))
@@ -9117,6 +9169,45 @@ mod tests {
             assert!(request.starts_with("POST /v1/") || request.starts_with("GET /v1/"));
             let response = format!(
                 "HTTP/1.1 200 OK\r\ncontent-type: {content_type}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream
+                .write_all(response.as_bytes())
+                .await
+                .expect("fixture response should be writable");
+            stream
+                .shutdown()
+                .await
+                .expect("fixture response should close");
+        });
+        (format!("http://{address}/v1"), server)
+    }
+
+    async fn spawn_error_fixture_http_server(
+        status: &str,
+        body: String,
+    ) -> (String, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("fixture listener should bind");
+        let address = listener
+            .local_addr()
+            .expect("fixture listener should have an address");
+        let status = status.to_owned();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener
+                .accept()
+                .await
+                .expect("fixture request should connect");
+            let mut request = vec![0_u8; 16 * 1024];
+            let length = stream
+                .read(&mut request)
+                .await
+                .expect("fixture request should be readable");
+            let request = String::from_utf8_lossy(&request[..length]);
+            assert!(request.starts_with("POST /v1/"));
+            let response = format!(
+                "HTTP/1.1 {status}\r\ncontent-type: text/plain\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
                 body.len()
             );
             stream

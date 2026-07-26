@@ -172,6 +172,18 @@ client-side decryption. Both Responses API registrations use process-stable func
 Pi's session identifier to exactly one session-local activation, profile, compaction, capability,
 fallback, and runtime owner. Nested adaptor loads cannot replace another session's dispatcher;
 missing or ambiguous attribution fails locally without a provider call.
+
+## Provider error visibility
+
+For eligible official upstream failures, the native bridge exposes one bounded status/body/message
+diagnostic to Pi while retaining the existing error category, code, and retryability. Pi displays
+that trusted detail through its normal assistant-error and compaction-error paths. Retryable normal
+failures retain Pi's stable service-unavailable prefix, and Pi alone owns retry scheduling. Provider
+contract mismatch, cancellation, arbitrary local exceptions, logs, diagnostics, credentials,
+headers, request data, and opaque compaction data remain excluded from this diagnostic channel.
+
+Normal failed assistant messages may persist their displayed provider error in Pi session history;
+compaction failures are transient `compaction_end` events and create no compaction entry.
 `/codex` exposes settings, manual compaction, and a confirmed, redacted diagnostics export. Remaining
 release gates, including Trusted Publishing and a published prerelease, are not complete. The planned
 first prerelease version is `0.1.0-rc.0`.

@@ -1506,11 +1506,11 @@ describe("Pi Codex provider adapter", () => {
 
 	test("maps retryable BridgeRemoteError to a Pi-compatible assistant error without retrying", async () => {
 		const runtime = new FixtureRuntime();
-		const secretSource = "upstream body contains fixture-secret-token";
+		const detail = "upstream fixture detail";
 		runtime.throwOnCreate = new BridgeRemoteError({
 			category: "NativeToolError",
 			code: "openai_request_failed",
-			message: secretSource,
+			message: detail,
 			retryable: true,
 		});
 		const streamSimple = createFixtureStream(
@@ -1530,9 +1530,7 @@ describe("Pi Codex provider adapter", () => {
 		const error = events.at(-1);
 		expect(error).toMatchObject({ type: "error", reason: "error" });
 		if (error?.type !== "error") throw new Error("expected error event");
-		expect(error.error.errorMessage).toBe("OpenAI provider service unavailable");
-		expect(JSON.stringify(error)).not.toContain("fixture-secret-token");
-		expect(JSON.stringify(error)).not.toContain(secretSource);
+		expect(error.error.errorMessage).toBe(`OpenAI provider service unavailable: ${detail}`);
 		expect(runtime.calls).toBe(1);
 		expect(
 			isRetryableAssistantError({

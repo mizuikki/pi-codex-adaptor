@@ -200,6 +200,7 @@ const BridgeError = Type.Object(
 			Type.Literal("NativeToolError"),
 		]),
 		code: Type.String({ minLength: 1, maxLength: 256 }),
+		// Native code emits a bounded provider diagnostic (at most 4,096 characters), not a debug dump.
 		message: Type.String({ maxLength: 4_096 }),
 		retryable: Type.Boolean(),
 	},

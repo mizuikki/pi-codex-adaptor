@@ -32,6 +32,7 @@ import {
 	registerCodexCompactionReplay,
 } from "./codex-compaction-replay.ts";
 import { responseItemsFromMessages } from "./codex-provider.ts";
+import { toPiProviderErrorMessage } from "./codex-provider-error.ts";
 import { type CodexProviderRequestGuard, sha256Hex } from "./codex-provider-request-guard.ts";
 import {
 	type CodexToolProfileCoordinator,
@@ -44,8 +45,10 @@ import {
 	onProviderPayloadSessionCompact,
 } from "./provider-payload-compaction-api.ts";
 
-const CODEX_COMPACTION_FAILED =
-	"OpenAI Codex compaction failed; the session context was left unchanged.";
+type SessionBeforeCompactResult =
+	| { cancel: true; errorMessage: string; compaction?: never }
+	| { cancel: true; errorMessage?: never; compaction?: never }
+	| { cancel?: false; errorMessage?: never; compaction?: CompactionResult };
 
 export function registerCodexCompaction(
 	pi: ExtensionAPI,
@@ -113,13 +116,12 @@ async function compactForPi(
 		capabilities: ResolveEffectiveCapabilities;
 		profile: CodexToolProfileCoordinator;
 	},
-): Promise<{ cancel?: boolean; compaction?: CompactionResult } | undefined> {
+): Promise<SessionBeforeCompactResult | undefined> {
 	const sessionId = ctx.sessionManager.getSessionId();
 	const model = ctx.model;
 	if (model === undefined) {
 		state.coordinator.endPending(sessionId, "error");
-		notifyCompactionFailure(ctx);
-		return { cancel: true };
+		return { cancel: true, errorMessage: "OpenAI Codex request failed" };
 	}
 	if (!state.activation.isActive(model)) return undefined;
 	if (event.signal.aborted) {
@@ -285,7 +287,7 @@ async function compactForPi(
 		} finally {
 			releaseAbort();
 		}
-	} catch {
+	} catch (error) {
 		if (event.signal.aborted) {
 			if (ownsExecution) state.coordinator.end(sessionId, "cancel");
 			else state.coordinator.endPending(sessionId, "cancel");
@@ -293,16 +295,7 @@ async function compactForPi(
 		}
 		if (ownsExecution) state.coordinator.end(sessionId, "error");
 		else state.coordinator.endPending(sessionId, "error");
-		notifyCompactionFailure(ctx);
-		return { cancel: true };
-	}
-}
-
-function notifyCompactionFailure(ctx: ExtensionContext): void {
-	try {
-		ctx.ui.notify(CODEX_COMPACTION_FAILED, "error");
-	} catch {
-		// UI availability is not part of compaction correctness.
+		return { cancel: true, errorMessage: toPiProviderErrorMessage(error) };
 	}
 }
 
