@@ -3862,17 +3862,19 @@ async fn contexts_summarize_inner(
             api::map_provider_contract_error(&error, "portable_context_summary")
         })?;
         match event {
-            codex_api::ResponseEvent::OutputItemDone(item) => match extract_portable_summary(&item)
-            {
-                Ok(text) => {
-                    if summary.replace(text).is_some() {
+            codex_api::ResponseEvent::OutputItemDone(ResponseItem::Reasoning { .. }) => {}
+            codex_api::ResponseEvent::OutputItemDone(item) => {
+                match extract_portable_summary(&item) {
+                    Ok(text) => {
+                        if summary.replace(text).is_some() {
+                            saw_invalid_output = true;
+                        }
+                    }
+                    Err(_) => {
                         saw_invalid_output = true;
                     }
                 }
-                Err(_) => {
-                    saw_invalid_output = true;
-                }
-            },
+            }
             codex_api::ResponseEvent::Completed {
                 token_usage: usage, ..
             } => {
@@ -4961,9 +4963,11 @@ mod tests {
 
     #[tokio::test]
     #[allow(clippy::large_futures)]
-    async fn returns_a_bounded_plaintext_portable_summary_without_tools_or_remote_v2_claims() {
+    async fn accepts_reasoning_before_a_bounded_plaintext_portable_summary() {
         let (base_url, request, server) = spawn_capturing_fixture_http_server(
             concat!(
+                "event: response.output_item.done\n",
+                "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"reasoning\",\"id\":\"reasoning-item\",\"summary\":[]}}\n\n",
                 "event: response.output_item.done\n",
                 "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"portable fixture summary\"}]}}\n\n",
                 "event: response.completed\n",
