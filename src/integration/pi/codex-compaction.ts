@@ -280,6 +280,7 @@ async function compactForPi(
 					summary: summaryResult.result.summary,
 					firstKeptEntryId: event.preparation.firstKeptEntryId,
 					tokensBefore: event.preparation.tokensBefore,
+					retainedTail: structuredClone(event.preparation.retainedTail),
 					...(usage === undefined ? {} : { usage }),
 					details,
 				},

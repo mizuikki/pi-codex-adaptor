@@ -226,6 +226,7 @@ function compactEvent(
 	signal: AbortSignal = new AbortController().signal,
 	messagesToSummarize: unknown[] = [{ role: "user", content: "compact this", timestamp: 1 }],
 	turnPrefixMessages: unknown[] = [],
+	retainedTail: unknown[] = [],
 ): Record<string, unknown> {
 	return {
 		type: "session_before_compact",
@@ -233,6 +234,7 @@ function compactEvent(
 			firstKeptEntryId: "kept-entry",
 			messagesToSummarize,
 			turnPrefixMessages,
+			retainedTail,
 			isSplitTurn: false,
 			tokensBefore,
 			fileOps: { read: [], written: [] },
@@ -608,18 +610,29 @@ describe("manual Pi compaction", () => {
 	test("returns portable-primary v3 details, usage, and never registers a turn-end scheduler", async () => {
 		const runtime = new FixtureRuntime();
 		const { handlers, store } = register(runtime);
+		const retainedTail = [{ role: "user", content: "retained fixture", timestamp: 2 }];
 		const result = (await handlers.get("session_before_compact")?.[0]?.(
-			compactEvent("manual"),
+			compactEvent(
+				"manual",
+				50_000,
+				new AbortController().signal,
+				[{ role: "user", content: "compact this", timestamp: 1 }],
+				[],
+				retainedTail,
+			),
 			context(),
 		)) as {
 			compaction: {
 				summary: string;
 				details: unknown;
 				firstKeptEntryId: string;
+				retainedTail: unknown[];
 				usage: { input: number; output: number; cacheRead: number; reasoning?: number };
 			};
 		};
 		expect(result.compaction.summary).toBe("fixture portable summary");
+		expect(result.compaction.retainedTail).toEqual(retainedTail);
+		expect(result.compaction.retainedTail).not.toBe(retainedTail);
 		expect(parseCodexCompactionDetails(result.compaction.details)).toMatchObject({
 			version: 3,
 			portable: { summarySha256: sha256Hex("fixture portable summary") },
