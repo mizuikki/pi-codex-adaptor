@@ -34,8 +34,10 @@ and turn request metadata without importing the complete official session implem
 
 The `0.81.1` Pi package graph recorded in `package.json` and `bun.lock` is a public development
 baseline only. It is not a compatible runtime host for portable compaction. The paired Pi fork must
-advertise `ExtensionAPI.providerPayloadCompactionApiVersion === 1`; the adaptor fails closed when that
-marker is absent. The recorded host is [`mizuikki/pi`](https://github.com/mizuikki/pi) commit
+advertise `ExtensionAPI.extensionSdkApiVersion === 1`,
+`ExtensionAPI.providerPayloadCompactionApiVersion === 1`, and
+`ExtensionAPI.compactionFailureResultApiVersion === 1`; the adaptor fails closed when any marker is
+absent. The recorded host is [`mizuikki/pi`](https://github.com/mizuikki/pi) commit
 `44a2567c5d3c183e7af4375b195d15df468181c3`, with no tag and
 `providerPayloadCompactionApiVersion === 1`; its immutable identity is also recorded in
 `docs/compatibility.md`. `bun run test:pi-fork` archives that clean checked-out commit, packs the four

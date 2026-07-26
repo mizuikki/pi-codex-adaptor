@@ -10,6 +10,8 @@ use bridge_protocol::ProviderConnection;
 const MAX_FINITE_TIMEOUT_MS: u64 = 86_400_000;
 /// Pi maps disabled HTTP idle timeout (`0`) to this signed 32-bit max int sentinel.
 const PI_DISABLED_IDLE_TIMEOUT_MS: u64 = 2_147_483_647;
+/// Leave room for JSONL protocol framing and a status prefix within the 4,096-character bridge field.
+const MAX_UPSTREAM_ERROR_DETAIL_CHARS: usize = 4_000;
 use codex_api::ApiError;
 use codex_api::AuthProvider;
 use codex_api::Provider;
@@ -380,7 +382,7 @@ pub fn map_response_event(event: ResponseEvent) -> Option<MappedResponseEvent> {
 }
 
 pub fn map_api_error(error: &ApiError) -> BridgeError {
-    let (category, code, message, retryable) = match error {
+    let (category, code, retryable) = match error {
         ApiError::Transport(TransportError::Http { status, .. })
             if *status == http::StatusCode::UNAUTHORIZED
                 || *status == http::StatusCode::FORBIDDEN =>
@@ -388,59 +390,96 @@ pub fn map_api_error(error: &ApiError) -> BridgeError {
             (
                 ErrorCategory::AuthenticationError,
                 "upstream_authentication_failed",
-                "OpenAI rejected the bridge authentication",
                 false,
             )
         }
         ApiError::ContextWindowExceeded => (
             ErrorCategory::CapabilityError,
             "context_window_exceeded",
-            "the request exceeded the model context window",
             false,
         ),
         ApiError::QuotaExceeded | ApiError::UsageNotIncluded => (
             ErrorCategory::AuthenticationError,
             "upstream_access_unavailable",
-            "OpenAI access is unavailable for this request",
             false,
         ),
         ApiError::InvalidRequest { .. } => (
             ErrorCategory::ProtocolError,
             "upstream_invalid_request",
-            "OpenAI rejected the request",
             false,
         ),
         ApiError::CyberPolicy { .. } => (
             ErrorCategory::CapabilityError,
             "upstream_policy_rejected",
-            "OpenAI policy rejected the request",
             false,
         ),
-        ApiError::ServerOverloaded => (
-            ErrorCategory::CapabilityError,
-            "upstream_overloaded",
-            "OpenAI is temporarily overloaded",
-            true,
-        ),
+        ApiError::ServerOverloaded => (ErrorCategory::CapabilityError, "upstream_overloaded", true),
         ApiError::Retryable { .. } | ApiError::RateLimit(_) => (
             ErrorCategory::CapabilityError,
             "upstream_temporarily_unavailable",
-            "OpenAI is temporarily unavailable",
             true,
         ),
         ApiError::Transport(_) | ApiError::Api { .. } | ApiError::Stream(_) => (
             ErrorCategory::CapabilityError,
             "upstream_request_failed",
-            "the OpenAI request failed",
             true,
         ),
     };
     BridgeError {
         category,
         code: code.to_owned(),
-        message: message.to_owned(),
+        message: format_upstream_api_error(error),
         retryable,
     }
+}
+
+/// Extract only the official error variant's user-facing message or response body.
+/// This intentionally never formats the whole transport error, which could include URLs or headers.
+fn format_upstream_api_error(error: &ApiError) -> String {
+    let detail = match error {
+        ApiError::Transport(TransportError::Http { status, body, .. }) => match body {
+            Some(body) if !body.trim().is_empty() => format!("{status}: {}", body.trim()),
+            _ => format!("HTTP {status}"),
+        },
+        ApiError::Transport(TransportError::RetryLimit) => "retry limit reached".to_owned(),
+        ApiError::Transport(TransportError::Timeout) => "request timed out".to_owned(),
+        ApiError::Transport(TransportError::Network(message) | TransportError::Build(message))
+        | ApiError::Stream(message)
+        | ApiError::Retryable { message, .. }
+        | ApiError::RateLimit(message)
+        | ApiError::InvalidRequest { message }
+        | ApiError::CyberPolicy { message } => message.clone(),
+        ApiError::Api { status, message } => format!("{status}: {message}"),
+        ApiError::ContextWindowExceeded => {
+            "the request exceeded the model context window".to_owned()
+        }
+        ApiError::QuotaExceeded | ApiError::UsageNotIncluded => {
+            "OpenAI access is unavailable for this request".to_owned()
+        }
+        ApiError::ServerOverloaded => "OpenAI is temporarily overloaded".to_owned(),
+    };
+    truncate_upstream_error_detail(&detail)
+}
+
+fn truncate_upstream_error_detail(detail: &str) -> String {
+    let utf16_count = detail.encode_utf16().count();
+    if utf16_count <= MAX_UPSTREAM_ERROR_DETAIL_CHARS {
+        return detail.to_owned();
+    }
+    let mut prefix = String::new();
+    let mut prefix_utf16_count = 0;
+    for character in detail.chars() {
+        let character_utf16_count = character.len_utf16();
+        if prefix_utf16_count + character_utf16_count > MAX_UPSTREAM_ERROR_DETAIL_CHARS {
+            break;
+        }
+        prefix.push(character);
+        prefix_utf16_count += character_utf16_count;
+    }
+    format!(
+        "{prefix}... [truncated {} chars]",
+        utf16_count - prefix_utf16_count
+    )
 }
 
 /// Maps an endpoint-level unsupported response to the activated provider contract member.
@@ -491,12 +530,62 @@ mod tests {
     }
 
     #[test]
-    fn upstream_error_messages_never_cross_the_bridge() {
+    fn upstream_error_messages_are_bounded_and_cross_the_bridge() {
         let error = map_api_error(&ApiError::InvalidRequest {
-            message: "private upstream detail".to_owned(),
+            message: "upstream fixture detail".to_owned(),
         });
         assert_eq!(error.code, "upstream_invalid_request");
-        assert!(!error.message.contains("private upstream detail"));
+        assert_eq!(error.message, "upstream fixture detail");
+    }
+
+    #[test]
+    fn upstream_http_errors_include_status_and_body_without_transport_metadata() {
+        let error = map_api_error(&ApiError::Transport(TransportError::Http {
+            status: http::StatusCode::BAD_REQUEST,
+            url: Some("https://private.invalid/endpoint".to_owned()),
+            headers: None,
+            body: Some("upstream fixture detail".to_owned()),
+        }));
+        assert_eq!(error.message, "400 Bad Request: upstream fixture detail");
+        assert!(!error.message.contains("private.invalid"));
+    }
+
+    #[test]
+    fn upstream_retryable_http_errors_keep_classification_and_detail() {
+        let cases = [
+            (
+                http::StatusCode::TOO_MANY_REQUESTS,
+                "rate limit fixture detail",
+            ),
+            (
+                http::StatusCode::SERVICE_UNAVAILABLE,
+                "service fixture detail",
+            ),
+        ];
+        for (status, body) in cases {
+            let error = map_api_error(&ApiError::Transport(TransportError::Http {
+                status,
+                url: None,
+                headers: None,
+                body: Some(body.to_owned()),
+            }));
+            assert_eq!(error.category, ErrorCategory::CapabilityError);
+            assert_eq!(error.code, "upstream_request_failed");
+            assert!(error.retryable);
+            assert_eq!(error.message, format!("{status}: {body}"));
+        }
+    }
+
+    #[test]
+    fn upstream_error_detail_is_truncated_before_bridge_serialization() {
+        let source = "😀".repeat(MAX_UPSTREAM_ERROR_DETAIL_CHARS / 2 + 6);
+        let error = map_api_error(&ApiError::InvalidRequest { message: source });
+        assert_eq!(
+            error.message.encode_utf16().count(),
+            MAX_UPSTREAM_ERROR_DETAIL_CHARS + 24
+        );
+        assert!(error.message.ends_with("... [truncated 12 chars]"));
+        assert!(error.message.encode_utf16().count() <= 4_096);
     }
 
     #[test]

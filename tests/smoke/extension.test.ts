@@ -47,6 +47,16 @@ describe("extension entry point", () => {
 		);
 	});
 
+	test("fails closed when the Pi compaction failure result capability is absent", async () => {
+		await expect(
+			piCodexAdaptor({
+				extensionSdkApiVersion: 1,
+				providerPayloadCompactionApiVersion: 1,
+				registerCommand: () => {},
+			} as never),
+		).rejects.toThrow("Pi host is incompatible: requires compaction failure result API version 1");
+	});
+
 	test("fails closed when the extension SDK capability is absent", async () => {
 		let registrations = 0;
 		await expect(
@@ -73,6 +83,7 @@ function registrationFixture(): {
 		api: {
 			extensionSdkApiVersion: 1,
 			providerPayloadCompactionApiVersion: 1,
+			compactionFailureResultApiVersion: 1,
 			registerCommand: (name: string) => commands.push(name),
 			registerProvider: (name: string, config: ProviderConfig) => {
 				providers.push({ name, config });

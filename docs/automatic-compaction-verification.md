@@ -8,8 +8,9 @@ provider output.
 
 The adaptor's `package.json` and `bun.lock` retain sibling Pi file development dependencies and
 wildcard runtime peers. An upstream public Pi host is not a compatible runtime host for this feature:
-the paired Pi fork must expose `extensionSdkApiVersion === 1` and
-`providerPayloadCompactionApiVersion === 1` to extension factories. Run from the repository:
+the paired Pi fork must expose `extensionSdkApiVersion === 1`,
+`providerPayloadCompactionApiVersion === 1`, and `compactionFailureResultApiVersion === 1` to
+extension factories. Run from the repository:
 
 ```sh
 bun test tests/integration/automatic-compaction-continuation.test.ts
@@ -33,8 +34,8 @@ installs a sentinel fallback stream. A characterization first proves that Pi inv
 persists a textual compaction after a legacy handler exception is swallowed. The fixed-path
 assertions require zero fallback calls, no new Pi
 `CompactionEntry`, an unchanged branch and leaf, no adaptor store snapshot, an idle coordinator, no
-route-unavailable error, one fixed interactive notification, and identical terminal behavior with
-Pi's headless no-op UI.
+route-unavailable error, one Pi-owned `compaction_end` error with the bounded upstream detail, and
+identical terminal behavior with Pi's headless mode.
 
 The focused failure regression is:
 

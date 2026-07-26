@@ -67,6 +67,7 @@ describe("fake Pi + real native lifecycle", () => {
 		const lifecycleApi = {
 			extensionSdkApiVersion: 1,
 			providerPayloadCompactionApiVersion: 1,
+			compactionFailureResultApiVersion: 1,
 			registerCommand: pi.api.registerCommand,
 			registerProvider: pi.api.registerProvider,
 			on: pi.api.on,

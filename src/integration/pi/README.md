@@ -24,12 +24,12 @@ must never appear in errors, diagnostics, logs, or persisted data.
 
 Activated compaction uses one ownership decision for both manual and overflow events:
 
-| Outcome | Pi handler result | Notification | Persistence |
+| Outcome | Pi handler result | Pi outcome | Persistence |
 | --- | --- | --- | --- |
 | Provider inactive | `undefined` | none | Pi owns its normal path |
 | Threshold, explicit abort, native abort, or contention | `{ cancel: true }` | none | none |
 | Validated native opaque output | `{ compaction: ... }` | none | Pi writes the real `CompactionEntry` |
-| Setup, dispatch, status, or output failure | `{ cancel: true }` | fixed redacted error | none |
+| Trusted upstream failure | `{ cancel: true, errorMessage }` | Pi `compaction_end` error | none |
 
 Once activation claims the event, failure is terminal cancellation and cannot fall through to Pi's
 session-unattributed default summarizer. The process router remains strict. A Pi auxiliary request path
@@ -38,12 +38,12 @@ and matching approval semantics. Newer hosts with that contract are accepted wit
 checkpoint replay; the locked legacy host remains fail-closed.
 
 Provider stream failures map through `toPiProviderErrorMessage`. A protocol-decoded
-`BridgeRemoteError` with `retryable: true` becomes the fixed redacted text
-`OpenAI provider service unavailable` so Pi's public classifier can apply its host-owned agent-turn
-retry policy. Non-retryable bridge, connection, configuration, capability, and abort errors keep
-their existing safe messages. The adaptor never retains upstream error details for that mapping and
-never implements a local retry loop; auxiliary compaction and branch-summary callers receive the same
-safe mapping but keep their own host-owned failure handling.
+`BridgeRemoteError` with `retryable: true` becomes
+`OpenAI provider service unavailable: <bounded upstream detail>` so Pi's public classifier can apply
+its host-owned agent-turn retry policy. Non-retryable bridge errors preserve the bounded native
+detail; local errors retain controlled messages or a fixed fallback. The adaptor never implements a
+local retry loop; auxiliary compaction and branch-summary callers use the same trusted mapping while
+Pi owns their terminal handling.
 
 Message projection accepts a complete contiguous Pi message sequence, not one session entry at a
 time. `responseItemsFromMessages()` first pairs tool calls and results and inserts the following

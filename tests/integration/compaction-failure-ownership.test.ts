@@ -31,8 +31,7 @@ import { createDefaultConfig } from "../../src/domain/config.ts";
 import { registerCodexCompaction } from "../../src/integration/pi/codex-compaction.ts";
 import type { CodexToolProfileCoordinator } from "../../src/integration/pi/codex-tool-profile.ts";
 
-const FAILURE_NOTIFICATION =
-	"OpenAI Codex compaction failed; the session context was left unchanged.";
+const FAILURE_MESSAGE = "OpenAI Codex request failed";
 
 const model: Model<string> = {
 	id: "failure-fixture-model",
@@ -314,7 +313,7 @@ describe("public Pi compaction failure ownership", () => {
 		const entriesBefore = structuredClone(harness.session.sessionManager.getEntries());
 		const leafBefore = harness.session.sessionManager.getLeafId();
 
-		await expect(harness.session.compact()).rejects.toThrow("Compaction cancelled");
+		await expect(harness.session.compact()).rejects.toThrow(FAILURE_MESSAGE);
 
 		expect(harness.runtime.compactCalls).toBe(1);
 		expect(harness.getFallbackCalls()).toBe(0);
@@ -322,7 +321,7 @@ describe("public Pi compaction failure ownership", () => {
 		expect(harness.session.sessionManager.getLeafId()).toBe(leafBefore);
 		expect(harness.store.getForSession("integration-failure-session")).toBeUndefined();
 		expect(harness.coordinator.isBusy("integration-failure-session")).toBe(false);
-		expect(harness.notifications).toEqual([{ message: FAILURE_NOTIFICATION, type: "error" }]);
+		expect(harness.notifications).toEqual([]);
 		expect(harness.extensionErrors).toEqual([]);
 		expect(JSON.stringify(harness.extensionErrors)).not.toContain(
 			"Codex provider route is unavailable for the current Pi session",
@@ -360,7 +359,8 @@ describe("public Pi compaction failure ownership", () => {
 			expect.objectContaining({
 				type: "compaction_end",
 				reason: "overflow",
-				aborted: true,
+				aborted: false,
+				errorMessage: `Context overflow recovery failed: ${FAILURE_MESSAGE}`,
 			}),
 		);
 	});

@@ -20,7 +20,7 @@ export function toPiProviderErrorMessage(error: unknown): string {
 		return error.reason;
 	}
 	if (error instanceof BridgeRemoteError && error.retryable) {
-		return PI_RETRYABLE_PROVIDER_ERROR;
+		return `${PI_RETRYABLE_PROVIDER_ERROR}: ${error.message}`;
 	}
 	if (isExistingSafeProviderError(error)) {
 		return error.message;

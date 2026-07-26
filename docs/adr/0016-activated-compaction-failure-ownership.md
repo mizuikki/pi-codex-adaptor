@@ -24,7 +24,10 @@ configuration, tool-profile, capability, identity, native transport, status, and
 failures are converted to Pi's existing `{ cancel: true }` result. The handler clears its coordinator
 state, writes no checkpoint or compaction snapshot, and does not throw into Pi's default summarizer.
 
-Interactive failures emit exactly this fixed error notification:
+The fixed notification policy below is superseded by [ADR 0019](./0019-upstream-provider-error-visibility.md).
+The no-fallback ownership decision remains in force.
+
+Historical interactive failures emitted exactly this fixed error notification:
 
 ```text
 OpenAI Codex compaction failed; the session context was left unchanged.
