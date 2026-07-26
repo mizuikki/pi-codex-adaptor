@@ -88,19 +88,18 @@ describe("Codex provider request guard", () => {
 
 	test("snapshots replay-relevant model identity and pricing from Pi model records", () => {
 		const guard = new CodexProviderRequestGuard();
+		const sourceTier = {
+			inputTokensAbove: 50_000,
+			input: 1,
+			output: 2,
+			cacheRead: 0.5,
+			cacheWrite: 1.25,
+		};
 		const piModel = {
 			...model,
 			cost: {
 				...model.cost,
-				tiers: [
-					{
-						inputTokensAbove: 50_000,
-						input: 1,
-						output: 2,
-						cacheRead: 0.5,
-						cacheWrite: 1.25,
-					},
-				],
+				tiers: [sourceTier],
 			},
 			headers: undefined,
 		} as unknown as Model<string>;
@@ -108,6 +107,7 @@ describe("Codex provider request guard", () => {
 			...openRecordInput("session-model-snapshot"),
 			model: piModel,
 		});
+		sourceTier.input = 9;
 		piModel.cost.tiers?.splice(0);
 		expect(record.model).toEqual({
 			id: model.id,
