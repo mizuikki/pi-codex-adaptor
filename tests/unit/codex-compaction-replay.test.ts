@@ -1044,6 +1044,18 @@ describe("active-branch Codex compaction replay", () => {
 
 	test("compacts inline before the request, appends a real compaction entry, and naturally continues", async () => {
 		const value = harness();
+		value.runtime.summaryImpl = async () => ({
+			status: "completed",
+			result: {
+				summary: "fixture portable summary",
+				usage: {
+					inputTokens: 12,
+					outputTokens: 3,
+					cachedInputTokens: 4,
+					reasoningTokens: 1,
+				},
+			},
+		});
 		const events = await value.run(true, undefined, { origin: "agent", sessionId: SESSION_ID });
 		expect(events.at(-1)).toMatchObject({ type: "done" });
 		expect(value.runtime.compactCalls).toBe(1);
