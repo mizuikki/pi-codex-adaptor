@@ -33,14 +33,14 @@ await run([
 	"--target",
 	target,
 ]);
-await run(["bun", "scripts/build-native.ts", "--target", target]);
+await run(["bun", "scripts/build-native.ts", "--release", "--target", target]);
 await run([
 	"bun",
 	"scripts/verify-bridge-integration.ts",
 	"--target",
 	target,
 	"--executable",
-	resolve(root, "native", "target", target, "debug", executable),
+	resolve(root, "native", "target", target, "release", executable),
 ]);
 const sourceCommit = (await Bun.$`git rev-parse HEAD`.cwd(root).quiet()).text().trim();
 await run([
@@ -49,7 +49,7 @@ await run([
 	"--target",
 	target,
 	"--executable",
-	resolve(root, "native", "target", target, "debug", executable),
+	resolve(root, "native", "target", target, "release", executable),
 	"--source-commit",
 	sourceCommit,
 ]);
