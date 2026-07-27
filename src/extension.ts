@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import packageMetadata from "../package.json" with { type: "json" };
+import type { CodexRuntime } from "./application/codex-runtime.ts";
 import { CodexCompactionCoordinator, CodexCompactionStore } from "./application/compaction.ts";
 import { ConfigurationService } from "./application/configuration.ts";
 import { ProviderActivationPolicy } from "./application/provider-activation.ts";
@@ -18,7 +19,10 @@ import {
 	createUnavailableCodexToolProfile,
 } from "./integration/pi/codex-tool-profile.ts";
 import { registerCodexTools } from "./integration/pi/codex-tools.ts";
-import { assertProviderPayloadCompactionHost } from "./integration/pi/host-capability.ts";
+import {
+	assertProviderPayloadCompactionHost,
+	assertRemoteCompactionBridge,
+} from "./integration/pi/host-capability.ts";
 import {
 	createCodexProviderDispatchers,
 	reconcileCodexProviderRoutes,
@@ -30,7 +34,10 @@ import {
 import { openSettingsOverlay } from "./ui/terminal/settings-overlay.ts";
 
 /** Pi composition root for configuration and diagnostics surfaces. */
-export default async function piCodexAdaptor(pi: ExtensionAPI): Promise<void> {
+export default async function piCodexAdaptor(
+	pi: ExtensionAPI,
+	options: { readonly runtime?: CodexRuntime } = {},
+): Promise<void> {
 	if (typeof pi.registerCommand !== "function") return;
 	assertProviderPayloadCompactionHost(pi);
 	const configFile = resolve(homedir(), ".pi", "agent", "pi-codex-adaptor.json");
@@ -50,11 +57,21 @@ export default async function piCodexAdaptor(pi: ExtensionAPI): Promise<void> {
 	const toolProfile = hasToolProfileApi
 		? createCodexToolProfile(pi, extensionEntryPath)
 		: createUnavailableCodexToolProfile();
-	const runtime = new BundledCodexRuntime({
-		packageRoot,
-		clientVersion: packageMetadata.version,
-		allowDevelopmentBuild: packageMetadata.version === "0.0.0",
-	});
+	const runtime =
+		options.runtime ??
+		new BundledCodexRuntime({
+			packageRoot,
+			clientVersion: packageMetadata.version,
+			allowDevelopmentBuild: packageMetadata.version === "0.0.0",
+		});
+	if (typeof pi.registerProvider === "function") {
+		try {
+			await assertRemoteCompactionBridge(runtime);
+		} catch (error) {
+			await runtime.shutdown();
+			throw error;
+		}
+	}
 	const compactions = new CodexCompactionStore();
 	const compactionCoordinator = new CodexCompactionCoordinator();
 	const capabilities = new ResolveEffectiveCapabilities(runtime);

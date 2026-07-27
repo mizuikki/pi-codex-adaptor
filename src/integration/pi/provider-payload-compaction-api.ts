@@ -1,9 +1,9 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { Api, Model } from "@earendil-works/pi-ai";
+import type { Api, Model, Usage } from "@earendil-works/pi-ai";
 import type {
 	ExtensionAPI,
 	ExtensionContext,
-	ProviderCheckpointProposal,
+	ProviderCheckpointProposal as PiProviderCheckpointProposal,
 	ProviderCompactionCommitToken,
 	SessionEntry,
 } from "@earendil-works/pi-coding-agent";
@@ -21,7 +21,11 @@ export interface ProviderPayloadAttribution {
 	};
 }
 
-export type { ProviderCheckpointProposal, ProviderCompactionCommitToken };
+export interface ProviderCheckpointProposal extends PiProviderCheckpointProposal {
+	readonly usage?: Usage;
+}
+
+export type { ProviderCompactionCommitToken };
 
 export interface BeforeProviderPayloadEvent {
 	readonly type: "before_provider_payload";

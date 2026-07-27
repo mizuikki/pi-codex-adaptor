@@ -68,9 +68,6 @@ export function registerCodexCompaction(
 	pi.on("model_select", async (_event, ctx) => {
 		await restore(ctx);
 	});
-	pi.on("session_before_fork", (_event, _ctx) => {
-		pi.setProviderCheckpointUsageBoundary?.();
-	});
 	pi.on("session_tree", async (_event, ctx) => {
 		await restore(ctx);
 	});

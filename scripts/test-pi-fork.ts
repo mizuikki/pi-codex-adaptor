@@ -170,7 +170,6 @@ async function copyProject(projectDirectory: string, tempRoot: string): Promise<
 		"--exclude=./bun.lock",
 		"--exclude=./dist",
 		"--exclude=./native/artifacts",
-		"--exclude=./native/bin",
 		"--exclude=./native/official/target",
 		"--exclude=./native/target",
 		"--exclude=./node_modules",
@@ -338,6 +337,7 @@ async function verifyPackagedAdaptorConsumer(
 			'if (extensionPath === undefined) throw new Error("Adaptor extension path is required");',
 			"const result = await discoverAndLoadExtensions([extensionPath], process.cwd(), process.env.HOME);",
 			'if (result.errors.length > 0 || result.extensions.length !== 1) throw new Error(result.errors.map((entry) => entry.error).join("; "));',
+			"process.exit(0);",
 		].join("\n"),
 	);
 	const extensionPath = resolve(

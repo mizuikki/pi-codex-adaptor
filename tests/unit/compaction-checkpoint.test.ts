@@ -17,13 +17,16 @@ import { ProviderActivationPolicy } from "../../src/application/provider-activat
 import { createDefaultConfig } from "../../src/domain/config.ts";
 import { registerCodexCompaction } from "../../src/integration/pi/codex-compaction.ts";
 import {
+	checkpointPayload,
 	projectCanonicalEntries,
 	providerCompactionIdentityFromValues,
 	registerCodexCompactionReplay,
 	restoreProviderCheckpointUsageBoundary,
+	scanRemoteCompactionCheckpoints,
 } from "../../src/integration/pi/codex-compaction-replay.ts";
 import { CodexProviderRequestGuard } from "../../src/integration/pi/codex-provider-request-guard.ts";
 import { createProviderConnection } from "../../src/integration/pi/provider-connection.ts";
+import type { ProviderCheckpointProposal } from "../../src/integration/pi/provider-payload-compaction-api.ts";
 import { createFakePi, fixtureModel, fixtureToken } from "../integration/helpers/fake-pi.ts";
 
 const identity = {
@@ -113,15 +116,90 @@ describe("remote compaction checkpoint contract", () => {
 		expect(() => validateCompactionOutput([{ type: "unknown_item" }])).toThrow();
 	});
 
-	test("keeps old checkpoint-shaped data inert", () => {
-		expect(
-			parseRemoteCompactionCheckpoint({
-				kind: "legacy-checkpoint",
+	test("keeps historical auto and portable checkpoint schemas inert", () => {
+		const historical = [
+			{
+				kind: "pi-codex-adaptor.auto-compaction",
 				version: 1,
+				...identity,
+				output: [compactionItem],
+				coveredEntryId: "entry-2",
+			},
+			{
+				kind: "pi-codex-adaptor.compaction",
+				version: 2,
 				modelId: identity.modelId,
 				output: [compactionItem],
-			}),
-		).toBeUndefined();
+			},
+			{
+				kind: "pi-codex-adaptor.compaction",
+				version: 3,
+				portable: { summarySha256: "0".repeat(64) },
+				opaque: { ...identity, output: [compactionItem] },
+			},
+		];
+
+		for (const value of historical) {
+			expect(parseRemoteCompactionCheckpoint(value)).toBeUndefined();
+		}
+	});
+
+	test("replays opaque output only for every exact identity axis and valid coverage", () => {
+		const covered = messageEntry("entry-2", null, "user", "covered canonical input");
+		const checkpointEntry: SessionEntry = {
+			type: "custom",
+			id: "checkpoint-entry",
+			parentId: covered.id,
+			timestamp: "2026-07-27T00:00:01.000Z",
+			customType: CODEX_REMOTE_COMPACTION_KIND,
+			data: checkpoint(),
+		};
+		const suffix = messageEntry("entry-3", checkpointEntry.id, "user", "canonical suffix");
+		const branch = [covered, checkpointEntry, suffix];
+		const exact = scanRemoteCompactionCheckpoints(branch, identity);
+
+		if (exact.matching === undefined) {
+			throw new Error("Expected an exact checkpoint match");
+		}
+		expect(checkpointPayload(exact.matching, branch)).toEqual([
+			compactionItem,
+			{
+				type: "message",
+				role: "user",
+				content: [{ type: "input_text", text: "canonical suffix" }],
+			},
+		]);
+
+		const mismatches = [
+			{ ...identity, sessionFingerprint: "different-session" },
+			{ ...identity, providerId: "different-provider" },
+			{ ...identity, api: "openai-responses" },
+			{ ...identity, baseUrl: "https://different.example.test/v1" },
+			{ ...identity, modelId: "different-model" },
+			{
+				...identity,
+				authenticationBinding: { kind: "credential" as const, fingerprint: "different-credential" },
+			},
+			{
+				...identity,
+				authenticationBinding: {
+					kind: "jwt_account" as const,
+					fingerprint: "credential-fingerprint",
+				},
+			},
+		];
+		for (const mismatch of mismatches) {
+			const scan = scanRemoteCompactionCheckpoints(branch, mismatch);
+			expect(scan.matching).toBeUndefined();
+			expect(scan.hasIdentityMismatch).toBe(true);
+		}
+
+		const invalidCoverage = [
+			{ ...covered, id: "different-covered-entry" },
+			checkpointEntry,
+			suffix,
+		];
+		expect(scanRemoteCompactionCheckpoints(invalidCoverage, identity).matching).toBeUndefined();
 	});
 
 	test("serializes mismatch warnings once per exact identity and session", () => {
@@ -385,6 +463,20 @@ describe("remote compaction checkpoint contract", () => {
 		activation.dispose();
 	});
 
+	test("keeps the current usage boundary intact while a fork is still cancellable", () => {
+		const pi = createFakePi({ token: fixtureToken() });
+		registerCodexCompaction(
+			pi.api,
+			{} as never,
+			{ load: async () => createDefaultConfig() } as never,
+			new CodexCompactionStore(),
+			{ isActive: () => true } as never,
+		);
+
+		expect(pi.handlers.has("session_before_fork")).toBe(false);
+		expect(pi.handlers.has("session_start")).toBe(true);
+	});
+
 	test("rejects custom instructions before selecting a remote implementation", async () => {
 		for (const implementation of ["remote_v2", "compact_endpoint"] as const) {
 			const pi = createFakePi({ token: fixtureToken() });
@@ -423,6 +515,74 @@ describe("remote compaction checkpoint contract", () => {
 			});
 			expect(capabilityResolutionCalled).toBe(false);
 		}
+	});
+
+	test("issues exactly one remote operation for each manual and overflow entry", async () => {
+		const pi = createFakePi({ token: fixtureToken(), sessionId: "manual-overflow-session" });
+		const model = fixtureModel() as Model<string>;
+		const ctx = pi.context(model, "manual-overflow-session");
+		const branch = [
+			messageEntry("entry-1", null, "user", "covered input"),
+			messageEntry("entry-2", "entry-1", "assistant", "retained assistant"),
+		];
+		const manager = ctx.sessionManager as unknown as {
+			getLeafId: () => string;
+		};
+		manager.getLeafId = () => "entry-2";
+		let compactCalls = 0;
+		const runtime = {
+			compact: async () => {
+				compactCalls += 1;
+				return {
+					status: "completed",
+					result: {
+						output: [compactionItem],
+						usage: { inputTokens: 120, outputTokens: 10, cachedInputTokens: 20 },
+					},
+				};
+			},
+		} as unknown as CodexRuntime;
+		registerCodexCompaction(
+			pi.api,
+			runtime,
+			{ load: async () => createDefaultConfig() } as never,
+			new CodexCompactionStore(),
+			{ isActive: () => true } as never,
+			new CodexCompactionCoordinator(),
+			{
+				resolve: async () => ({
+					compaction: { implementation: "compact_endpoint", threshold: 100 },
+					providerSupportsWebsockets: false,
+					shell: { sessionSurface: "official" },
+				}),
+			} as never,
+			{ isHealthy: () => true } as never,
+		);
+		const handler = pi.handlers.get("session_before_compact")?.[0];
+		if (handler === undefined) throw new Error("session_before_compact handler was not registered");
+		const eventBase = {
+			customInstructions: undefined,
+			signal: new AbortController().signal,
+			branchEntries: branch,
+			preparation: { firstKeptEntryId: "entry-2" },
+			checkpointToken: {} as never,
+		};
+
+		const manual = (await handler({ ...eventBase, reason: "manual" }, ctx)) as
+			| { providerCheckpoint?: ProviderCheckpointProposal }
+			| undefined;
+		const overflow = (await handler({ ...eventBase, reason: "overflow" }, ctx)) as
+			| { providerCheckpoint?: ProviderCheckpointProposal }
+			| undefined;
+
+		expect(compactCalls).toBe(2);
+		expect(manual?.providerCheckpoint?.usage).toMatchObject({
+			input: 100,
+			output: 10,
+			cacheRead: 20,
+			totalTokens: 130,
+		});
+		expect(overflow?.providerCheckpoint).toBeDefined();
 	});
 
 	test("projects canonical entries without checkpoint or context-invisible metadata", () => {

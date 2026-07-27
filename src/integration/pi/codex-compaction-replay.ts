@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { Model } from "@earendil-works/pi-ai";
+import type { Model, Usage } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-agent";
 import { convertToLlm, sessionEntryToContextMessages } from "@earendil-works/pi-coding-agent";
 
@@ -231,7 +231,27 @@ export async function createRemoteCheckpointProposal(
 			customType: CODEX_REMOTE_COMPACTION_KIND,
 			checkpointId,
 			data: checkpoint,
+			...(result.result.usage === undefined
+				? {}
+				: { usage: providerCheckpointUsage(result.result.usage) }),
 		},
+	};
+}
+
+function providerCheckpointUsage(usage: {
+	readonly inputTokens: number;
+	readonly outputTokens: number;
+	readonly cachedInputTokens: number;
+	readonly reasoningTokens?: number;
+}): Usage {
+	return {
+		input: Math.max(0, usage.inputTokens - usage.cachedInputTokens),
+		output: usage.outputTokens,
+		cacheRead: usage.cachedInputTokens,
+		cacheWrite: 0,
+		totalTokens: usage.inputTokens + usage.outputTokens,
+		...(usage.reasoningTokens === undefined ? {} : { reasoning: usage.reasoningTokens }),
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 	};
 }
 
@@ -430,7 +450,7 @@ export function scanRemoteCompactionCheckpoints(
 	return { hasIdentityMismatch };
 }
 
-function checkpointPayload(
+export function checkpointPayload(
 	selection: CheckpointSelection,
 	branch: readonly SessionEntry[],
 ): readonly StructuredResponseItem[] {
