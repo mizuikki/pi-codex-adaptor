@@ -4028,7 +4028,8 @@ async fn responses_compact_remote(
             Ok(stream) => stream,
             Err(failure) => {
                 if let Some(result) =
-                    retry_remote_compaction_stream(failure, &mut retry_state, cancellation).await?
+                    retry_remote_compaction_stream(failure, &mut retry_state, cancellation, true)
+                        .await?
                 {
                     return Err(result.into());
                 }
@@ -4043,7 +4044,8 @@ async fn responses_compact_remote(
                     return Err(RequestFailure::Cancelled);
                 }
                 if let Some(result) =
-                    retry_remote_compaction_stream(failure, &mut retry_state, cancellation).await?
+                    retry_remote_compaction_stream(failure, &mut retry_state, cancellation, false)
+                        .await?
                 {
                     return Err(result.into());
                 }
@@ -4134,6 +4136,7 @@ async fn retry_remote_compaction_stream(
     failure: StreamStartFailure,
     state: &mut RemoteCompactionRetryState,
     cancellation: &CancellationToken,
+    allow_transport_fallback: bool,
 ) -> Result<Option<BridgeError>, RequestFailure> {
     if failure.error.retryable && state.stream_retries < state.max_stream_retries {
         let delay = failure
@@ -4144,7 +4147,8 @@ async fn retry_remote_compaction_stream(
             () = cancellation.cancelled() => Err(RequestFailure::Cancelled),
             () = tokio::time::sleep(delay) => Ok(None),
         }
-    } else if state.use_websocket
+    } else if allow_transport_fallback
+        && state.use_websocket
         && !state.websocket_fallback_used
         && matches!(state.transport_mode, ResponsesTransportMode::Auto)
         && state.provider_supports_websockets
@@ -5091,6 +5095,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn remote_v2_non_retryable_failure_does_not_fallback_to_sse() {
+        let mut retry_state = RemoteCompactionRetryState {
+            stream_retries: 0,
+            max_stream_retries: 2,
+            use_websocket: true,
+            websocket_fallback_used: false,
+            transport_mode: ResponsesTransportMode::Auto,
+            provider_supports_websockets: true,
+        };
+        let result = retry_remote_compaction_stream(
+            StreamStartFailure {
+                error: BridgeError {
+                    category: ErrorCategory::CapabilityError,
+                    code: "non_retryable_fixture".to_owned(),
+                    message: "fixture failure".to_owned(),
+                    retryable: false,
+                },
+                retry_delay: None,
+            },
+            &mut retry_state,
+            &CancellationToken::new(),
+            false,
+        )
+        .await
+        .expect("non-retryable failure should return directly");
+
+        assert!(matches!(result, Some(error) if error.code == "non_retryable_fixture"));
+        assert!(retry_state.use_websocket);
+        assert!(!retry_state.websocket_fallback_used);
+    }
+
+    #[tokio::test]
     async fn remote_v2_cancellation_interrupts_retry_backoff() {
         let cancellation = CancellationToken::new();
         cancellation.cancel();
@@ -5114,6 +5150,7 @@ mod tests {
             },
             &mut retry_state,
             &cancellation,
+            false,
         )
         .await;
         assert!(matches!(result, Err(RequestFailure::Cancelled)));

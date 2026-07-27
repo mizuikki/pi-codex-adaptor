@@ -15,12 +15,14 @@ const forbiddenProductionIdentifiers = [
 	"portable-primary",
 	"summarySha256",
 ] as const;
+const skippedDirectories = new Set([".git", "node_modules", "target"]);
 
 async function collectFiles(directory: string): Promise<string[]> {
 	const files: string[] = [];
 	for (const entry of await readdir(directory, { withFileTypes: true })) {
 		const path = resolve(directory, entry.name);
 		if (entry.isDirectory()) {
+			if (skippedDirectories.has(entry.name)) continue;
 			files.push(...(await collectFiles(path)));
 		} else if (entry.isFile() && (path.endsWith(".ts") || path.endsWith(".rs"))) {
 			files.push(path);

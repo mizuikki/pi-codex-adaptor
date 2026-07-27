@@ -54,8 +54,15 @@ export function registerCodexCompaction(
 			);
 			await restoreProviderCheckpointUsageBoundary({ pi, ctx, activation, store, connection });
 		} catch {
-			pi.setProviderCheckpointUsageBoundary?.();
-			await restoreProviderCheckpointUsageBoundary({ pi, ctx, activation, store });
+			try {
+				await restoreProviderCheckpointUsageBoundary({ pi, ctx, activation, store });
+			} catch {
+				try {
+					pi.setProviderCheckpointUsageBoundary?.();
+				} catch {
+					// Session lifecycle restoration is fail-closed and must not reject host events.
+				}
+			}
 		}
 	};
 

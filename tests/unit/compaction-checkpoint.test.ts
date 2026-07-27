@@ -217,7 +217,9 @@ describe("remote compaction checkpoint contract", () => {
 		const coordinator = new CodexCompactionCoordinator();
 		expect(coordinator.begin("session-1")).toBe(true);
 		expect(coordinator.begin("session-1")).toBe(false);
+		expect(coordinator.beginExecution("session-1")).toBe(false);
 		coordinator.endPending("session-1", "error");
+		expect(coordinator.requestExecution("session-1")).toBe(true);
 		expect(coordinator.beginExecution("session-1")).toBe(true);
 		expect(coordinator.beginExecution("session-1")).toBe(false);
 		coordinator.end("session-1", "cancel");

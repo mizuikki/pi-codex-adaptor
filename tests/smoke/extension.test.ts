@@ -92,6 +92,17 @@ describe("extension entry point", () => {
 		).rejects.toThrow("Pi host is incompatible: requires compaction failure result API version 1");
 	});
 
+	test("fails closed when the Pi checkpoint commit capability is absent", async () => {
+		await expect(
+			piCodexAdaptor({
+				extensionSdkApiVersion: 1,
+				providerPayloadCompactionApiVersion: 1,
+				compactionFailureResultApiVersion: 1,
+				registerCommand: () => {},
+			} as never),
+		).rejects.toThrow("Pi host is incompatible: requires provider checkpoint commit API version 1");
+	});
+
 	test("fails closed when the extension SDK capability is absent", async () => {
 		let registrations = 0;
 		await expect(

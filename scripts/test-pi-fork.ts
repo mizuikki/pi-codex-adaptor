@@ -247,6 +247,8 @@ async function installForkConsumer(
 	console.log(
 		"Installing the adaptor copy, then replacing its SDK with verified manifest tarballs.",
 	);
+	// The copied adaptor still points at sibling file dependencies until all four verified
+	// tarballs are installed together below, so npm cannot resolve its wildcard peers yet.
 	await run(
 		"npm",
 		["install", "--ignore-scripts", "--legacy-peer-deps", "--no-save", "--no-fund", "--no-audit"],

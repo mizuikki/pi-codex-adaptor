@@ -45,6 +45,8 @@ describe("bridge protocol v6", () => {
 		const messages = fixture.trimEnd().split("\n").map(decodeServerFrame);
 
 		expect(messages).toHaveLength(7);
+		const handshake = messages[0] as Extract<(typeof messages)[number], { type: "handshake" }>;
+		expect(handshake.handshake.capabilities).not.toContain("portable_context_summary");
 		expect(messages[0]).toMatchObject({
 			type: "handshake",
 			handshake: {
@@ -231,14 +233,13 @@ describe("bridge protocol v6", () => {
 			resolve(repositoryRoot, "fixtures/bridge-protocol/server-v5.jsonl"),
 			"utf8",
 		);
-		const message = decodeServerFrame(fixture.split("\n")[0] ?? "");
-		if (message.type !== "handshake") {
-			throw new Error("Previous contract fixture must begin with a handshake");
-		}
-
-		expect(() => verifyHandshake(message.handshake, "x86_64-unknown-linux-musl")).toThrow(
-			"bridgeProtocolVersion",
-		);
+		const frame = fixture.split("\n")[0] ?? "";
+		const legacy = JSON.parse(frame) as {
+			handshake?: { bridgeProtocolVersion?: unknown; capabilities?: unknown[] };
+		};
+		expect(legacy.handshake?.bridgeProtocolVersion).toBe(5);
+		expect(legacy.handshake?.capabilities).toContain("portable_context_summary");
+		expect(() => decodeServerFrame(frame)).toThrow("protocol v6");
 	});
 
 	test("provider connection timeoutMs accepts finite bounds and Pi's disabled sentinel", () => {

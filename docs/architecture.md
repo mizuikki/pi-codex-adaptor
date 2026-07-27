@@ -36,8 +36,9 @@ list to change together.
 `ResolveEffectiveCapabilities` is the application authority for one model, provider, configuration
 fingerprint, and verified bridge handshake. It selects `remote_v2` or `compact_endpoint` before a
 compaction operation begins. Activation also requires the Pi extension ABI markers,
-`providerPayloadCompactionApiVersion: 1`, `providerCheckpointCommitApiVersion: 1`, and the native
-Remote Compaction capability. A missing stacked capability fails before provider registration.
+`providerPayloadCompactionApiVersion: 1`, `providerCheckpointCommitApiVersion: 1`, and
+`compactionFailureResultApiVersion: 1`, plus the native Remote Compaction capability. A missing
+stacked capability fails before provider registration.
 
 The same snapshot drives provider requests, tool activation, compaction, settings validation, status,
 and diagnostics. TypeScript does not reconstruct official model metadata or tool schemas.

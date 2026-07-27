@@ -350,7 +350,7 @@ export class SettingsOverlay {
 			if (this.#disposed || signal.aborted || !confirmed) return;
 			const sessionId = this.#ctx.sessionManager.getSessionId();
 			const coordinator = this.#coordinator;
-			if (coordinator !== undefined && !coordinator.begin(sessionId)) {
+			if (coordinator !== undefined && !coordinator.requestExecution(sessionId)) {
 				this.#ctx.ui.notify("OpenAI Codex compaction is already in progress", "warning");
 				return;
 			}

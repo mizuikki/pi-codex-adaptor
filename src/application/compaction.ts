@@ -327,7 +327,7 @@ export class CodexCompactionStore {
 	}
 }
 
-export type CompactionCoordinatorPhase = "idle" | "pending" | "executing";
+export type CompactionCoordinatorPhase = "idle" | "pending" | "requested" | "executing";
 
 export class CodexCompactionCoordinator {
 	readonly #sessions = new Map<string, CompactionCoordinatorPhase>();
@@ -342,8 +342,15 @@ export class CodexCompactionCoordinator {
 		return true;
 	}
 
+	requestExecution(sessionId: string): boolean {
+		if (this.isBusy(sessionId)) return false;
+		this.#sessions.set(sessionId, "requested");
+		return true;
+	}
+
 	beginExecution(sessionId: string): boolean {
-		if (this.#sessions.get(sessionId) === "executing") return false;
+		const phase = this.#sessions.get(sessionId);
+		if (phase === "pending" || phase === "executing") return false;
 		this.#sessions.set(sessionId, "executing");
 		return true;
 	}

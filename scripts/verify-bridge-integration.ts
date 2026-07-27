@@ -118,6 +118,19 @@ try {
 				"Native responses.compact did not complete against the fake Responses server",
 			);
 		}
+		const compactResult = compact.result;
+		const compactOutput =
+			typeof compactResult === "object" && compactResult !== null && !Array.isArray(compactResult)
+				? (compactResult as Record<string, unknown>).output
+				: undefined;
+		const compactionItems = Array.isArray(compactOutput)
+			? compactOutput.filter(
+					(item) => typeof item === "object" && item !== null && item.type === "compaction",
+				)
+			: [];
+		if (compactionItems.length !== 1) {
+			throw new Error("Native responses.compact returned an invalid compaction output");
+		}
 
 		const tools = await client.request("tools.resolve", {
 			model: {
