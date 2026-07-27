@@ -33,6 +33,16 @@ await run([
 	"--target",
 	target,
 ]);
+await run([
+	"cargo",
+	"build",
+	"--manifest-path",
+	"native/Cargo.toml",
+	"--bin",
+	"codex-bridge",
+	"--target",
+	target,
+]);
 await run(["bun", "scripts/build-native.ts", "--release", "--target", target]);
 await run([
 	"bun",
