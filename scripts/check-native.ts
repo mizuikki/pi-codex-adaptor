@@ -33,12 +33,7 @@ await run([
 	"--target",
 	target,
 ]);
-await run([
-	"bun",
-	"scripts/build-native.ts",
-	"--target",
-	target,
-]);
+await run(["bun", "scripts/build-native.ts", "--target", target]);
 await run([
 	"bun",
 	"scripts/verify-bridge-integration.ts",
