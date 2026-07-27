@@ -498,7 +498,7 @@ function findLatestCheckpoint(
 				},
 			};
 		}
-		const retainedTail = projectRetainedTail(entry);
+		const retainedTail = projectRetainedTail(entry, branch, index);
 		if (retainedTail === undefined) return { blocked: true };
 		if (kind.details.opaque === undefined || identity === undefined) {
 			return {
@@ -786,10 +786,29 @@ function hasSuffix(input: readonly unknown[], suffix: readonly unknown[]): boole
 	return true;
 }
 
-function projectRetainedTail(entry: SessionEntry): readonly StructuredResponseItem[] | undefined {
-	const retainedTail = requestRecord(entry)?.retainedTail;
-	if (!Array.isArray(retainedTail)) return undefined;
-	const projected = responseItemsFromMessages(retainedTail);
+function projectRetainedTail(
+	entry: SessionEntry,
+	branch: readonly SessionEntry[],
+	compactionIndex: number,
+): readonly StructuredResponseItem[] | undefined {
+	const entryRecord = requestRecord(entry);
+	const retainedTail = entryRecord?.retainedTail;
+	let messages: readonly unknown[];
+	if (Array.isArray(retainedTail)) {
+		messages = retainedTail;
+	} else {
+		if (retainedTail !== undefined && retainedTail !== null) return undefined;
+		const firstKeptEntryId = entryRecord?.firstKeptEntryId;
+		if (typeof firstKeptEntryId !== "string" || firstKeptEntryId.length === 0) return undefined;
+		const firstKeptIndex = branch.findIndex((candidate) => candidate.id === firstKeptEntryId);
+		if (firstKeptIndex < 0 || firstKeptIndex >= compactionIndex) return undefined;
+		messages = branch
+			.slice(firstKeptIndex, compactionIndex)
+			.flatMap((candidate) =>
+				candidate.type === "compaction" ? [] : sessionEntryToContextMessages(candidate).slice(0, 1),
+			);
+	}
+	const projected = responseItemsFromMessages(messages);
 	if (
 		!projected.every(
 			(item) => isStructuredJsonValue(item) && isSupportedStructuredResponseItem(item),

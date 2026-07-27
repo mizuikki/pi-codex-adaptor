@@ -28,7 +28,7 @@ export interface CodexProviderRequestRecordInput {
 }
 
 export type CodexProviderModelSnapshot = Readonly<
-	Pick<Model<string>, "id" | "provider" | "api" | "contextWindow">
+	Pick<Model<string>, "id" | "provider" | "api" | "cost" | "contextWindow">
 >;
 
 export type CodexProviderRequestRecord = Omit<CodexProviderRequestRecordInput, "model"> & {
@@ -171,6 +171,7 @@ function snapshotProviderModel(model: Model<string>): CodexProviderModelSnapshot
 		id: model.id,
 		provider: model.provider,
 		api: model.api,
+		cost: cloneFrozenJson(model.cost),
 		contextWindow: model.contextWindow,
 	});
 }

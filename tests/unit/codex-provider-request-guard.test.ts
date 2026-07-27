@@ -86,20 +86,51 @@ describe("Codex provider request guard", () => {
 		expect(() => snapshotSimpleStreamOptions(accessor)).toThrow();
 	});
 
-	test("snapshots only replay-relevant model identity from Pi model records", () => {
+	test("snapshots replay-relevant model identity and pricing from Pi model records", () => {
 		const guard = new CodexProviderRequestGuard();
-		const piModel = { ...model, headers: undefined } as unknown as Model<string>;
+		const sourceTier = {
+			inputTokensAbove: 50_000,
+			input: 1,
+			output: 2,
+			cacheRead: 0.5,
+			cacheWrite: 1.25,
+		};
+		const piModel = {
+			...model,
+			cost: {
+				...model.cost,
+				tiers: [sourceTier],
+			},
+			headers: undefined,
+		} as unknown as Model<string>;
 		const record = guard.open({
 			...openRecordInput("session-model-snapshot"),
 			model: piModel,
 		});
+		sourceTier.input = 9;
+		piModel.cost.tiers?.splice(0);
 		expect(record.model).toEqual({
 			id: model.id,
 			provider: model.provider,
 			api: model.api,
+			cost: {
+				...model.cost,
+				tiers: [
+					{
+						inputTokensAbove: 50_000,
+						input: 1,
+						output: 2,
+						cacheRead: 0.5,
+						cacheWrite: 1.25,
+					},
+				],
+			},
 			contextWindow: model.contextWindow,
 		});
 		expect(Object.isFrozen(record.model)).toBe(true);
+		expect(Object.isFrozen(record.model.cost)).toBe(true);
+		expect(Object.isFrozen(record.model.cost.tiers)).toBe(true);
+		expect(Object.isFrozen(record.model.cost.tiers?.[0])).toBe(true);
 		expect("headers" in record.model).toBe(false);
 	});
 

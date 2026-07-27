@@ -1044,6 +1044,18 @@ describe("active-branch Codex compaction replay", () => {
 
 	test("compacts inline before the request, appends a real compaction entry, and naturally continues", async () => {
 		const value = harness();
+		value.runtime.summaryImpl = async () => ({
+			status: "completed",
+			result: {
+				summary: "fixture portable summary",
+				usage: {
+					inputTokens: 12,
+					outputTokens: 3,
+					cachedInputTokens: 4,
+					reasoningTokens: 1,
+				},
+			},
+		});
 		const events = await value.run(true, undefined, { origin: "agent", sessionId: SESSION_ID });
 		expect(events.at(-1)).toMatchObject({ type: "done" });
 		expect(value.runtime.compactCalls).toBe(1);
@@ -1249,6 +1261,42 @@ describe("active-branch Codex compaction replay", () => {
 		expect(
 			reloadInput.filter((item) => (item as { type?: unknown }).type === "compaction"),
 		).toHaveLength(1);
+	});
+
+	test("recovers v3 checkpoints written with a null retained tail", async () => {
+		const connection = createProviderConnection(model, { apiKey: fixtureToken() });
+		const identity = providerCompactionIdentityFromValues({
+			sessionId: SESSION_ID,
+			model,
+			connection,
+		});
+		if (identity === undefined) throw new Error("fixture identity unavailable");
+		const details = createPortableCompactionDetails(sha256Hex("reloaded summary"), {
+			identity,
+			output: [{ type: "compaction", encrypted_content: OPAQUE }],
+		});
+		const session = new SessionFixture();
+		session.appendCompaction(details, {
+			summary: "reloaded summary",
+			firstKeptEntryId: "user-1",
+			retainedTail: null as never,
+		});
+		session.appendUser("user-after-recovered-tail", "continue after recovered context");
+		session.contextTokens = 1_000;
+		const value = harness({ session });
+		value.store.setManual(SESSION_ID, "reloaded summary", details, session.leafId ?? undefined);
+
+		const events = await value.run(false);
+		expect(events.at(-1)).toMatchObject({ type: "done" });
+		expect(value.runtime.compactCalls).toBe(0);
+		expect((value.runtime.responseRequests[0] as { input: unknown[] }).input).toEqual([
+			{ type: "compaction", encrypted_content: OPAQUE },
+			{
+				type: "message",
+				role: "user",
+				content: [{ type: "input_text", text: "continue after recovered context" }],
+			},
+		]);
 	});
 
 	test("poisons replay after an indeterminate append and blocks later Responses dispatch", async () => {
