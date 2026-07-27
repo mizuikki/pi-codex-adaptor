@@ -49,9 +49,8 @@ true`). Structural glyphs `•`, `│`, and `└` are renderer-owned constants s
 roles. Presentation is width-aware: headers are clipped and detail wraps stay under the gutter.
 `context.isError` maps to textual failure labels. Omission text uses ASCII `...`.
 
-Legacy automatic custom checkpoints are no longer written by the adaptor. New compactions commit
-real Pi `CompactionEntry` records instead of hidden custom checkpoints, and their presentation
-remains Pi-owned. Legacy custom entries are still readable for replay or migration but are not given
-their own adaptor-managed chat renderer.
+New compactions commit the extension-owned provider checkpoint through Pi's custom-entry transaction.
+The renderer shows the explicit provider-checkpoint lifecycle result without decrypting or displaying
+opaque output. Legacy custom entries remain inert and are not given an adaptor-managed chat renderer.
 
 Rendering is monochrome-safe: state words distinguish outcomes without relying on color alone.

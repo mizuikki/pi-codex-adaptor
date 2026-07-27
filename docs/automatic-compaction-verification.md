@@ -1,82 +1,75 @@
-# Automatic Compaction Verification
+# Remote Compaction Verification
 
-This record describes the public-API harness used for inline automatic compaction. Values in the
-harness are synthetic; it does not persist credentials, prompts from a user session, or real opaque
-provider output.
+All values in this harness are synthetic. It does not persist credentials, user prompts, account
+data, or real opaque output.
 
-## Locked dependency graph
+## Focused checks
 
-The adaptor's `package.json` and `bun.lock` retain sibling Pi file development dependencies and
-wildcard runtime peers. An upstream public Pi host is not a compatible runtime host for this feature:
-the paired Pi fork must expose `extensionSdkApiVersion === 1`,
-`providerPayloadCompactionApiVersion === 1`, and `compactionFailureResultApiVersion === 1` to
-extension factories. Run from the repository:
+The clean-slate application and Pi transaction checks are:
 
 ```sh
-bun test tests/integration/automatic-compaction-continuation.test.ts
-bun test tests/integration/compaction-failure-ownership.test.ts
-bun test tests/unit/compaction.test.ts tests/unit/codex-compaction-replay.test.ts
+bun test tests/unit/compaction-checkpoint.test.ts
 bun test tests/unit/codex-provider-request-guard.test.ts tests/unit/provider-session-router.test.ts
-bun run check:architecture
+bun test tests/smoke/extension.test.ts tests/smoke/tool-surface.test.ts
+npx vitest --run test/compaction-extensions.test.ts test/suite/agent-session-compaction.test.ts
+cargo test --manifest-path native/Cargo.toml -p codex-bridge remote_v2
 ```
 
-The integration harness uses public `SessionManager` methods, the paired
-`before_provider_payload` contract, the real adaptor compaction registration, and the real provider
-dispatcher composition. It asserts inline rewrite, same-run completion, pre-dispatch commit ordering,
-active-branch real compaction-entry parentage, token-bound retained-tail validation, pre-abort
-behavior, partial append persistence, file reload, portable-only fallback, and replay poison state.
-For Remote V2, it also asserts that the following Responses request carries the routed session id when
-the rewritten request still begins with a matched opaque prefix.
+They cover strict v1 checkpoint parsing, inert legacy-shaped data, exactly one compaction item,
+identity-bound warnings, coordinator release, canonical suffix projection, provider proposal sealing,
+manual provider-checkpoint results, forged live-token rejection, append/readback ordering, and native
+Remote V2 retry, delay, cancellation, output, and WebSocket fallback behavior.
 
-The failure-ownership harness uses public Pi `AgentSession`, `SessionManager`, extension-factory, and
-UI surfaces. It forces native compaction rejection for both manual and overflow entry points and
-installs a sentinel fallback stream. A characterization first proves that Pi invokes that stream and
-persists a textual compaction after a legacy handler exception is swallowed. The fixed-path
-assertions require zero fallback calls, no new Pi
-`CompactionEntry`, an unchanged branch and leaf, no adaptor store snapshot, an idle coordinator, no
-route-unavailable error, one Pi-owned `compaction_end` error with the bounded upstream detail, and
-identical terminal behavior with Pi's headless mode.
-
-The focused failure regression is:
+The full verification command is:
 
 ```sh
-bun test tests/unit/compaction.test.ts tests/unit/provider-session-router.test.ts
-bun test tests/integration/compaction-failure-ownership.test.ts
-bun test tests/integration/automatic-compaction-continuation.test.ts
+bun run check
+cargo test --manifest-path native/Cargo.toml --workspace
+bun run test:pi-fork -- --pi-dir /absolute/path/to/pi --pi-ref <immutable-commit-or-tag>
 ```
 
-## Fork-pinned host
+## Behavioral gates
 
-The paired Pi fork is verified in a clean consumer through `scripts/local-fork-fixture.mjs`. Its
-`prepare` command delegates SDK packing to `pack-local-sdk.mjs`; the harness then uses `install-sdk`
-and `create-consumer` with the resulting manifest. The manifest records the exact commit, private SDK
-versions, capability levels, relative tarball paths, and SHA-256 values. The harness validates that
-manifest before installation, creates `<temp>/pi` plus `<temp>/project`, and installs all four SDK
-tarballs directly in the positive consumer. It does not reuse the checkout's `node_modules` or the
-adaptor's `bun.lock` resolutions.
+- every logical compaction calls `runtime.compact()` once at most;
+- an unchanged covered prefix produces zero compact calls and zero custom entries on repeated
+  preparations;
+- a below-threshold suffix replays without a call, while the first over-threshold suffix produces one
+  call and one proposal;
+- exact identity replays opaque output plus the canonical suffix;
+- provider, model, base URL, authentication, branch, session, or token mismatch never replays opaque
+  output;
+- append/readback indeterminacy blocks provider dispatch without a second append or retry;
+- manual and overflow lifecycle success is explicit provider-checkpoint success, not cancellation or a
+  textual compaction;
+- context usage is unknown after commit and becomes valid only after a later assistant usage;
+- native retry and backoff mutate no Pi payload and create no checkpoint on cancellation;
+- ordinary Pi sessions and ordinary textual compactions remain readable without adaptor parsing;
+- v5/v6 startup mismatch fails before provider registration;
+- diagnostics contain no credentials, prompts, account data, opaque output, or local paths.
+
+## Pi fork artifact harness
+
+The paired fork verifier consumes the exact local SDK manifest, validates its commit and all four
+tarball SHA-256 entries, creates isolated `<temp>/pi` and `<temp>/project` directories, installs every
+SDK tarball directly into positive consumers, and runs the actual Pi loader with poison packages. The
+positive local install path uses `pi install -l <absolute-source-path>` and cleanup uses
+`pi remove <absolute-source-path> -l`; no registry installation or publication is part of this
+product.
+
+Tarball names are not provenance. The final evidence records the resolved immutable Pi ref and the
+manifest digests rather than local paths or user values.
+
+## Performance gate
+
+Run the deterministic synthetic benchmark and compare the recorded baseline:
 
 ```sh
-PI_EXTENSION_SDK_DIR=<clean-pi-sdk-checkout>
-PI_EXTENSION_SDK_REF=<immutable-sdk-tag-or-commit>
-bun run test:pi-fork -- --pi-dir "$PI_EXTENSION_SDK_DIR" --pi-ref "$PI_EXTENSION_SDK_REF"
+bun scripts/benchmark-compaction.ts
 ```
 
-The delivery record must contain the resolved commit and the manifest SHA-256 values for all four SDK
-tarballs. Tarball names are not provenance.
+The input is a generated 10,000-entry, approximately 50 MiB JSONL branch. The benchmark records p50
+and p95 canonical projection, checkpoint scan, suffix projection, and provider-hook preparation. A
+change fails the gate when p95 grows by more than 20% or 50 ms, whichever allowance is larger.
 
-The paired attribution contract supplies the same non-empty session id, explicit `agent`,
-`compaction_summary`, or `branch_summary` origin, and request-scoped abort signal to the provider
-hook. The adaptor accepts authenticated auxiliary requests unchanged and only applies automatic
-checkpoint replay to normal agent requests.
-
-## Upstream-host rejection
-
-An upstream host lacks the private extension SDK and paired transaction markers. Tarball and loader
-smoke tests require a clear incompatibility error from that host. This is intentional: package
-version equality is not evidence that a host contains the required runtime contracts.
-
-## Observable residuals
-
-The harness does not claim atomic `appendEntry` rollback, remote acceptance semantics after a local
-abort, deterministic lease release from bare `AgentSession.dispose()`, or visibility into Pi-swallowed
-later hook exceptions. These are public-host limitations documented in the product ADR.
+The current run is recorded in
+[`docs/evidence/compaction-benchmark-2026-07-27.md`](./evidence/compaction-benchmark-2026-07-27.md).

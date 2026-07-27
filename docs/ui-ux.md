@@ -28,17 +28,20 @@ Provider and model selection changes switch the active tool profile and rebuild 
 prompt/tool status. Codex core isolation and reversible Pi restoration are lifecycle behavior, not a
 new user setting.
 
-The OpenAI section's manual compaction action is manual Pi compaction. It now commits a normal Pi
-`CompactionEntry` whose durable boundary is the portable Pi summary plus the Pi-materialized
-`retainedTail`. A matching Codex identity may also retain an opaque accelerator for provider-bound
-replay. The UI never attempts to decrypt, summarize, or display encrypted content, and manual
-compaction keeps Pi's existing compaction-summary presentation.
+The OpenAI section's manual compaction action commits an extension-owned provider checkpoint through
+Pi's atomic custom-entry transaction. The UI presents an explicit provider-checkpoint success with
+the verified entry ID and token counts; it never fabricates a textual summary or `CompactionEntry`.
+The UI never decrypts or displays encrypted output.
 
 Inline automatic compaction remains silent in the live provider flow: it continues the current
-provider request and adds no synthetic conversational message or continuation turn. The durable
-checkpoint is a real Pi `CompactionEntry` committed before dispatch. Presentation of that committed
-boundary remains Pi-owned. The adaptor no longer writes or renders a hidden automatic custom
-checkpoint for new compactions.
+provider request and adds no synthetic conversational message or continuation turn. Pi verifies the
+custom checkpoint before dispatching the exact sealed rewritten payload. A matching checkpoint with
+no uncovered suffix makes no remote request. After a successful checkpoint, context usage is shown as
+unknown until the next valid assistant response reports usage.
+
+When a Codex session leaves its checkpoint identity, the UI emits one bounded warning without
+identity values. Canonical Pi history is retained, but fit on the destination is not guaranteed; a
+new session is the supported recovery when it does not fit.
 
 Managed Codex tools render as compact unframed transcript rows owned by
 `src/ui/terminal/codex-tool-renderer.ts`. Each row uses the renderer-owned single-column glyphs `•`,

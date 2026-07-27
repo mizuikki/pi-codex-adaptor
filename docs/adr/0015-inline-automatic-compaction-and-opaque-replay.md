@@ -1,6 +1,6 @@
 # ADR 0015: Inline Automatic Compaction and Opaque Replay
 
-- Status: Superseded by [0017](./0017-portable-primary-compaction-checkpoints.md)
+- Status: Obsolete. Superseded by [0020](./0020-extension-owned-remote-compaction-clean-slate.md)
 - Date: 2026-07-20
 
 ## Context

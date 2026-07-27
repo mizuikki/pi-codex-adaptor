@@ -17,7 +17,6 @@ import {
 import {
 	CodexCompactionStore,
 	isSupportedStructuredResponseItem,
-	matchingOpaqueSnapshotOutput,
 } from "../../application/compaction.ts";
 import type { ConfigurationService } from "../../application/configuration.ts";
 import type { ProviderActivationPolicy } from "../../application/provider-activation.ts";
@@ -33,11 +32,8 @@ import type { CodexConfig } from "../../domain/config.ts";
 import { normalizeCodexContextMessages } from "./codex-message-normalization.ts";
 import { toPiProviderErrorMessage } from "./codex-provider-error.ts";
 import {
-	authenticationSummary,
 	type CodexProviderRequestGuard,
 	type CodexProviderRequestRecord,
-	sessionFingerprint,
-	sha256Hex,
 	snapshotSimpleStreamOptions,
 } from "./codex-provider-request-guard.ts";
 import {
@@ -497,9 +493,9 @@ export function buildCodexRequest(
 		serviceTier: "default" | "priority" | "flex";
 		verbosity: "low" | "medium" | "high";
 	},
-	connection: CodexProviderConnection | undefined,
+	_connection: CodexProviderConnection | undefined,
 	officialTools: readonly unknown[],
-	compactions: CodexCompactionStore,
+	_compactions: CodexCompactionStore,
 	capabilities: EffectiveCapabilitySnapshot,
 ): Record<string, unknown> {
 	const activeDefinitions = context.tools ?? [];
@@ -512,30 +508,10 @@ export function buildCodexRequest(
 		options?.reasoning === undefined
 			? undefined
 			: (model.thinkingLevelMap?.[options.reasoning] ?? options.reasoning);
-	if (options?.sessionId !== undefined && compactions.isReplayInvalid(options.sessionId)) {
-		throw new Error("OpenAI Codex compaction replay is invalid for this session");
-	}
-	const snapshot = compactions.getForSession(options?.sessionId);
-	const identity =
-		options?.sessionId === undefined || connection === undefined
-			? undefined
-			: providerRequestIdentity(options.sessionId, model, connection);
-	const matchedOpaqueOutput = matchingOpaqueSnapshotOutput(
-		snapshot,
-		identity,
-		snapshot?.source === "manual" ? sha256Hex(snapshot.summary) : undefined,
-	);
-	const messages =
-		matchedOpaqueOutput !== undefined &&
-		snapshot?.source === "manual" &&
-		isCompactionMarker(context.messages[0], snapshot.summary)
-			? context.messages.slice(1)
-			: context.messages;
-	const canonicalPrefix = messages === context.messages ? [] : (matchedOpaqueOutput ?? []);
 	return {
 		model: model.id,
 		instructions: withSupplementalSessionInstructions(context.systemPrompt ?? "", capabilities),
-		input: [...canonicalPrefix, ...responseItemsFromMessages(messages)],
+		input: responseItemsFromMessages(context.messages),
 		tools: tools.length === 0 ? null : tools,
 		tool_choice: "auto",
 		parallel_tool_calls: true,
@@ -553,27 +529,6 @@ export function buildCodexRequest(
 }
 
 const buildRequest = buildCodexRequest;
-
-function providerRequestIdentity(
-	sessionId: string,
-	model: Pick<Model<string>, "id" | "api">,
-	connection: CodexProviderConnection,
-) {
-	const authenticationBinding = authenticationSummary(
-		connection.authentication,
-		connection.accountId,
-		connection.accountIdSource,
-	);
-	if (authenticationBinding === undefined) return undefined;
-	return {
-		sessionFingerprint: sessionFingerprint(sessionId),
-		providerId: connection.providerId,
-		api: model.api,
-		baseUrl: connection.baseUrl,
-		modelId: model.id,
-		authenticationBinding,
-	};
-}
 
 export function responseItemsFromMessages(messages: readonly unknown[]): unknown[] {
 	return normalizeCodexContextMessages(messages).flatMap(toResponseItems);
@@ -746,27 +701,6 @@ function toResponseItems(message: unknown): unknown[] {
 
 function userTextItem(text: string): unknown {
 	return { type: "message", role: "user", content: [{ type: "input_text", text }] };
-}
-
-function isCompactionMarker(message: unknown, summary: string): boolean {
-	const value = record(message);
-	if (value?.role === "compactionSummary") return value.summary === summary;
-	if (value?.role !== "user") return false;
-	const content = value.content;
-	const text =
-		typeof content === "string"
-			? content
-			: Array.isArray(content)
-				? content
-						.map(record)
-						.filter((item) => item?.type === "text" && typeof item.text === "string")
-						.map((item) => (typeof item?.text === "string" ? item.text : ""))
-						.join("")
-				: "";
-	return (
-		text.startsWith("The conversation history before this point was compacted") &&
-		text.includes(summary)
-	);
 }
 
 function inputContent(content: unknown): unknown[] {

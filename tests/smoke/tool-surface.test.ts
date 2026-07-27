@@ -12,7 +12,9 @@ describe("extension tool smoke", () => {
 		await piCodexAdaptor({
 			extensionSdkApiVersion: 1,
 			providerPayloadCompactionApiVersion: 1,
+			providerCheckpointCommitApiVersion: 1,
 			compactionFailureResultApiVersion: 1,
+			setProviderCheckpointUsageBoundary: () => true,
 			registerCommand: () => {},
 			registerProvider: () => {},
 			registerTool: (tool: { name: string }) => {

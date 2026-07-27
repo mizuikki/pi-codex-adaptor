@@ -65,16 +65,6 @@ export interface CreateResponseResult {
 	result: unknown;
 }
 
-export interface SummarizeContextOptions {
-	connection: CodexProviderConnection;
-	modelId: string;
-	input: readonly StructuredResponseItem[];
-	transportMode: "auto" | "sse";
-	providerSupportsWebsockets: boolean;
-	remoteCompactionV2Context?: CodexRemoteCompactionV2Context;
-	signal?: AbortSignal;
-}
-
 export interface NormalizedResponseUsage {
 	inputTokens: number;
 	outputTokens: number;
@@ -83,16 +73,6 @@ export interface NormalizedResponseUsage {
 }
 
 export type NonCompletedResponseStatus = "incomplete" | "failed" | "aborted" | "timed_out";
-
-export type SummarizeContextResult =
-	| {
-			status: "completed";
-			result: {
-				summary: string;
-				usage?: NormalizedResponseUsage;
-			};
-	  }
-	| { status: NonCompletedResponseStatus };
 
 export interface CompactResponseOptions {
 	connection: CodexProviderConnection;
@@ -166,7 +146,6 @@ export interface ExecuteToolOptions {
 
 export interface CodexRuntime {
 	createResponse(options: CreateResponseOptions): Promise<CreateResponseResult>;
-	summarizeContext(options: SummarizeContextOptions): Promise<SummarizeContextResult>;
 	compact(options: CompactResponseOptions): Promise<CompactResponseResult>;
 	readDiagnostics?(): Promise<unknown>;
 	resolveModel(modelId: string): Promise<unknown>;

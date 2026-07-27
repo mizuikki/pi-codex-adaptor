@@ -63,9 +63,6 @@ class ResolverRuntime implements CodexRuntime {
 	async createResponse(): Promise<never> {
 		throw new Error("unused");
 	}
-	async summarizeContext(): Promise<never> {
-		throw new Error("unused");
-	}
 	async compact(): Promise<never> {
 		throw new Error("unused");
 	}
@@ -78,7 +75,6 @@ class ResolverRuntime implements CodexRuntime {
 const capabilities = [
 	"responses_sse",
 	"responses_websocket",
-	"portable_context_summary",
 	"remote_compaction_v2",
 	"compact_endpoint",
 	"unified_exec",
@@ -150,9 +146,9 @@ describe("effective capability application use case", () => {
 		expect(capabilityContextFromSnapshot(snapshot).backgroundSessionsAvailable).toBe(false);
 	});
 
-	test("requires the portable context summary bridge capability for compaction", async () => {
+	test("requires an official remote compaction bridge capability", async () => {
 		const runtime = new ResolverRuntime(
-			capabilities.filter((name) => name !== "portable_context_summary"),
+			capabilities.filter((name) => name !== "remote_compaction_v2" && name !== "compact_endpoint"),
 		);
 		const snapshot = await new ResolveEffectiveCapabilities(runtime).resolve({
 			modelId: "gpt-5.5",
@@ -164,6 +160,5 @@ describe("effective capability application use case", () => {
 			status: "unavailable",
 			reason: "compaction_executor_unavailable",
 		});
-		expect(capabilityContextFromSnapshot(snapshot).portableContextSummary).toBe(false);
 	});
 });

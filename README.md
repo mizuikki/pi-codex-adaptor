@@ -1,131 +1,77 @@
 # pi-codex-adaptor
 
-`pi-codex-adaptor` is a Pi extension that will adapt the public OpenAI Codex `0.144.3`
-protocol and selected runtime modules without running a second agent inside Pi.
+`pi-codex-adaptor` is a private Pi extension for the pinned OpenAI Codex `0.144.3` runtime. Pi
+remains the agent and session owner; the Rust bridge owns Responses transport, native retries, tools,
+and Remote Compaction.
 
-The repository is under active implementation. Protocol v5, the native baseline handshake, official
-Responses SSE/WebSocket transport with connect fallback, `contexts.summarize`, the compact endpoint,
-and exact model metadata resolution are implemented. The versioned configuration store,
-prompt-approved or preauthorized Unified Exec sessions, and `/codex` settings overlay are available.
-The extension registers the native bridge stream for
-`openai-codex` and every configured activated provider id through Pi's public provider API, dispatches
-both supported Responses APIs by exact provider-id activation, and delegates unselected providers directly
-to Pi's public native streams. An activated
-provider uses an isolated Codex core tool profile: Pi's seven core tools are suppressed while
-orthogonal additive external tools remain available, and an unavailable Codex profile fails closed without
-restoring Pi core tools. Deactivation restores the Pi core selection captured at entry. The adaptor
-executes prompt-approved or explicitly preauthorized patches through the official parser, supports workspace image inspection, and
-restores process ownership on session shutdown. The two process-stable stream handlers route by Pi's
-session identity to isolated main or nested-session state. An unrelated extension that replaces
-either supported Responses API remains an explicit registry conflict.
-Inline automatic compaction now runs through the paired Pi `before_provider_payload` transaction.
-When the active context is known to be over threshold, the adaptor may issue a portable summary
-request and commit a real Pi `CompactionEntry` before the provider request is finally dispatched. The
-portable Pi summary plus Pi-materialized `retainedTail` are the durable cross-model boundary; a
-matching Codex identity may additionally reuse an opaque accelerator, while an identity change or
-opaque miss continues from the portable summary. Manual Pi compaction remains Pi-owned and also
-produces a portable-primary Pi entry. Legacy opaque-only automatic and manual checkpoints remain
-readable for exact-identity replay or one-time migration. Both paths use the official
-RemoteCompactionV2 stream when available and otherwise the typed Compact endpoint; the adaptor never
-decrypts opaque content or displays it as prose. The generated `image_gen.imagegen` namespace uses the official Images client for generation
-and workspace-scoped edits, and standalone `web.run` uses the typed Search client. `/codex` offers
-the four settings categories, a manual compact action, compact inline tool rendering, and redacted
-diagnostics export. The package has not been published to npm.
+The adaptor has one compaction operation: `responses.compact`. It selects `remote_v2` when the
+provider advertises it and otherwise selects the official `/responses/compact` client before the
+request starts. A completed result is validated and persisted as an extension-owned Pi `CustomEntry`
+with type `pi-codex-adaptor.remote-compaction`. The entry is invisible to Pi's generic context
+projection. Exact Codex identity can replay the opaque output plus the canonical uncovered suffix;
+identity changes use canonical Pi history, emit one bounded warning, and require a new session when
+that history does not fit. The adaptor never creates a portable summary or retries compaction in
+TypeScript.
+
+Pi session format remains version 3, the common extension ABI remains version 1, and the fork-only
+provider checkpoint capability is independently versioned at `1`. Old adaptor checkpoint formats are
+inert and unsupported for adaptor continuity. Start a new session when installing this clean-slate
+implementation.
 
 ## Development
 
-The pinned development toolchain is Bun `1.3.14`, Node.js `24.18.0`, TypeScript `7.0.2`, and Rust
-`1.95.0`.
+The pinned toolchain is Bun `1.3.14`, Node.js `24.18.0`, TypeScript `7.0.2`, and Rust `1.95.0`.
 
 ```sh
 bun ci
 bun run check
 ```
 
-The check pipeline rebuilds the native sidecar and verifies its protocol identity, typed transport,
-official tool fixtures, app-server schema snapshot, source replay, SBOM, and npm file whitelist.
+The check pipeline validates the protocol identity, native source and artifact provenance, official
+fixtures, clean-slate identifiers, Pi fork consumer, SBOM, and package file allowlist.
 
-## Installation
+## Local installation
 
-The package is private and is installed only from a local source checkout.
-
-### From source (local path)
-
-Pi installs local paths by reference (no copy). Prefer an absolute path. Use `-l` to write project
-settings (`.pi/settings.json`) instead of user settings (`~/.pi/agent/settings.json`).
-
-1. Install dependencies, then build, install, and verify the release bridge for the current host:
+This package is private and is installed from a local checkout. The sibling `../pi` fork is a
+development dependency only; all four Pi SDK packages remain wildcard runtime peers.
 
 ```sh
 bun ci
 bun run native:local
-```
-
-The command requires a clean Git worktree and an unchanged `HEAD`, then infers the host target,
-embeds that Git commit, assembles the executable and `native-artifact.json`, transactionally replaces
-`native/bin/<target>/`, and verifies the checksum and executable identity. A failed verification
-restores the previous installed artifact.
-
-```sh
-bun run native:local -- --debug
-bun run native:local -- --target aarch64-unknown-linux-musl
-bun run native:local -- --check
-```
-
-Cross-target builds verify the manifest and checksum but skip executing the foreign binary.
-
-2. Install into Pi:
-
-```sh
 pi install -l /absolute/path/to/pi-codex-adaptor
-# one-shot without writing settings:
-# pi -e /absolute/path/to/pi-codex-adaptor
 ```
 
-3. Confirm with `pi list`. After install, `/codex` opens the settings overlay. TypeScript changes in
-this checkout apply on Pi restart or `/reload`; native changes require rerunning
-`bun run native:local`.
-
-`package.json` version `0.0.0` enables development bridge handshakes. Packaged launches still require
-a verified `native/bin/<target>/` artifact for the host triple above. `native/artifacts/` alone is not
-enough unless it is copied into `native/bin/`.
-
-Remove with:
+Use `pi remove /absolute/path/to/pi-codex-adaptor -l` to remove it. Verify the paired fork from an
+immutable commit or protected capability tag:
 
 ```sh
-pi remove /absolute/path/to/pi-codex-adaptor -l
+bun run test:pi-fork -- --pi-dir /absolute/path/to/pi --pi-ref <commit-or-tag>
 ```
 
-The product contract, security boundary, and upstream source pin are documented in
-[`PRODUCT_CONTRACT.md`](./PRODUCT_CONTRACT.md) and
-[`docs/official-baseline.md`](./docs/official-baseline.md).
-Capabilities outside the first release are tracked in
-[`docs/remaining-gaps.md`](./docs/remaining-gaps.md).
+The verifier creates an isolated `<temp>/pi` and `<temp>/project`, reads the Pi SDK manifest, checks
+the SHA-256 digest of each of the four SDK tarballs, installs them directly into positive consumers,
+and exercises the real Pi loader with poison packages. It does not publish the package or restore
+registry installation.
 
-This development branch expects the sibling `../pi` host with extension SDK
-API version `1` and provider payload compaction API version `1`. Pi product
-versions do not define compatibility. The local development dependencies are
-`file:../pi/packages/...`; they are never runtime production dependencies.
-Verify a clean immutable Pi SDK ref with
-`bun run test:pi-fork -- --pi-dir ../pi --pi-ref <commit>`. The verifier reads
-Pi's SDK manifest, checks every digest, and creates `<temp>/pi` plus
-`<temp>/project` rather than a repository-local fixture.
+`bun run native:local -- --check` verifies an already installed native artifact. The development
+bridge accepts `0.0.0`; packaged launches require a verified `native/bin/<target>/native-artifact.json`.
 
 ## Configuration and security
 
-The exact schema v2 configuration includes `security.approvalPolicy`, which defaults to `prompt`:
+The only supported configuration file is `~/.pi/agent/pi-codex-adaptor.json`. Its safe default is
+prompt approval. The explicit bypass setting is Pi-owned per-request preauthorization, not an OS
+sandbox; native commands still run with the user's permissions.
 
-```json
-{ "security": { "approvalPolicy": "prompt" } }
-```
+Credentials, prompts, opaque output, account data, and absolute user paths are excluded from logs,
+diagnostics, fixtures, and errors. The package does not implement account usage, rate-limit windows,
+reset-credit handling, or Codex app-server lifecycle features.
 
-The `/codex` Tools settings can explicitly enable `bypass`. This is Pi-owned per-request
-preauthorization for the supported native allowlist, not an OS sandbox: native commands run with the
-user's permissions, and workspace roots do not sandbox shell behavior. Native validation and
-cancellation still apply. Invalid or incomplete configuration is rejected rather than defaulting to
-bypass.
+The product contract, architecture, protocol, and verification evidence are documented in
+[`PRODUCT_CONTRACT.md`](./PRODUCT_CONTRACT.md), [`docs/architecture.md`](./docs/architecture.md),
+[`docs/bridge-protocol.md`](./docs/bridge-protocol.md), and
+[`docs/automatic-compaction-verification.md`](./docs/automatic-compaction-verification.md).
 
 ## License
 
-Project-owned source is licensed under Apache-2.0. Vendored OpenAI Codex source will retain its
-upstream notices and provenance.
+Project-owned source is licensed under Apache-2.0. Vendored OpenAI Codex source retains its upstream
+notices and provenance.

@@ -599,6 +599,7 @@ dependencies = [
  "http",
  "openssl-sys",
  "pi-codex-bridge-protocol",
+ "rand 0.9.3",
  "reqwest",
  "serde",
  "serde_json",

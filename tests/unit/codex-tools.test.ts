@@ -31,10 +31,6 @@ class FixtureRuntime implements CodexRuntime {
 		throw new Error("fixture response execution is not configured");
 	}
 
-	async summarizeContext(): Promise<never> {
-		throw new Error("fixture summary execution is not configured");
-	}
-
 	async compact(): Promise<never> {
 		throw new Error("fixture compaction is not configured");
 	}
@@ -44,7 +40,6 @@ class FixtureRuntime implements CodexRuntime {
 			capabilities: [
 				"responses_sse",
 				"responses_websocket",
-				"portable_context_summary",
 				"remote_compaction_v2",
 				"compact_endpoint",
 				"update_plan",

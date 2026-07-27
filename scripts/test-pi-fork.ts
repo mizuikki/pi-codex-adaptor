@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -25,12 +25,10 @@ const piPackages = [
 const focusedTests = [
 	"tests/smoke/pi-fork-provenance.test.ts",
 	"tests/smoke/tool-surface.test.ts",
-	"tests/unit/codex-compaction-replay.test.ts",
+	"tests/unit/compaction-checkpoint.test.ts",
 	"tests/unit/codex-provider-request-guard.test.ts",
 	"tests/unit/provider-session-router.test.ts",
 	"tests/unit/codex-tool-profile.test.ts",
-	"tests/integration/automatic-compaction-continuation.test.ts",
-	"tests/integration/compaction-failure-ownership.test.ts",
 ] as const;
 
 async function main(): Promise<void> {
@@ -48,6 +46,7 @@ async function main(): Promise<void> {
 		const tarballDirectory = resolve(tempRoot, "tarballs");
 		const projectDirectory = resolve(tempRoot, "project");
 		await copyProject(projectDirectory, tempRoot);
+		await verifyPiLocalInstall(resolve(tempRoot, "pi"), tempRoot, projectDirectory);
 		await installForkConsumer(projectDirectory, sdk.manifestPath, options.piDir);
 		const adaptorTarball = await assembleAndPackAdaptor(projectDirectory, tarballDirectory);
 		await verifyPackagedAdaptorConsumer(tempRoot, sdk.manifestPath, adaptorTarball, options.piDir);
@@ -116,6 +115,7 @@ async function packLocalSdk(options: ForkOptions, tempRoot: string): Promise<Pac
 		capabilities?: {
 			extensionSdkApiVersion?: unknown;
 			providerPayloadCompactionApiVersion?: unknown;
+			providerCheckpointCommitApiVersion?: unknown;
 			compactionFailureResultApiVersion?: unknown;
 		};
 		packages?: { name?: unknown; path?: unknown; sha256?: unknown; version?: unknown }[];
@@ -125,6 +125,7 @@ async function packLocalSdk(options: ForkOptions, tempRoot: string): Promise<Pac
 		typeof manifest.sdkVersion !== "string" ||
 		manifest.capabilities?.extensionSdkApiVersion !== 1 ||
 		manifest.capabilities?.providerPayloadCompactionApiVersion !== 1 ||
+		manifest.capabilities?.providerCheckpointCommitApiVersion !== 1 ||
 		manifest.capabilities?.compactionFailureResultApiVersion !== 1 ||
 		manifest.packages?.length !== piPackages.length
 	) {
@@ -182,6 +183,63 @@ async function copyProject(projectDirectory: string, tempRoot: string): Promise<
 	await run("tar", ["-xf", archive, "-C", projectDirectory]);
 }
 
+async function verifyPiLocalInstall(
+	piDirectory: string,
+	tempRoot: string,
+	projectDirectory: string,
+): Promise<void> {
+	console.log("Verifying Pi's real local install and remove commands.");
+	const cliPath = resolve(piDirectory, "packages/coding-agent/dist/cli.js");
+	const piHome = await mkdtemp(resolve(tempRoot, "pi-home-"));
+	const env = {
+		...process.env,
+		PI_CODING_AGENT_DIR: piHome,
+		PI_OFFLINE: "1",
+		HOME: piHome,
+		CODEX_HOME: resolve(piHome, "codex-home"),
+	};
+	const sourcePath = resolve(projectDirectory);
+	await run(process.execPath, [cliPath, "install", "-l", sourcePath, "--approve"], {
+		cwd: projectDirectory,
+		env,
+	});
+	const settingsPath = resolve(projectDirectory, ".pi", "settings.json");
+	const installedSettings = JSON.parse(await readFile(settingsPath, "utf8")) as {
+		packages?: unknown;
+	};
+	if (
+		!Array.isArray(installedSettings.packages) ||
+		!(
+			await Promise.all(
+				installedSettings.packages
+					.filter((entry): entry is string => typeof entry === "string")
+					.map(async (entry) => {
+						try {
+							return (
+								(await realpath(resolve(projectDirectory, ".pi", entry))) ===
+								(await realpath(sourcePath))
+							);
+						} catch {
+							return false;
+						}
+					}),
+			)
+		).some(Boolean)
+	) {
+		throw new Error("Pi local install did not persist the absolute adaptor source");
+	}
+	await run(process.execPath, [cliPath, "remove", sourcePath, "-l", "--approve"], {
+		cwd: projectDirectory,
+		env,
+	});
+	const removedSettings = JSON.parse(await readFile(settingsPath, "utf8")) as {
+		packages?: unknown;
+	};
+	if (Array.isArray(removedSettings.packages) && removedSettings.packages.length !== 0) {
+		throw new Error("Pi local remove did not clear the adaptor source");
+	}
+}
+
 async function installForkConsumer(
 	projectDirectory: string,
 	manifestPath: string,
@@ -190,9 +248,13 @@ async function installForkConsumer(
 	console.log(
 		"Installing the adaptor copy, then replacing its SDK with verified manifest tarballs.",
 	);
-	await run(process.execPath, ["install", "--ignore-scripts", "--no-save"], {
-		cwd: projectDirectory,
-	});
+	await run(
+		"npm",
+		["install", "--ignore-scripts", "--legacy-peer-deps", "--no-save", "--no-fund", "--no-audit"],
+		{
+			cwd: projectDirectory,
+		},
+	);
 	const packageJsonPath = resolve(projectDirectory, "package.json");
 	const packageJson = JSON.parse(await readFile(packageJsonPath, "utf8")) as {
 		devDependencies?: Record<string, string>;
@@ -319,13 +381,10 @@ async function verifyPackagedProviderDispatch(
 ): Promise<void> {
 	console.log("Driving provider dispatch through the installed adaptor tarball.");
 	const sourceTest = await readFile(
-		resolve(repositoryRoot, "tests/integration/automatic-compaction-continuation.test.ts"),
+		resolve(repositoryRoot, "tests/smoke/tool-surface.test.ts"),
 		"utf8",
 	);
-	const testPath = resolve(
-		packageRoot,
-		"tests/integration/automatic-compaction-continuation.test.ts",
-	);
+	const testPath = resolve(packageRoot, "tests/smoke/tool-surface.test.ts");
 	await mkdir(dirname(testPath), { recursive: true });
 	await writeFile(testPath, sourceTest);
 	await run(process.execPath, ["test", testPath], {

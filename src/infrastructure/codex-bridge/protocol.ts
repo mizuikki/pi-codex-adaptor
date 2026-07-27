@@ -69,7 +69,6 @@ export const NativeAuthorizationSchema = Type.Union([
 export type NativeAuthorization = Type.Static<typeof NativeAuthorizationSchema>;
 
 const RequestMethod = Type.Union([
-	Type.Literal("contexts.summarize"),
 	Type.Literal("responses.create"),
 	Type.Literal("responses.compact"),
 	Type.Literal("models.resolve"),
@@ -168,7 +167,6 @@ export const ClientMessageSchema = Type.Union([
 const BridgeCapability = Type.Union([
 	Type.Literal("responses_sse"),
 	Type.Literal("responses_websocket"),
-	Type.Literal("portable_context_summary"),
 	Type.Literal("remote_compaction_v2"),
 	Type.Literal("compact_endpoint"),
 	Type.Literal("model_metadata"),

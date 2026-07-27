@@ -31,6 +31,7 @@ pub struct ApiConnection {
     pub transport: ReqwestTransport,
     pub provider: Provider,
     pub authentication: SharedAuthProvider,
+    pub max_retries: u32,
     pub websocket_connect_timeout: Duration,
 }
 
@@ -117,6 +118,7 @@ pub fn connect(connection: &ProviderConnection) -> Result<ApiConnection, BridgeE
             stream_idle_timeout,
         },
         authentication: Arc::new(authentication_provider),
+        max_retries,
         websocket_connect_timeout,
     })
 }

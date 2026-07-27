@@ -1,17 +1,14 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { Api, Model, Usage } from "@earendil-works/pi-ai";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import type {
 	ExtensionAPI,
 	ExtensionContext,
-	SessionCompactEvent,
+	ProviderCheckpointProposal,
+	ProviderCompactionCommitToken,
 	SessionEntry,
 } from "@earendil-works/pi-coding-agent";
 
 export type ProviderRequestOrigin = "agent" | "compaction_summary" | "branch_summary";
-
-export interface ProviderCompactionCommitToken {
-	readonly providerPayloadCompactionCommitToken: unique symbol;
-}
 
 export interface ProviderPayloadAttribution {
 	readonly sessionId: string;
@@ -24,13 +21,7 @@ export interface ProviderPayloadAttribution {
 	};
 }
 
-export interface ProviderCompactionProposal {
-	readonly token: ProviderCompactionCommitToken;
-	readonly summary: string;
-	readonly tokensBefore: number;
-	readonly usage?: Usage;
-	readonly details?: unknown;
-}
+export type { ProviderCheckpointProposal, ProviderCompactionCommitToken };
 
 export interface BeforeProviderPayloadEvent {
 	readonly type: "before_provider_payload";
@@ -41,14 +32,7 @@ export interface BeforeProviderPayloadEvent {
 
 export interface BeforeProviderPayloadEventResult {
 	readonly payload: unknown;
-	readonly compaction?: ProviderCompactionProposal;
-}
-
-export interface ProviderPayloadSessionCompactEvent extends SessionCompactEvent {
-	readonly trigger: "manual" | "threshold" | "overflow" | "provider_inline";
-	readonly compactionEntry: SessionCompactEvent["compactionEntry"] & {
-		readonly retainedTail?: readonly AgentMessage[];
-	};
+	readonly providerCheckpoint?: ProviderCheckpointProposal;
 }
 
 type BeforeProviderPayloadHandler = (
@@ -58,14 +42,6 @@ type BeforeProviderPayloadHandler = (
 	| Promise<BeforeProviderPayloadEventResult | undefined>
 	| BeforeProviderPayloadEventResult
 	| undefined;
-type ProviderPayloadSessionCompactHandler = (
-	event: ProviderPayloadSessionCompactEvent,
-	ctx: ExtensionContext,
-) => void;
-type ProviderPayloadCompactionIndeterminateHandler = (
-	event: { readonly type: "session_compact_indeterminate" },
-	ctx: ExtensionContext,
-) => void;
 
 interface SessionManagerWithFullActivePathSnapshot {
 	getFullActivePathSnapshot(): readonly SessionEntry[];
@@ -80,28 +56,6 @@ export function onBeforeProviderPayload(
 		handler: BeforeProviderPayloadHandler,
 	) => void;
 	on("before_provider_payload", handler);
-}
-
-export function onProviderPayloadSessionCompact(
-	pi: ExtensionAPI,
-	handler: ProviderPayloadSessionCompactHandler,
-): void {
-	const on = pi.on as unknown as (
-		event: "session_compact",
-		handler: ProviderPayloadSessionCompactHandler,
-	) => void;
-	on("session_compact", handler);
-}
-
-export function onProviderPayloadCompactionIndeterminate(
-	pi: ExtensionAPI,
-	handler: ProviderPayloadCompactionIndeterminateHandler,
-): void {
-	const on = pi.on as unknown as (
-		event: "session_compact_indeterminate",
-		handler: ProviderPayloadCompactionIndeterminateHandler,
-	) => void;
-	on("session_compact_indeterminate", handler);
 }
 
 export function fullActivePathSnapshot(

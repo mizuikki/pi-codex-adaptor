@@ -14,8 +14,9 @@ whose declared compatibility does not match its required runtime host.
 
 Treat the adaptor as a private local extension for the sibling Pi fork. Direct Pi SDK imports remain
 wildcard peers; development dependencies resolve from `file:../pi/packages/...`. The Pi host must
-advertise extension SDK API version `1` and provider payload compaction API version `1` before the
-adaptor registers providers.
+advertise extension SDK API version `1`, provider payload compaction API version `1`, and provider
+checkpoint commit API version `1` with `setProviderCheckpointUsageBoundary` before the adaptor
+registers providers.
 
 Install the extension only as a local Pi source. Remove npm publication, GitHub Release, and Release
 Please automation. Package assembly remains available only for manifest-driven isolated consumer

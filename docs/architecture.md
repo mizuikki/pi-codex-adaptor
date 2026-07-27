@@ -1,7 +1,7 @@
 # Architecture
 
-The repository is a single npm package with a TypeScript extension and a Rust sidecar. Dependencies
-flow in one direction:
+The repository is one Pi package with a TypeScript extension and a Rust sidecar. Dependencies flow
+in one direction:
 
 ```text
 src/extension.ts
@@ -10,142 +10,86 @@ src/extension.ts
 └── infrastructure/codex-bridge ──> native/codex-bridge
                                            |
                                            v
-                              vendored OpenAI Codex modules
+                              selected vendored Codex modules
 ```
 
-`src/extension.ts` is the composition root. Application ports describe approvals, bridge transport,
-configuration persistence, and Pi-facing view models. Infrastructure implements those ports. Domain
-and application modules do not instantiate network, filesystem, terminal, or child-process clients.
+The composition root wires one `CodexRuntime`, configuration service, activation policy, capability
+resolver, tool-profile coordinator, request guard, compaction coordinator, and diagnostics exporter.
+Domain and application code do not import Pi, terminal UI, filesystem, HTTP, or native process
+implementations. Pi-specific types stay in `src/integration/pi` and UI code.
 
-The TypeScript/native boundary is a bounded, versioned JSONL protocol. OpenAI wire types and tool
-specifications have one native source of truth. TypeScript validates only adaptor-owned envelopes and
-does not maintain a second Responses schema.
+## Native boundary
 
-`ResolveEffectiveCapabilities` is the application-owned authority for one selected model, provider,
-verified bridge identity, and configuration fingerprint. Provider requests, Pi tool activation,
-compaction, settings, validation, status, and diagnostics consume the same cached snapshot. Native
-`models.resolve` owns model metadata and native `tools.resolve` owns exact model-visible and dispatch
-tool schemas; TypeScript does not reconstruct either result.
+TypeScript communicates with Rust only through the bounded protocol version 6. The bridge methods are
+`responses.create`, `responses.compact`, `models.resolve`, `tools.resolve`, `tools.execute`, and
+`diagnostics.read`. Native code owns Responses request construction, SSE/WebSocket parsing, compact
+endpoint calls, retry classification, backoff, cancellation, PTY/session handling, and patch
+execution. TypeScript validates only adaptor-owned envelopes and checkpoint data.
 
-The Pi integration owns a reversible Codex tool-profile controller. It captures the active Pi core
-selection on entry, suppresses those core routes while the provider is active, preserves additive
-external tools, and restores the captured subset on deactivation or shutdown. A shared readiness
-state and additive-tool selection policy are passed to both Responses and compaction assembly, so a
-pending, unavailable, or ownership-conflicted profile cannot dispatch a partial or hybrid surface.
+The native bridge is built from the pinned official Codex source closure. The official version, tag,
+peeled commit, vendor tree hash, target, and source commit are immutable handshake fields. Vendor
+changes require the allowlist, source hashes, tree hash, license inventory, SBOM, and replayable patch
+list to change together.
 
-The Pi integration also owns deterministic request-time normalization of complete context-message
-sequences. Before typed response-item projection, it pairs assistant tool calls with recorded Pi tool
-results and inserts this fixed error for each unresolved call:
+## Capability resolution
+
+`ResolveEffectiveCapabilities` is the application authority for one model, provider, configuration
+fingerprint, and verified bridge handshake. It selects `remote_v2` or `compact_endpoint` before a
+compaction operation begins. Activation also requires the Pi extension ABI markers,
+`providerPayloadCompactionApiVersion: 1`, `providerCheckpointCommitApiVersion: 1`, and the native
+Remote Compaction capability. A missing stacked capability fails before provider registration.
+
+The same snapshot drives provider requests, tool activation, compaction, settings validation, status,
+and diagnostics. TypeScript does not reconstruct official model metadata or tool schemas.
+
+## Pi integration
+
+Provider registration is process-stable, while execution is session-affine. The router selects one
+session lease by Pi session ID and rejects missing, stale, or ambiguous routes locally. The tool
+profile captures Pi's active core tools, suppresses them while Codex is active, preserves additive
+external tools, and restores the captured selection on deactivation or shutdown.
+
+The provider request guard records one live session/model/connection/request identity and one Pi
+provider commit token. The `before_provider_payload` hook may return one sealed payload and either the
+existing textual proposal or one provider checkpoint proposal. Pi appends and verifies a custom entry
+before dispatch. A stale, forged, reused, cancelled, or indeterminate transaction blocks dispatch.
+
+## Canonical history and checkpoints
+
+Pi's ordinary session entries remain the canonical provider-neutral history. A remote checkpoint is an
+extension-owned cache of one covered active-branch prefix, stored in a context-invisible `CustomEntry`.
+Pi does not parse Codex identity fields or opaque response items and does not add a session entry type
+or session-format version.
+
+For an exact checkpoint identity, the adaptor selects the latest valid version-one entry on the active
+branch and builds:
 
 ```text
-Tool result was not recorded. The tool may have partially executed; inspect state before retrying.
+checkpoint.output + canonical projection of entries after coveredEntryId
 ```
 
-The normalizer is pure and operation-local. It neither changes Pi session entries nor executes tools.
-Normal Responses, manual compaction, automatic checkpoint replay, and standalone web context all use
-the same projector. Automatic replay batches consecutive message-bearing entries before projection,
-so a call entry and its later result entry are normalized as one sequence. Explicit canonical opaque
-compaction items remain projection boundaries.
+Checkpoint metadata and all context-invisible entries are excluded from the suffix. Identity mismatch
+uses the canonical payload and emits one bounded warning. Removing the adaptor leaves canonical Pi
+history available. Older adaptor schemas are inert; no reader, writer, migration, or fallback branch
+exists in production code.
 
-Pi provider registration has process identity but provider execution has session identity. The Pi
-integration installs process-stable dispatchers for both supported API ids and routes each request by
-Pi's non-empty stream `sessionId` to exactly one weak session lease. The selected lease retains the
-session-local activation, tool profile, capability resolver, compaction state, fallback choice, and
-native runtime. Missing or ambiguous attribution fails locally, and lifecycle cleanup is token
-scoped so one session cannot remove another session's binding. The router is the only intentional
-`globalThis` state and owns none of the session-local services.
+## Compaction state machine
 
-Automatic compaction is a provider-hook operation, not a Pi turn operation. After the selected
-dispatcher constructs a request, its extension-local `CodexProviderRequestGuard` opens one
-single-use `AsyncLocalStorage` record around the awaited public `onPayload` chain. The registered
-`before_provider_payload` handler reads that record, verifies the routed and hook-context session
-ids, projects `buildContextEntries()` through Pi's exported `sessionEntryToContextMessages()`, and
-structurally matches the resulting input to the exact provider payload. It replays the latest
-matching opaque accelerator, migrates legacy opaque-only checkpoints when necessary, or performs one
-portable-summary-plus-compact attempt before returning the rewritten payload proposal. The live tail
-is cloned from the hook payload, so in-flight provider items that Pi has not persisted are not
-reconstructed from session entries. The projection includes Pi's public `convertToLlm()`
-normalization. When an inline checkpoint supersedes an older manual checkpoint, replay matches the
-provider's model-facing compaction marker before replacing the covered prefix with the newer output.
-Both the provider ledger and active-branch candidate pass through the same interrupted-call
-normalizer before structural comparison.
+Manual and overflow `session_before_compact` handlers call the native remote operation once and return
+one provider-checkpoint result. Threshold preparation returns a handled cancellation so the inline
+provider hook remains authoritative. The hook replays an exact checkpoint when the suffix is clean or
+below threshold, and otherwise performs one remote operation and returns a sealed payload plus one
+proposal. Native retry completes before the proposal exists. Pi commits before provider dispatch and
+settles overflow lifecycle before its existing one-time turn retry.
 
-Automatic compactions now commit real Pi `CompactionEntry` records through the paired Pi transaction.
-Pi validates the token-bound leaf and retained-tail snapshot, persists the entry, emits the committed
-event, and only then allows the provider request to continue. The adaptor still keeps legacy custom
-automatic checkpoints readable for exact-identity replay or one-time migration, but it no longer
-writes them for new compactions. Manual and overflow compaction remain Pi-owned commit paths; the
-adaptor supplies portable-primary version `3` details with an optional provider-bound opaque
-accelerator. Neither path performs client-side decryption; the pinned native typed projection limits
-the retained opaque item.
+After a verified checkpoint, the Pi usage epoch is unknown until a later valid assistant usage. The
+adaptor restores or clears the epoch by active-branch custom entry ID on session start, model/provider
+changes, reload, fork, and tree selection. This is state about a boundary, not opaque data parsing.
 
-Activation is also the manual and overflow failure-ownership boundary. Once the selected provider
-activates Codex compaction, every setup, native, status, or output-validation failure returns terminal
-cancellation to Pi, clears the session coordinator, and writes no compaction state. The handler does
-not throw into Pi's session-unattributed default summarizer. Explicit abort, native abort, threshold
-cancellation, and coordinator contention remain non-error cancellation paths; inactive providers
-remain Pi-owned.
+## Privacy and verification
 
-Provider failure ownership is split across three layers. Native bridge code classifies transport and
-provider failures and emits one bounded provider diagnostic on protocol v5 `BridgeError`; it keeps
-the existing category, code, and retryability. `src/integration/pi` forwards only a trusted decoded
-`BridgeRemoteError` message to Pi's string-only assistant or compaction-error paths, retaining Pi's
-stable retryable prefix without retrying, reconnecting, or issuing a second `createResponse` call.
-For normal agent turns, Pi alone decides whether to remove the failed assistant message and restart
-the turn under its existing retry settings. Pi's feature-specific compaction-failure-result API v1
-converts an extension compaction failure into one `compaction_end` error before
-cancellation/default-compactor handling.
-
-When `remote_v2` is selected, the host sends the same Pi session id with each eligible compact,
-portable-summary, and later Responses request from that session. Compaction also declares its `auto`
-or `manual` trigger. The native bridge derives the request-scoped Codex session, thread, window,
-beta-feature, and turn metadata for both SSE and WebSocket transport. This context is transient
-transport state: it neither changes Pi's durable checkpoint format nor creates bridge-owned durable
-session state.
-
-Pi owns the persistent approval policy and maps one validated snapshot to one explicit authorization
-value on each native request. The integration layer never infers bypass from UI availability and does
-not cache authorization across calls. Native code owns the explicit allowlist, strict decoding,
-workspace and provider validation, cancellation checks, approval state, and side-effect commit points.
-Bypass removes only the interactive approval wait; it does not provide an OS sandbox.
-
-## Module ownership
-
-| Module | Owns | Must not own |
-| --- | --- | --- |
-| `src/domain` | Configuration and capability semantics, value objects, terminal states, redaction policy | Pi, TUI, HTTP, filesystem |
-| `src/application` | Use cases and ports | Concrete UI or process implementations |
-| `src/integration/pi` | Pi lifecycle, session-affine provider routing, request approval, activation, reversible tool profiles, opaque checkpoint replay, message and tool binding | Rust internals, handwritten OpenAI schemas, or process-global native runtime state |
-| `src/infrastructure/codex-bridge` | Sidecar discovery, lifecycle, JSONL codec, cancellation | HTTP details or Pi UI |
-| `src/infrastructure/diagnostics` | Confirmed redacted diagnostic-file export | Provider transport or Pi UI |
-| `src/ui/terminal` | `/codex`, settings view models, inline renderers | Provider transport details |
-| `native/crates/codex-bridge` | Official clients and native tool execution | Pi types or settings UI |
-| `native/official` | Generated build wrappers for the allowlisted official source closure | Product behavior or Pi types |
-| `native/vendor/openai-codex` | Unmodified pinned upstream files | Project business logic |
-
-Shared code must have a clear owner. The project does not use a general-purpose `utils` layer.
-
-## Dependency boundary check
-
-`bun run check:architecture` scans `src/domain` and `src/application` for forbidden imports.
-Those layers may not import Pi packages, terminal UI modules, filesystem or HTTP clients, native
-process APIs, or infrastructure implementations. Domain may import only domain modules. Application
-may import only application and domain modules. The check is part of `bun run check`.
-
-## Packaged sidecar integrity
-
-Before a non-development packaged `codex-bridge` is spawned, `src/infrastructure/codex-bridge/binary.ts`
-reads the target-scoped `native-artifact.json`, validates schema, target, executable name, project
-source commit, official baseline, vendor tree hash, and bridge protocol version, then streams the
-executable through SHA-256 and compares size and digest. The verified project source commit is passed
-into handshake verification. Missing or tampered manifests and binaries fail closed with a safe
-`BridgeLoaderError` before process execution. Explicit development or test executable overrides
-require `allowDevelopmentBuild: true` and cannot silently skip production verification of packaged
-artifacts.
-
-## Privacy redaction
-
-`src/domain/redaction.ts` owns the reusable redaction policy for logs and diagnostics. It replaces
-tokens, authorization headers, user content fields, absolute user paths, and opaque compaction
-payloads with fixed placeholders. Bounded provider diagnostics are deliberately visible only in Pi's
-live assistant and compaction error surfaces and are not copied into diagnostics.
+Credentials, prompts, account data, opaque output, headers, and absolute paths are bounded or redacted
+before logs, diagnostics, fixtures, snapshots, and errors. The package verifier checks native artifact
+manifests and package allowlists. The fork verifier reads the Pi manifest, verifies every SDK tarball
+SHA-256, installs all four SDK tarballs directly into positive consumers, and probes the real Pi loader
+with poison packages in isolated temporary `pi` and `project` directories.

@@ -52,6 +52,8 @@ describe("extension entry point", () => {
 			piCodexAdaptor({
 				extensionSdkApiVersion: 1,
 				providerPayloadCompactionApiVersion: 1,
+				providerCheckpointCommitApiVersion: 1,
+				setProviderCheckpointUsageBoundary: () => true,
 				registerCommand: () => {},
 			} as never),
 		).rejects.toThrow("Pi host is incompatible: requires compaction failure result API version 1");
@@ -83,7 +85,9 @@ function registrationFixture(): {
 		api: {
 			extensionSdkApiVersion: 1,
 			providerPayloadCompactionApiVersion: 1,
+			providerCheckpointCommitApiVersion: 1,
 			compactionFailureResultApiVersion: 1,
+			setProviderCheckpointUsageBoundary: () => true,
 			registerCommand: (name: string) => commands.push(name),
 			registerProvider: (name: string, config: ProviderConfig) => {
 				providers.push({ name, config });
