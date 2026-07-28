@@ -2,7 +2,7 @@
   "schema_version": 1,
   "official_version": "0.144.3",
   "official_source_commit": "78ad6e6bfd1d3b6a209acd3ef82172a96b25179c",
-  "cargo_lock_sha256": "656a8c4ae0ab0797e929b0b0dddfb7cc017beb3f61db4330068d34fb895e8191",
+  "cargo_lock_sha256": "6cce338cd0c7e6d5233f20725a79a99892d9ffa2857ceb79e7f525e74a88b3fe",
   "root": "codex-bridge@0.0.0:244210e48437",
   "packages": [
     {
@@ -744,6 +744,7 @@
         "http@1.4.0:c19b7c6f923b",
         "openssl-sys@0.9.117:c19b7c6f923b",
         "pi-codex-bridge-protocol@0.0.0:244210e48437",
+        "rand@0.9.3:c19b7c6f923b",
         "reqwest@0.12.28:c19b7c6f923b",
         "serde@1.0.228:c19b7c6f923b",
         "serde_json@1.0.149:c19b7c6f923b",

@@ -76,8 +76,6 @@ export interface ConfigCapabilityContext {
 	remoteCompactionV2?: boolean;
 	/** Whether the compact endpoint is available. */
 	compactEndpoint?: boolean;
-	/** Whether the bridge supports native portable context summarization. */
-	portableContextSummary?: boolean;
 	/** Effective route results resolved from the same snapshot used by requests and Pi tools. */
 	backgroundSessionsAvailable?: boolean;
 	viewImageAvailable?: boolean;
@@ -282,20 +280,6 @@ function collectCapabilityIssues(
 		compaction.mode === "auto" &&
 		context.manualCompactionAvailable === undefined &&
 		capabilities !== undefined &&
-		!capabilities.has("portable_context_summary")
-	) {
-		issue(
-			issues,
-			"codex.compaction.mode",
-			"unsupported_capability",
-			"Unavailable: bridge does not advertise portable context summary",
-		);
-	}
-
-	if (
-		compaction.mode === "auto" &&
-		context.manualCompactionAvailable === undefined &&
-		capabilities !== undefined &&
 		!capabilities.has("remote_compaction_v2") &&
 		!capabilities.has("compact_endpoint")
 	) {
@@ -312,7 +296,6 @@ function collectCapabilityIssues(
 		context.manualCompactionAvailable === undefined &&
 		context.remoteCompactionV2 === false &&
 		context.compactEndpoint === false &&
-		context.portableContextSummary !== false &&
 		(capabilities === undefined ||
 			capabilities.has("remote_compaction_v2") ||
 			capabilities.has("compact_endpoint"))
@@ -322,20 +305,6 @@ function collectCapabilityIssues(
 			"codex.compaction.mode",
 			"unsupported_capability",
 			"Unavailable: provider has no official compaction path",
-		);
-	}
-
-	if (
-		compaction.mode === "auto" &&
-		context.manualCompactionAvailable === undefined &&
-		context.portableContextSummary === false &&
-		(capabilities === undefined || capabilities.has("portable_context_summary"))
-	) {
-		issue(
-			issues,
-			"codex.compaction.mode",
-			"unsupported_capability",
-			"Unavailable: bridge does not advertise portable context summary",
 		);
 	}
 
@@ -564,15 +533,6 @@ function evaluateCompaction(
 			availability: { status: "unsupported", reason: "Unavailable: no complete route exists" },
 		};
 	}
-	if (capabilities !== undefined && !capabilities.has("portable_context_summary")) {
-		return {
-			path,
-			availability: {
-				status: "unsupported",
-				reason: "Unavailable: bridge does not advertise portable context summary",
-			},
-		};
-	}
 	if (
 		capabilities !== undefined &&
 		!capabilities.has("remote_compaction_v2") &&
@@ -592,15 +552,6 @@ function evaluateCompaction(
 			availability: {
 				status: "unsupported",
 				reason: "Unavailable: provider has no official compaction path",
-			},
-		};
-	}
-	if (context.portableContextSummary === false) {
-		return {
-			path,
-			availability: {
-				status: "unsupported",
-				reason: "Unavailable: bridge does not advertise portable context summary",
 			},
 		};
 	}

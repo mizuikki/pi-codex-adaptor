@@ -77,6 +77,7 @@ export function registerCodexTools(
 	): Promise<void> => {
 		const generation = ++activationGeneration;
 		const selected = ctx.model;
+		const hostToolNames = profile.registeredManagedTools();
 		const activeBeforeLoad = selected !== undefined && providerActive(selected, configOverride);
 		let shouldFailClosed = activeBeforeLoad;
 		const selectedIdentity = modelProfileIdentity(selected);
@@ -87,6 +88,7 @@ export function registerCodexTools(
 						providerId: selected.provider,
 						config: configOverride,
 						contextWindow: selected.contextWindow,
+						hostToolNames,
 					})
 				: undefined;
 		if (!activeBeforeLoad) {
@@ -127,6 +129,7 @@ export function registerCodexTools(
 				providerId: selected.provider,
 				config,
 				contextWindow: selected.contextWindow,
+				hostToolNames,
 			};
 			const capabilityKey = capabilityCacheKey(capabilityInput);
 			if (profile.isHealthy(capabilityKey)) {

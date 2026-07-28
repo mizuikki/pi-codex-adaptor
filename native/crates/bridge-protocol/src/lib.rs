@@ -13,12 +13,12 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 /// Current bridge protocol version.
-pub const BRIDGE_PROTOCOL_VERSION: u32 = 5;
+pub const BRIDGE_PROTOCOL_VERSION: u32 = 6;
 
 /// Maximum JSON payload size for one JSONL frame, excluding the line terminator.
 pub const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
 
-/// Maximum number of unacknowledged stream events advertised by protocol v5.
+/// Maximum number of unacknowledged stream events advertised by protocol v6.
 pub const MAX_PENDING_EVENTS: u32 = 256;
 
 /// Official Codex release used by the native implementation.
@@ -147,8 +147,6 @@ pub enum ProviderAuthentication {
 /// Multiplexed operations supported by the bridge protocol.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum RequestMethod {
-    #[serde(rename = "contexts.summarize")]
-    ContextsSummarize,
     #[serde(rename = "responses.create")]
     ResponsesCreate,
     #[serde(rename = "responses.compact")]
@@ -182,13 +180,13 @@ pub enum NativeAuthorization {
 }
 
 impl ApprovalDecision {
-    /// Decisions advertised on every approval request in protocol v5.
+    /// Decisions advertised on every approval request in protocol v6.
     ///
     /// Order is intentional: Decline, Cancel, then `AllowOnce`. Session-scoped allow is never
     /// advertised because Pi has no session approval policy surface.
     pub const ADVERTISED: [Self; 3] = [Self::Decline, Self::Cancel, Self::AllowOnce];
 
-    /// Returns whether this decision is advertised to Pi for protocol v5 approvals.
+    /// Returns whether this decision is advertised to Pi for protocol v6 approvals.
     #[must_use]
     pub const fn is_advertised(self) -> bool {
         matches!(self, Self::Decline | Self::Cancel | Self::AllowOnce)
@@ -264,7 +262,6 @@ pub struct BridgeHandshake {
 pub enum BridgeCapability {
     ResponsesSse,
     ResponsesWebsocket,
-    PortableContextSummary,
     RemoteCompactionV2,
     CompactEndpoint,
     ModelMetadata,
@@ -387,7 +384,7 @@ impl Error for ProtocolCodecError {
 /// # Errors
 ///
 /// Returns [`ProtocolCodecError`] when the frame is empty, oversized, contains more than one record,
-/// or does not match the protocol v5 client envelope.
+/// or does not match the protocol v6 client envelope.
 pub fn decode_client_frame(frame: &[u8]) -> Result<ClientMessage, ProtocolCodecError> {
     decode_frame(frame)
 }
@@ -397,7 +394,7 @@ pub fn decode_client_frame(frame: &[u8]) -> Result<ClientMessage, ProtocolCodecE
 /// # Errors
 ///
 /// Returns [`ProtocolCodecError`] when the frame is empty, oversized, contains more than one record,
-/// or does not match the protocol v5 server envelope.
+/// or does not match the protocol v6 server envelope.
 pub fn decode_server_frame(frame: &[u8]) -> Result<ServerMessage, ProtocolCodecError> {
     decode_frame(frame)
 }
@@ -476,7 +473,7 @@ mod tests {
 
     #[test]
     fn decodes_every_recorded_client_contract_frame() {
-        let fixture = include_bytes!("../../../../fixtures/bridge-protocol/client-v5.jsonl");
+        let fixture = include_bytes!("../../../../fixtures/bridge-protocol/client-v6.jsonl");
 
         for line in fixture.split_inclusive(|byte| *byte == b'\n') {
             decode_client_frame(line).expect("client fixture frame should decode");
@@ -485,7 +482,7 @@ mod tests {
 
     #[test]
     fn decodes_every_recorded_server_contract_frame() {
-        let fixture = include_bytes!("../../../../fixtures/bridge-protocol/server-v5.jsonl");
+        let fixture = include_bytes!("../../../../fixtures/bridge-protocol/server-v6.jsonl");
 
         for line in fixture.split_inclusive(|byte| *byte == b'\n') {
             decode_server_frame(line).expect("server fixture frame should decode");
@@ -596,5 +593,22 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn previous_protocol_fixture_is_not_the_current_startup_contract() {
+        let fixture = include_bytes!("../../../../fixtures/bridge-protocol/client-v5.jsonl");
+        let initialize = fixture
+            .split_inclusive(|byte| *byte == b'\n')
+            .next()
+            .expect("previous client fixture should contain initialization");
+        let ClientMessage::Initialize {
+            protocol_version, ..
+        } = decode_client_frame(initialize)
+            .expect("initialization envelope should remain readable")
+        else {
+            panic!("previous fixture should begin with initialization");
+        };
+        assert_ne!(protocol_version, BRIDGE_PROTOCOL_VERSION);
     }
 }

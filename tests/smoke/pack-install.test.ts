@@ -20,7 +20,7 @@ describe("exact npm tarball smoke", () => {
 			new Response(assemble.stdout).text(),
 		]);
 		expect(assembleCode).toBe(0);
-		expect(await readdir(resolve(repositoryRoot, "dist/package"))).not.toContain("native");
+		expect(await readdir(resolve(repositoryRoot, "dist/package"))).toContain("native");
 
 		const pack = Bun.spawn(["npm", "pack", "./dist/package", "--json"], {
 			cwd: repositoryRoot,

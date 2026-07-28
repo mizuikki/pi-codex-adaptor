@@ -16,6 +16,7 @@ import {
 import { CodexCompactionStore } from "../../src/application/compaction.ts";
 import type { ConfigurationService } from "../../src/application/configuration.ts";
 import { ProviderActivationPolicy } from "../../src/application/provider-activation.ts";
+import { MANAGED_TOOL_NAMES } from "../../src/domain/capability.ts";
 import { createDefaultConfig } from "../../src/domain/config.ts";
 import { INTERRUPTED_TOOL_RESULT_TEXT } from "../../src/integration/pi/codex-message-normalization.ts";
 import {
@@ -49,6 +50,7 @@ function healthyProfile(): CodexToolProfileCoordinator {
 	return {
 		readiness: { kind: "healthy", capabilityKey: "interruption-integration" },
 		skillLoader: undefined,
+		registeredManagedTools: () => MANAGED_TOOL_NAMES,
 		enterPending: () => {},
 		installHealthy: () => true,
 		installUnavailable: () => {},

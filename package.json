@@ -40,7 +40,7 @@
   },
   "scripts": {
     "check": "bun run check:core && bun run pack:verify",
-    "check:core": "bun run lint && bun run typecheck && bun run check:architecture && bun run check:native && bun test && bun run check:toolchain && bun run check:app-server-schema && bun run check:upstream && bun run check:official-workspace && bun run check:sbom && bun run test:official",
+    "check:core": "bun run lint && bun run typecheck && bun run check:architecture && bun run check:clean-slate && bun run check:native && bun test && bun run check:toolchain && bun run check:app-server-schema && bun run check:upstream && bun run check:official-workspace && bun run check:sbom && bun run test:official",
     "lint": "biome check .",
     "format": "biome check --write .",
     "typecheck": "tsc -p tsconfig.json --noEmit",
@@ -59,6 +59,7 @@
     "pack:prepare-local": "bun scripts/assemble-package.ts",
     "pack:verify": "bun scripts/verify-package.ts",
     "check:architecture": "bun scripts/check-architecture.ts",
+    "check:clean-slate": "bun scripts/check-clean-slate-compaction.ts",
     "test:integration": "bun test tests/integration",
     "test:smoke": "bun test tests/smoke",
     "test:pi-fork": "bun scripts/test-pi-fork.ts"

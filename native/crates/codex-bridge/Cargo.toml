@@ -27,6 +27,7 @@ http.workspace = true
 openssl-sys.workspace = true
 pi-codex-bridge-protocol = { path = "../bridge-protocol" }
 reqwest.workspace = true
+rand.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

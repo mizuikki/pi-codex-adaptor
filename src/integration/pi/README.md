@@ -1,60 +1,43 @@
 # Pi Integration
 
-Pi lifecycle, provider activation, message conversion, approval binding, and tool result routing
-belong here.
+This layer owns Pi lifecycle wiring, provider activation, request attribution, message conversion,
+approval binding, tool-profile isolation, and extension-owned Remote Compaction checkpoints.
 
-The Codex tool-profile controller owns the Pi host boundary for core-tool isolation. On activation it
-captures the currently active Pi core subset, suppresses all seven Pi core names, and installs only
-the registered native managed tools resolved for the selected capability snapshot. Additive external
-tools retain their current order. Pending, unavailable, and ownership-conflicted states keep Pi core
-tools suppressed; deactivation and shutdown restore only the captured core subset while preserving
-current additive changes.
+Provider registration is process stable, but each dispatch is selected by the current Pi session ID.
+Missing, stale, or ambiguous routes fail locally. The tool-profile coordinator suppresses Pi's core
+tools while an activated Codex profile is healthy, preserves additive external tools, and restores
+the captured selection on deactivation or shutdown.
 
-Responses and compaction share the same additive-tool selection policy and require matching healthy
-profile readiness before native dispatch. Pi prompt rebuilding remains authoritative: registered
-Codex tools provide short host snippets, and a healthy profile appends structured model-invocable
-skill locations with the resolved shell loader without replacing Pi's assembled prompt.
+The provider request guard supplies one live session/model/connection record and one Pi commit token.
+The `before_provider_payload` hook may return a sealed payload and one provider checkpoint proposal.
+Pi appends and reads back the context-invisible custom entry before provider dispatch. Stale, forged,
+reused, cancelled, or indeterminate transactions block dispatch and are never retried.
 
-Provider registration is process stable while execution remains session local. Each extension
-instance binds its two local dispatchers to a weak lease on `session_start`; the global API functions
-select exactly one lease from Pi's stream `sessionId`. Shutdown releases the lease before disposing
-its profile, capability, compaction, activation, and runtime state. Missing, stale, or ambiguous
-routes fail locally without provider side effects. Session identifiers are transient map keys and
-must never appear in errors, diagnostics, logs, or persisted data.
+## Compaction
 
-Activated compaction uses one ownership decision for both manual and overflow events:
+All Codex compaction triggers use the native `responses.compact` operation once per native attempt.
+Manual and overflow handlers return the provider-checkpoint result. Threshold preparation returns a
+handled cancellation so the inline provider hook is the sole threshold authority. The hook replays an
+exact matching checkpoint plus the canonical suffix, or performs one remote operation when the suffix
+first exceeds the effective threshold.
 
-| Outcome | Pi handler result | Pi outcome | Persistence |
-| --- | --- | --- | --- |
-| Provider inactive | `undefined` | none | Pi owns its normal path |
-| Threshold, explicit abort, native abort, or contention | `{ cancel: true }` | none | none |
-| Validated native opaque output | `{ compaction: ... }` | none | Pi writes the real `CompactionEntry` |
-| Trusted upstream failure | `{ cancel: true, errorMessage }` | Pi `compaction_end` error | none |
+Plain `/compact` is supported. Custom `/compact` instructions are rejected before dispatch because the
+official remote operation does not accept them.
 
-Once activation claims the event, failure is terminal cancellation and cannot fall through to Pi's
-session-unattributed default summarizer. The process router remains strict. A Pi auxiliary request path
-must provide trusted session attribution, explicit request provenance, the request-scoped abort signal,
-and matching approval semantics. Newer hosts with that contract are accepted without automatic
-checkpoint replay; the locked legacy host remains fail-closed.
+Checkpoints use only the v1 custom type
+`pi-codex-adaptor.remote-compaction`. Pi's ordinary session schema and model projection remain
+unchanged. The adaptor validates identity, branch coverage, output shape, and request freshness; Pi
+owns append/readback and the usage-boundary entry ID. Older adaptor checkpoint data is inert and has
+no reader or migration path.
 
-Provider stream failures map through `toPiProviderErrorMessage`. A protocol-decoded
-`BridgeRemoteError` with `retryable: true` becomes
-`OpenAI provider service unavailable: <bounded upstream detail>` so Pi's public classifier can apply
-its host-owned agent-turn retry policy. Non-retryable bridge errors preserve the bounded native
-detail; local errors retain controlled messages or a fixed fallback. The adaptor never implements a
-local retry loop; auxiliary compaction and branch-summary callers use the same trusted mapping while
-Pi owns their terminal handling.
+Provider/model/authentication changes never replay opaque output. The adaptor keeps canonical Pi
+history, emits one non-sensitive warning, and does not promise that the destination model can fit it.
+Starting a new session is the supported recovery when it cannot.
 
-Message projection accepts a complete contiguous Pi message sequence, not one session entry at a
-time. `responseItemsFromMessages()` first pairs tool calls and results and inserts the following
-request-local error output for any unresolved call:
+Provider stream failures use the native bridge retry classification and Pi's existing provider error
+mapping. The TypeScript integration has no compaction retry loop, timer, sleep, or second native
+request.
 
-```text
-Tool result was not recorded. The tool may have partially executed; inspect state before retrying.
-```
-
-The normal Responses request, manual compaction input, automatic checkpoint replay, and standalone
-web conversation context are the four current consumers. New consumers must provide a complete
-sequence or define an explicit opaque-checkpoint boundary before projection. The normalizer never
-mutates Pi messages or session JSONL, never replays a tool, and treats interrupted tool side effects
-as unknown. Complete histories pass through without synthetic outputs.
+`responseItemsFromMessages()` projects complete canonical message sequences and pairs tool calls with
+their recorded results. Missing results receive one request-local error output; Pi session JSONL is
+never mutated and tools are never replayed.

@@ -8,7 +8,7 @@ const stagingDirectory = resolve(repositoryRoot, "dist/package");
 const nativeArtifactsArgument = argument("--native-artifacts-dir");
 const nativeArtifactsDirectory = nativeArtifactsArgument
 	? resolve(nativeArtifactsArgument)
-	: undefined;
+	: resolve(repositoryRoot, "native/bin");
 
 async function main(): Promise<void> {
 	await rm(stagingDirectory, { force: true, recursive: true });

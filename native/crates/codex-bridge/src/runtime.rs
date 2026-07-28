@@ -48,7 +48,6 @@ use codex_api::ImageGenerationRequest;
 use codex_api::ImageQuality;
 use codex_api::ImageUrl;
 use codex_api::ImagesClient;
-use codex_api::OpenAiVerbosity;
 use codex_api::Reasoning;
 use codex_api::ResponsesApiRequest;
 use codex_api::ResponsesClient;
@@ -77,6 +76,7 @@ use codex_utils_output_truncation::approx_token_count;
 use codex_utils_output_truncation::formatted_truncate_text;
 use http::HeaderMap;
 use http::HeaderValue;
+use rand::random_range;
 use serde::Deserialize;
 use serde_json::Value;
 use serde_json::json;
@@ -101,9 +101,6 @@ const MAX_REQUEST_ID_BYTES: usize = 256;
 const MAX_REQUEST_IDS_PER_CONNECTION: usize = 65_536;
 const MAX_SESSION_OUTPUT_BYTES: usize = codex_utils_pty::DEFAULT_OUTPUT_BYTES_CAP;
 const DEFAULT_MAX_OUTPUT_TOKENS: usize = 10_000;
-const PORTABLE_SUMMARY_TIMEOUT_MS: u64 = 600_000;
-const PORTABLE_SUMMARY_MAX_OUTPUT_TOKENS: usize = 1_024;
-const PORTABLE_SUMMARY_V1_INSTRUCTIONS: &str = "Summarize this conversation context for future continuation. Return plain text only. Preserve the user's goals, decisions, constraints, pending work, tool outcomes, and important factual state. Be concise and do not add markdown, bullets, or commentary about the summarization process.";
 const MAX_IMAGE_SOURCE_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_IMAGE_RESULT_BYTES: usize = 12 * 1024 * 1024;
 const MAX_IMAGE_REFERENCE_BYTES: u64 = 64 * 1024 * 1024;
@@ -115,6 +112,16 @@ const PREAUTHORIZED_TOOLS: &[&str] = &[
     "exec_command",
     "shell_command",
     "write_stdin",
+    "apply_patch",
+    "view_image",
+    "image_gen.imagegen",
+    "web.run",
+];
+const MANAGED_TOOL_NAMES: &[&str] = &[
+    "update_plan",
+    "exec_command",
+    "write_stdin",
+    "shell_command",
     "apply_patch",
     "view_image",
     "image_gen.imagegen",
@@ -465,20 +472,6 @@ struct ResponsesCreateParams {
     remote_compaction_v2_context: Option<RemoteCompactionV2Context>,
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct ContextsSummarizeParams {
-    connection: ProviderConnection,
-    model_id: String,
-    input: Vec<ResponseItem>,
-    #[serde(default)]
-    transport_mode: ResponsesTransportMode,
-    #[serde(default = "default_provider_websocket_capability")]
-    provider_supports_websockets: bool,
-    #[serde(default)]
-    remote_compaction_v2_context: Option<RemoteCompactionV2Context>,
-}
-
 #[derive(Clone, Copy, Default, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum ResponsesTransportMode {
@@ -695,6 +688,8 @@ struct ModelsResolveParams {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ToolsResolveParams {
     model: ModelInfo,
+    #[serde(default = "default_allowed_local_tool_names")]
+    allowed_local_tool_names: Vec<String>,
     web_search_mode: WebSearchMode,
     provider_contract: CompleteProviderContract,
     standalone_web_search: StandaloneWebSearchCapabilities,
@@ -702,6 +697,13 @@ struct ToolsResolveParams {
     shell: ShellToolOptions,
     #[serde(default)]
     optional: OptionalToolCapabilities,
+}
+
+fn default_allowed_local_tool_names() -> Vec<String> {
+    MANAGED_TOOL_NAMES
+        .iter()
+        .map(|name| (*name).to_owned())
+        .collect()
 }
 
 #[derive(Deserialize)]
@@ -1563,7 +1565,6 @@ async fn dispatch(
                 "capabilities": compiled_capabilities(),
             })))
         }
-        RequestMethod::ContextsSummarize => contexts_summarize(params, cancellation).await,
         RequestMethod::ResponsesCreate => responses_create(params, flow, cancellation)
             .await
             .map(RequestSuccess::completed),
@@ -3468,6 +3469,19 @@ fn finalize_process_output(
 fn tools_resolve(params: Value) -> Result<Value, RequestFailure> {
     let parsed = serde_json::from_value::<ToolsResolveParams>(params)
         .map_err(|_| invalid_params("tools.resolve parameters are invalid"))?;
+    let allowed_local_tool_names = parsed
+        .allowed_local_tool_names
+        .iter()
+        .map(String::as_str)
+        .collect::<HashSet<_>>();
+    if allowed_local_tool_names.len() != parsed.allowed_local_tool_names.len()
+        || allowed_local_tool_names
+            .iter()
+            .any(|name| !MANAGED_TOOL_NAMES.contains(name))
+    {
+        return Err(invalid_params("tools.resolve allowed local tool names are invalid").into());
+    }
+    let local_tool_allowed = |name: &str| allowed_local_tool_names.contains(name);
     if !parsed.model.supported_in_api {
         return Err(BridgeError {
             category: ErrorCategory::CapabilityError,
@@ -3506,43 +3520,86 @@ fn tools_resolve(params: Value) -> Result<Value, RequestFailure> {
     match parsed.provider_contract.responses_websocket {
         ProviderWebsocketContract::OfficialOnly | ProviderWebsocketContract::Unavailable => {}
     }
-    let mut model_visible = vec![codex_tools::create_update_plan_tool()];
+    let mut model_visible = Vec::new();
     let mut dispatch_only = Vec::new();
-    let mut local_tool_names = vec!["update_plan"];
+    let mut local_tool_names = Vec::new();
     let mut hosted_tool_names: Vec<&str> = Vec::new();
+    if local_tool_allowed("update_plan") {
+        model_visible.push(codex_tools::create_update_plan_tool());
+        local_tool_names.push("update_plan");
+    }
     let session_surface;
     let session_capability;
     let shell_surface = match parsed.model.shell_type {
         ConfigShellToolType::UnifiedExec => {
-            model_visible.push(codex_tools::create_exec_command_tool(command_options));
-            model_visible.push(codex_tools::create_write_stdin_tool());
-            dispatch_only.push(codex_tools::create_shell_command_tool(command_options));
-            local_tool_names.extend(["exec_command", "write_stdin"]);
-            session_surface = "official";
-            session_capability = if parsed.sessions.enabled {
+            let exec_command_allowed = local_tool_allowed("exec_command");
+            let write_stdin_allowed = local_tool_allowed("write_stdin");
+            if exec_command_allowed {
+                model_visible.push(codex_tools::create_exec_command_tool(command_options));
+                local_tool_names.push("exec_command");
+            }
+            if write_stdin_allowed {
+                model_visible.push(codex_tools::create_write_stdin_tool());
+                local_tool_names.push("write_stdin");
+            }
+            if local_tool_allowed("shell_command") {
+                dispatch_only.push(codex_tools::create_shell_command_tool(command_options));
+            }
+            session_surface = if exec_command_allowed && write_stdin_allowed {
+                "official"
+            } else {
+                "disabled"
+            };
+            session_capability = if !parsed.sessions.enabled {
+                json!({ "status": "disabled", "reason": "disabled_by_configuration" })
+            } else if exec_command_allowed && write_stdin_allowed {
                 json!({ "status": "available", "source": "official" })
             } else {
-                json!({ "status": "disabled", "reason": "disabled_by_configuration" })
+                json!({ "status": "disabled", "reason": "disabled_by_host_tool_policy" })
             };
-            "unified-exec"
+            if exec_command_allowed {
+                "unified-exec"
+            } else {
+                "disabled"
+            }
         }
         ConfigShellToolType::Default
         | ConfigShellToolType::Local
         | ConfigShellToolType::ShellCommand => {
-            model_visible.push(codex_tools::create_shell_command_tool(command_options));
-            local_tool_names.push("shell_command");
+            let shell_command_allowed = local_tool_allowed("shell_command");
+            if shell_command_allowed {
+                model_visible.push(codex_tools::create_shell_command_tool(command_options));
+                local_tool_names.push("shell_command");
+            }
             if parsed.sessions.enabled {
-                model_visible.push(codex_tools::create_exec_command_tool(command_options));
-                model_visible.push(codex_tools::create_write_stdin_tool());
-                local_tool_names.extend(["exec_command", "write_stdin"]);
-                session_surface = "supplemental";
-                session_capability = json!({ "status": "available", "source": "supplemental" });
+                let exec_command_allowed = local_tool_allowed("exec_command");
+                let write_stdin_allowed = local_tool_allowed("write_stdin");
+                if exec_command_allowed {
+                    model_visible.push(codex_tools::create_exec_command_tool(command_options));
+                    local_tool_names.push("exec_command");
+                }
+                if write_stdin_allowed {
+                    model_visible.push(codex_tools::create_write_stdin_tool());
+                    local_tool_names.push("write_stdin");
+                }
+                if exec_command_allowed && write_stdin_allowed {
+                    session_surface = "supplemental";
+                    session_capability = json!({ "status": "available", "source": "supplemental" });
+                } else {
+                    session_surface = "disabled";
+                    session_capability =
+                        json!({ "status": "disabled", "reason": "disabled_by_host_tool_policy" });
+                }
             } else {
                 session_surface = "disabled";
                 session_capability =
                     json!({ "status": "disabled", "reason": "disabled_by_configuration" });
             }
-            "shell-command"
+            if shell_command_allowed {
+                "shell-command"
+            } else {
+                "disabled"
+            }
         }
         ConfigShellToolType::Disabled => {
             session_surface = "unavailable";
@@ -3551,11 +3608,14 @@ fn tools_resolve(params: Value) -> Result<Value, RequestFailure> {
             "disabled"
         }
     };
-    if parsed.model.apply_patch_tool_type.is_some() {
+    let apply_patch_available =
+        parsed.model.apply_patch_tool_type.is_some() && local_tool_allowed("apply_patch");
+    if apply_patch_available {
         model_visible.push(codex_tools::create_apply_patch_freeform_tool(false));
         local_tool_names.push("apply_patch");
     }
     let view_image_available = parsed.optional.view_image
+        && local_tool_allowed("view_image")
         && parsed
             .model
             .input_modalities
@@ -3570,6 +3630,7 @@ fn tools_resolve(params: Value) -> Result<Value, RequestFailure> {
         local_tool_names.push("view_image");
     }
     let image_generation_surface = if parsed.optional.image_generation
+        && local_tool_allowed("image_gen.imagegen")
         && parsed.provider_contract.namespace_tools
         && parsed.provider_contract.images_api
         && parsed
@@ -3584,12 +3645,16 @@ fn tools_resolve(params: Value) -> Result<Value, RequestFailure> {
         "disabled"
     };
 
-    let standalone_available = parsed.provider_contract.namespace_tools
+    let web_search_allowed = local_tool_allowed("web.run");
+    let standalone_available = web_search_allowed
+        && parsed.provider_contract.namespace_tools
         && parsed.provider_contract.search_api
         && (parsed.model.use_responses_lite || parsed.standalone_web_search.feature_enabled)
         && parsed.standalone_web_search.executor_available;
     let (web_surface, web_reason) = if parsed.web_search_mode == WebSearchMode::Disabled {
         ("disabled", "configured_disabled")
+    } else if !web_search_allowed {
+        ("disabled", "disabled_by_host_tool_policy")
     } else if standalone_available {
         model_visible.push(
             codex_tools::create_standalone_web_search_tool().map_err(|_| {
@@ -3626,8 +3691,10 @@ fn tools_resolve(params: Value) -> Result<Value, RequestFailure> {
         "imageGenerationSurface": image_generation_surface,
         "capabilities": {
             "sessions": session_capability,
-            "applyPatch": if parsed.model.apply_patch_tool_type.is_some() {
+            "applyPatch": if apply_patch_available {
                 json!({ "status": "available", "source": "official" })
+            } else if parsed.model.apply_patch_tool_type.is_some() {
+                json!({ "status": "disabled", "reason": "disabled_by_host_tool_policy" })
             } else {
                 json!({ "status": "unavailable", "reason": "model_apply_patch_disabled" })
             },
@@ -3635,6 +3702,8 @@ fn tools_resolve(params: Value) -> Result<Value, RequestFailure> {
                 json!({ "status": "available", "source": "official" })
             } else if !parsed.optional.view_image {
                 json!({ "status": "disabled", "reason": "disabled_by_configuration" })
+            } else if !local_tool_allowed("view_image") {
+                json!({ "status": "disabled", "reason": "disabled_by_host_tool_policy" })
             } else {
                 json!({ "status": "unavailable", "reason": "model_image_input_unavailable" })
             },
@@ -3642,11 +3711,13 @@ fn tools_resolve(params: Value) -> Result<Value, RequestFailure> {
                 json!({ "status": "available", "source": "provider-contract" })
             } else if !parsed.optional.image_generation {
                 json!({ "status": "disabled", "reason": "disabled_by_configuration" })
+            } else if !local_tool_allowed("image_gen.imagegen") {
+                json!({ "status": "disabled", "reason": "disabled_by_host_tool_policy" })
             } else {
                 json!({ "status": "unavailable", "reason": "image_generation_route_unavailable" })
             },
             "webSearch": if web_surface == "disabled" {
-                json!({ "status": "disabled", "reason": "disabled_by_configuration" })
+                json!({ "status": "disabled", "reason": web_reason })
             } else if web_surface == "unsupported" {
                 json!({ "status": "unavailable", "reason": "web_search_route_unavailable" })
             } else {
@@ -3714,7 +3785,7 @@ async fn responses_create(
             parsed.request,
             parsed.transport_mode,
             parsed.provider_supports_websockets,
-            connection,
+            &connection,
             websocket_connect_timeout,
             RemoteCompactionV2RequestMetadata {
                 context: remote_v2_context.as_ref(),
@@ -3755,190 +3826,94 @@ async fn responses_create(
     .into())
 }
 
-async fn contexts_summarize(
-    params: Value,
-    cancellation: &CancellationToken,
-) -> Result<RequestSuccess, RequestFailure> {
-    let mut parsed = serde_json::from_value::<ContextsSummarizeParams>(params)
-        .map_err(|_| invalid_params("contexts.summarize parameters are invalid"))?;
-    if parsed.model_id.is_empty() || parsed.model_id.len() > 256 {
-        return Err(invalid_params("contexts.summarize modelId is invalid").into());
-    }
-    if parsed.input.is_empty() {
-        return Err(invalid_params("contexts.summarize input is invalid").into());
-    }
-    let remote_v2_context = parsed
-        .remote_compaction_v2_context
-        .take()
-        .map(RemoteCompactionV2Context::validate)
-        .transpose()?;
-    let connection = api::connect(&parsed.connection)?;
-    let timeout = Duration::from_millis(PORTABLE_SUMMARY_TIMEOUT_MS);
-    let result = await_with_cancellation(
-        cancellation,
-        Box::pin(tokio::time::timeout(
-            timeout,
-            contexts_summarize_inner(
-                parsed.model_id,
-                parsed.input,
-                parsed.transport_mode,
-                parsed.provider_supports_websockets,
-                connection,
-                cancellation,
-                remote_v2_context,
-            ),
-        )),
-    )
-    .await?;
-    match result {
-        Ok(result) => result.map(RequestSuccess::completed),
-        Err(_) => Ok(RequestSuccess::timed_out(json!({}))),
-    }
+#[derive(Debug)]
+struct StreamStartFailure {
+    error: BridgeError,
+    retry_delay: Option<Duration>,
 }
 
-#[allow(clippy::too_many_lines)]
-async fn contexts_summarize_inner(
-    model_id: String,
-    input: Vec<ResponseItem>,
+struct RemoteCompactionRetryState {
+    stream_retries: u64,
+    max_stream_retries: u64,
+    use_websocket: bool,
+    websocket_fallback_used: bool,
     transport_mode: ResponsesTransportMode,
     provider_supports_websockets: bool,
-    connection: api::ApiConnection,
-    cancellation: &CancellationToken,
-    remote_v2_context: Option<RemoteCompactionV2Context>,
-) -> Result<Value, RequestFailure> {
-    let mut request = ResponsesApiRequest {
-        model: model_id,
-        instructions: PORTABLE_SUMMARY_V1_INSTRUCTIONS.to_owned(),
-        input,
-        tools: None,
-        tool_choice: "none".to_owned(),
-        parallel_tool_calls: false,
-        reasoning: None,
-        store: false,
-        stream: true,
-        stream_options: None,
-        include: Vec::new(),
-        service_tier: None,
-        prompt_cache_key: None,
-        text: Some(TextControls {
-            verbosity: Some(OpenAiVerbosity::Low),
-            format: None,
-        }),
-        client_metadata: None,
-    };
-    if let Some(context) = remote_v2_context.as_ref() {
-        context.apply_to_request(&mut request, RemoteCompactionV2RequestKind::Compaction)?;
-    }
-    let websocket_connect_timeout = connection.websocket_connect_timeout;
-    let mut response = await_with_cancellation(
-        cancellation,
-        Box::pin(start_response_stream(
-            request,
-            transport_mode,
-            provider_supports_websockets,
-            connection,
-            websocket_connect_timeout,
-            RemoteCompactionV2RequestMetadata {
-                context: remote_v2_context.as_ref(),
-                kind: RemoteCompactionV2RequestKind::Compaction,
-            },
-            "portable_context_summary",
-        )),
-    )
-    .await??;
-    let mut summary = None;
-    let mut completed = false;
-    let mut saw_invalid_output = false;
-    let mut token_usage = None;
-    loop {
-        let event = tokio::select! {
-            () = cancellation.cancelled() => return Err(RequestFailure::Cancelled),
-            event = response.rx_event.recv() => event,
-        };
-        let Some(event) = event else {
-            break;
-        };
-        let event = event.map_err(|error| {
-            api::map_provider_contract_error(&error, "portable_context_summary")
-        })?;
-        match event {
-            codex_api::ResponseEvent::OutputItemDone(ResponseItem::Reasoning { .. }) => {}
-            codex_api::ResponseEvent::OutputItemDone(item) => {
-                match extract_portable_summary(&item) {
-                    Ok(text) => {
-                        if summary.replace(text).is_some() {
-                            saw_invalid_output = true;
-                        }
-                    }
-                    Err(_) => {
-                        saw_invalid_output = true;
-                    }
-                }
-            }
-            codex_api::ResponseEvent::Completed {
-                token_usage: usage, ..
-            } => {
-                token_usage = usage;
-                completed = true;
-                break;
-            }
-            _ => {}
-        }
-    }
-    if !completed {
-        return Err(BridgeError {
-            category: ErrorCategory::ProtocolError,
-            code: "portable_summary_incomplete".to_owned(),
-            message: "portable context summary ended without completion".to_owned(),
-            retryable: true,
-        }
-        .into());
-    }
-    if saw_invalid_output {
-        return Err(
-            invalid_portable_summary("portable context summary returned invalid output").into(),
-        );
-    }
-    let Some(summary) = summary else {
-        return Err(invalid_portable_summary(
-            "portable context summary returned no assistant message",
-        )
-        .into());
-    };
-    let mut result = json!({ "summary": summary });
-    if let Some(usage) = normalized_usage_json(token_usage) {
-        result
-            .as_object_mut()
-            .expect("summary result should be an object")
-            .insert("usage".to_owned(), usage);
-    }
-    Ok(result)
 }
 
 async fn start_response_stream(
     request: ResponsesApiRequest,
     transport_mode: ResponsesTransportMode,
     provider_supports_websockets: bool,
-    connection: api::ApiConnection,
+    connection: &api::ApiConnection,
     websocket_connect_timeout: Duration,
     remote_v2: RemoteCompactionV2RequestMetadata<'_>,
     contract_capability: &'static str,
 ) -> Result<codex_api::ResponseStream, BridgeError> {
+    let use_websocket =
+        matches!(transport_mode, ResponsesTransportMode::Auto) && provider_supports_websockets;
+    if use_websocket
+        && let Ok(stream) = start_response_stream_with_transport(
+            request.clone(),
+            connection,
+            websocket_connect_timeout,
+            remote_v2,
+            contract_capability,
+            true,
+        )
+        .await
+    {
+        return Ok(stream);
+    }
+    start_response_stream_with_transport(
+        request,
+        connection,
+        websocket_connect_timeout,
+        remote_v2,
+        contract_capability,
+        false,
+    )
+    .await
+    .map_err(|failure| failure.error)
+}
+
+async fn start_response_stream_with_transport(
+    request: ResponsesApiRequest,
+    connection: &api::ApiConnection,
+    websocket_connect_timeout: Duration,
+    remote_v2: RemoteCompactionV2RequestMetadata<'_>,
+    contract_capability: &'static str,
+    use_websocket: bool,
+) -> Result<codex_api::ResponseStream, StreamStartFailure> {
     let responses_options = match remote_v2.context {
-        Some(context) => context.responses_options(remote_v2.kind)?,
+        Some(context) => {
+            context
+                .responses_options(remote_v2.kind)
+                .map_err(|error| StreamStartFailure {
+                    error,
+                    retry_delay: None,
+                })?
+        }
         None => ResponsesOptions::default(),
     };
     let websocket_headers = match remote_v2.context {
-        Some(context) => context.websocket_headers(remote_v2.kind)?,
+        Some(context) => {
+            context
+                .websocket_headers(remote_v2.kind)
+                .map_err(|error| StreamStartFailure {
+                    error,
+                    retry_delay: None,
+                })?
+        }
         None => HeaderMap::default(),
     };
-    if matches!(transport_mode, ResponsesTransportMode::Auto) && provider_supports_websockets {
+    if use_websocket {
         let websocket = ResponsesWebsocketClient::new(
             connection.provider.clone(),
             Arc::clone(&connection.authentication),
         );
         let factory = HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault);
-        if let Ok(Ok(websocket)) = tokio::time::timeout(
+        let websocket = tokio::time::timeout(
             websocket_connect_timeout,
             websocket.connect(
                 &factory,
@@ -3949,26 +3924,57 @@ async fn start_response_stream(
             ),
         )
         .await
-        {
-            return websocket
-                .stream_request(
-                    ResponsesWsRequest::ResponseCreate((&request).into()),
-                    false,
-                    None,
-                )
-                .await
-                .map_err(|error| api::map_provider_contract_error(&error, contract_capability));
-        }
+        .map_err(|_| StreamStartFailure {
+            error: BridgeError {
+                category: ErrorCategory::CapabilityError,
+                code: "upstream_request_failed".to_owned(),
+                message: "the Responses websocket connection timed out".to_owned(),
+                retryable: true,
+            },
+            retry_delay: None,
+        })?
+        .map_err(|error| stream_start_failure(&error, contract_capability))?;
+        return websocket
+            .stream_request(
+                ResponsesWsRequest::ResponseCreate((&request).into()),
+                false,
+                None,
+            )
+            .await
+            .map_err(|error| stream_start_failure(&error, contract_capability));
     }
 
+    let mut provider = connection.provider.clone();
+    if matches!(remote_v2.kind, RemoteCompactionV2RequestKind::Compaction) {
+        // The compact path owns its retry budget so that each retry resends the exact typed
+        // request and can switch transports after the websocket budget is exhausted.
+        provider.retry.max_attempts = 0;
+        provider.retry.retry_429 = false;
+        provider.retry.retry_5xx = false;
+        provider.retry.retry_transport = false;
+    }
     ResponsesClient::new(
-        connection.transport,
-        connection.provider,
-        connection.authentication,
+        connection.transport.clone(),
+        provider,
+        Arc::clone(&connection.authentication),
     )
     .stream_request(request, responses_options)
     .await
-    .map_err(|error| api::map_provider_contract_error(&error, contract_capability))
+    .map_err(|error| stream_start_failure(&error, contract_capability))
+}
+
+fn stream_start_failure(
+    error: &codex_api::ApiError,
+    contract_capability: &'static str,
+) -> StreamStartFailure {
+    let retry_delay = match error {
+        codex_api::ApiError::Retryable { delay, .. } => *delay,
+        _ => None,
+    };
+    StreamStartFailure {
+        error: api::map_provider_contract_error(error, contract_capability),
+        retry_delay,
+    }
 }
 
 async fn responses_compact(
@@ -4049,7 +4055,6 @@ async fn responses_compact(
     }
 }
 
-#[allow(clippy::too_many_lines)]
 async fn responses_compact_remote(
     request: OwnedCompactionInput,
     transport_mode: ResponsesTransportMode,
@@ -4081,37 +4086,99 @@ async fn responses_compact_remote(
     if let Some(context) = remote_v2_context.as_ref() {
         context.apply_to_request(&mut request, RemoteCompactionV2RequestKind::Compaction)?;
     }
-    let websocket_connect_timeout = connection.websocket_connect_timeout;
-    let mut stream = await_with_cancellation(
-        cancellation,
-        Box::pin(start_response_stream(
-            request,
-            transport_mode,
-            provider_supports_websockets,
-            connection,
-            websocket_connect_timeout,
-            RemoteCompactionV2RequestMetadata {
-                context: remote_v2_context.as_ref(),
-                kind: RemoteCompactionV2RequestKind::Compaction,
-            },
-            "remote_compaction_v2",
-        )),
-    )
-    .await??;
+    let metadata = RemoteCompactionV2RequestMetadata {
+        context: remote_v2_context.as_ref(),
+        kind: RemoteCompactionV2RequestKind::Compaction,
+    };
+    let mut retry_state = RemoteCompactionRetryState {
+        stream_retries: 0,
+        max_stream_retries: u64::from(connection.max_retries.min(2)),
+        use_websocket: matches!(transport_mode, ResponsesTransportMode::Auto)
+            && provider_supports_websockets,
+        websocket_fallback_used: false,
+        transport_mode,
+        provider_supports_websockets,
+    };
+    loop {
+        ensure_not_cancelled(cancellation)?;
+        let stream = match await_with_cancellation(
+            cancellation,
+            Box::pin(start_response_stream_with_transport(
+                request.clone(),
+                &connection,
+                connection.websocket_connect_timeout,
+                metadata,
+                "remote_compaction_v2",
+                retry_state.use_websocket,
+            )),
+        )
+        .await?
+        {
+            Ok(stream) => stream,
+            Err(failure) => {
+                if let Some(result) =
+                    retry_remote_compaction_stream(failure, &mut retry_state, cancellation, true)
+                        .await?
+                {
+                    return Err(result.into());
+                }
+                continue;
+            }
+        };
+
+        match consume_remote_compaction_stream(stream, &retained_input, cancellation).await {
+            Ok(result) => return Ok(result),
+            Err(failure) => {
+                if cancellation.is_cancelled() {
+                    return Err(RequestFailure::Cancelled);
+                }
+                if let Some(result) =
+                    retry_remote_compaction_stream(failure, &mut retry_state, cancellation, false)
+                        .await?
+                {
+                    return Err(result.into());
+                }
+            }
+        }
+    }
+}
+
+async fn consume_remote_compaction_stream(
+    mut stream: codex_api::ResponseStream,
+    retained_input: &[ResponseItem],
+    cancellation: &CancellationToken,
+) -> Result<Value, StreamStartFailure> {
     let mut compacted = None;
     let mut compacted_count = 0usize;
-    let mut completed = false;
-    let mut token_usage = None;
+    let token_usage;
     loop {
         let event = tokio::select! {
-            () = cancellation.cancelled() => return Err(RequestFailure::Cancelled),
+            () = cancellation.cancelled() => return Err(StreamStartFailure {
+                error: BridgeError {
+                    category: ErrorCategory::CapabilityError,
+                    code: "request_cancelled".to_owned(),
+                    message: "the remote compaction request was cancelled".to_owned(),
+                    retryable: false,
+                },
+                retry_delay: None,
+            }),
             event = stream.rx_event.recv() => event,
         };
         let Some(event) = event else {
-            break;
+            return Err(StreamStartFailure {
+                error: BridgeError {
+                    category: ErrorCategory::ProtocolError,
+                    code: "remote_compaction_incomplete".to_owned(),
+                    message: "remote compaction ended without completion".to_owned(),
+                    retryable: true,
+                },
+                retry_delay: None,
+            });
         };
-        let event = event
-            .map_err(|error| api::map_provider_contract_error(&error, "remote_compaction_v2"))?;
+        let event = match event {
+            Ok(event) => event,
+            Err(error) => return Err(stream_start_failure(&error, "remote_compaction_v2")),
+        };
         match event {
             codex_api::ResponseEvent::OutputItemDone(item) => {
                 if matches!(item, ResponseItem::Compaction { .. }) {
@@ -4123,41 +4190,27 @@ async fn responses_compact_remote(
                 token_usage: usage, ..
             } => {
                 token_usage = usage;
-                completed = true;
                 break;
             }
             _ => {}
         }
     }
-    if !completed {
-        return Err(BridgeError {
-            category: ErrorCategory::ProtocolError,
-            code: "remote_compaction_incomplete".to_owned(),
-            message: "remote compaction ended without completion".to_owned(),
-            retryable: true,
-        }
-        .into());
-    }
     if compacted_count != 1 {
-        return Err(BridgeError {
-            category: ErrorCategory::ProtocolError,
-            code: "remote_compaction_invalid_output".to_owned(),
-            message: "remote compaction did not return exactly one compaction item".to_owned(),
-            retryable: false,
-        }
-        .into());
+        return Err(StreamStartFailure {
+            error: BridgeError {
+                category: ErrorCategory::ProtocolError,
+                code: "remote_compaction_invalid_output".to_owned(),
+                message: "remote compaction did not return exactly one compaction item".to_owned(),
+                retryable: false,
+            },
+            retry_delay: None,
+        });
     }
     let Some(compacted) = compacted else {
-        return Err(BridgeError {
-            category: ErrorCategory::ProtocolError,
-            code: "remote_compaction_invalid_output".to_owned(),
-            message: "remote compaction returned no compaction item".to_owned(),
-            retryable: false,
-        }
-        .into());
+        unreachable!("exactly one compaction item was counted");
     };
     let mut result = json!({
-        "output": crate::remote_compaction_v2::build_compacted_history(&retained_input, compacted),
+        "output": crate::remote_compaction_v2::build_compacted_history(retained_input, compacted),
     });
     if let Some(usage) = normalized_usage_json(token_usage) {
         result
@@ -4168,13 +4221,43 @@ async fn responses_compact_remote(
     Ok(result)
 }
 
-fn invalid_portable_summary(message: &str) -> BridgeError {
-    BridgeError {
-        category: ErrorCategory::ProtocolError,
-        code: "portable_summary_invalid_output".to_owned(),
-        message: message.to_owned(),
-        retryable: false,
+async fn retry_remote_compaction_stream(
+    failure: StreamStartFailure,
+    state: &mut RemoteCompactionRetryState,
+    cancellation: &CancellationToken,
+    allow_transport_fallback: bool,
+) -> Result<Option<BridgeError>, RequestFailure> {
+    if failure.error.retryable && state.stream_retries < state.max_stream_retries {
+        let delay = failure
+            .retry_delay
+            .unwrap_or_else(|| remote_v2_backoff(state.stream_retries + 1));
+        state.stream_retries += 1;
+        tokio::select! {
+            () = cancellation.cancelled() => Err(RequestFailure::Cancelled),
+            () = tokio::time::sleep(delay) => Ok(None),
+        }
+    } else if allow_transport_fallback
+        && state.use_websocket
+        && !state.websocket_fallback_used
+        && matches!(state.transport_mode, ResponsesTransportMode::Auto)
+        && state.provider_supports_websockets
+    {
+        state.use_websocket = false;
+        state.websocket_fallback_used = true;
+        state.stream_retries = 0;
+        Ok(None)
+    } else {
+        Ok(Some(failure.error))
     }
+}
+
+fn remote_v2_backoff(attempt: u64) -> Duration {
+    let exponent = attempt.saturating_sub(1).min(63);
+    let shift = u32::try_from(exponent).unwrap_or(63);
+    let factor = 1_u64.checked_shl(shift).unwrap_or(u64::MAX);
+    let base_millis = 200_u64.saturating_mul(factor);
+    let jitter_millis = random_range(900_u64..1_101_u64);
+    Duration::from_millis(base_millis.saturating_mul(jitter_millis) / 1_000)
 }
 
 fn normalized_usage_json(usage: Option<TokenUsage>) -> Option<Value> {
@@ -4186,39 +4269,6 @@ fn normalized_usage_json(usage: Option<TokenUsage>) -> Option<Value> {
             "reasoningTokens": usage.reasoning_output_tokens.max(0),
         })
     })
-}
-
-fn extract_portable_summary(item: &ResponseItem) -> Result<String, BridgeError> {
-    let ResponseItem::Message { role, content, .. } = item else {
-        return Err(invalid_portable_summary(
-            "portable context summary returned a non-message output item",
-        ));
-    };
-    if role != "assistant" {
-        return Err(invalid_portable_summary(
-            "portable context summary returned a non-assistant message",
-        ));
-    }
-    let mut summary = String::new();
-    for part in content {
-        let ContentItem::OutputText { text } = part else {
-            return Err(invalid_portable_summary(
-                "portable context summary returned a non-text message part",
-            ));
-        };
-        summary.push_str(text);
-    }
-    if summary.trim().is_empty() {
-        return Err(invalid_portable_summary(
-            "portable context summary returned empty text",
-        ));
-    }
-    if approx_token_count(&summary) > PORTABLE_SUMMARY_MAX_OUTPUT_TOKENS {
-        return Err(invalid_portable_summary(
-            "portable context summary exceeded the output limit",
-        ));
-    }
-    Ok(summary)
 }
 
 fn invalid_params(message: &str) -> BridgeError {
@@ -4377,7 +4427,6 @@ fn compiled_capabilities() -> Vec<BridgeCapability> {
     vec![
         BridgeCapability::ResponsesSse,
         BridgeCapability::ResponsesWebsocket,
-        BridgeCapability::PortableContextSummary,
         BridgeCapability::CompactEndpoint,
         BridgeCapability::RemoteCompactionV2,
         BridgeCapability::ModelMetadata,
@@ -4560,7 +4609,7 @@ mod tests {
 
     fn initialization() -> &'static str {
         concat!(
-            "{\"type\":\"initialize\",\"requestId\":\"init-1\",\"protocolVersion\":5,",
+            "{\"type\":\"initialize\",\"requestId\":\"init-1\",\"protocolVersion\":6,",
             "\"client\":{\"name\":\"contract-test\",\"version\":\"0.0.0\"}}\n"
         )
     }
@@ -4595,7 +4644,7 @@ mod tests {
     #[tokio::test]
     async fn rejects_a_protocol_version_mismatch_as_fatal() {
         let messages = run_server(concat!(
-            "{\"type\":\"initialize\",\"requestId\":\"init-1\",\"protocolVersion\":1,",
+            "{\"type\":\"initialize\",\"requestId\":\"init-1\",\"protocolVersion\":5,",
             "\"client\":{\"name\":\"contract-test\",\"version\":\"0.0.0\"}}\n",
             "{\"type\":\"shutdown\",\"requestId\":\"shutdown-1\"}\n"
         ))
@@ -4756,55 +4805,32 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn responses_and_portable_summary_preserve_bounded_upstream_error_detail() {
-        for operation in ["responses", "portable-summary"] {
-            let (base_url, server) = spawn_error_fixture_http_server(
-                "400 Bad Request",
-                "upstream fixture detail".to_owned(),
-            )
-            .await;
-            let error = match operation {
-                "responses" => {
-                    let (output, _messages) = mpsc::channel(1);
-                    let flow = FlowController::new("request-upstream-error".to_owned(), output);
-                    responses_create(
-                        json!({
-                            "request": fixture_response_request(),
-                            "transportMode": "sse",
-                            "providerSupportsWebsockets": false,
-                            "connection": fixture_connection(base_url),
-                        }),
-                        &flow,
-                        &CancellationToken::new(),
-                    )
-                    .await
-                    .expect_err("Responses fixture request should fail")
-                }
-                "portable-summary" => contexts_summarize(
-                    json!({
-                        "modelId": "fixture-model",
-                        "input": [{
-                            "type": "message",
-                            "role": "user",
-                            "content": [{ "type": "input_text", "text": "x" }]
-                        }],
-                        "transportMode": "sse",
-                        "providerSupportsWebsockets": false,
-                        "connection": fixture_connection(base_url),
-                    }),
-                    &CancellationToken::new(),
-                )
-                .await
-                .expect_err("portable-summary fixture request should fail"),
-                _ => unreachable!(),
-            };
-            assert!(matches!(
-                error,
-                RequestFailure::Bridge(error)
-                    if error.message == "400 Bad Request: upstream fixture detail"
-            ));
-            server.await.expect("fixture server should join");
-        }
+    async fn responses_preserve_bounded_upstream_error_detail() {
+        let (base_url, server) = spawn_error_fixture_http_server(
+            "400 Bad Request",
+            "upstream fixture detail".to_owned(),
+        )
+        .await;
+        let (output, _messages) = mpsc::channel(1);
+        let flow = FlowController::new("request-upstream-error".to_owned(), output);
+        let error = responses_create(
+            json!({
+                "request": fixture_response_request(),
+                "transportMode": "sse",
+                "providerSupportsWebsockets": false,
+                "connection": fixture_connection(base_url),
+            }),
+            &flow,
+            &CancellationToken::new(),
+        )
+        .await
+        .expect_err("Responses fixture request should fail");
+        assert!(matches!(
+            error,
+            RequestFailure::Bridge(error)
+                if error.message == "400 Bad Request: upstream fixture detail"
+        ));
+        server.await.expect("fixture server should join");
     }
 
     #[tokio::test]
@@ -4819,7 +4845,7 @@ mod tests {
             request,
             ResponsesTransportMode::Auto,
             true,
-            connection,
+            &connection,
             websocket_connect_timeout,
             RemoteCompactionV2RequestMetadata {
                 context: None,
@@ -4858,7 +4884,7 @@ mod tests {
             request,
             ResponsesTransportMode::Auto,
             true,
-            connection,
+            &connection,
             websocket_connect_timeout,
             RemoteCompactionV2RequestMetadata {
                 context: Some(&context),
@@ -4963,239 +4989,6 @@ mod tests {
 
     #[tokio::test]
     #[allow(clippy::large_futures)]
-    async fn accepts_reasoning_before_a_bounded_plaintext_portable_summary() {
-        let (base_url, request, server) = spawn_capturing_fixture_http_server(
-            concat!(
-                "event: response.output_item.done\n",
-                "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"reasoning\",\"id\":\"reasoning-item\",\"summary\":[]}}\n\n",
-                "event: response.output_item.done\n",
-                "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"portable fixture summary\"}]}}\n\n",
-                "event: response.completed\n",
-                "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"summary-response\",\"usage\":{\"input_tokens\":7,\"input_tokens_details\":{\"cached_tokens\":2},\"output_tokens\":3,\"output_tokens_details\":{\"reasoning_tokens\":1},\"total_tokens\":10},\"output\":[]}}\n\n",
-            )
-            .to_owned(),
-        )
-        .await;
-        let result = contexts_summarize(
-            json!({
-                "modelId": "fixture-model",
-                "input": [{
-                    "type": "message",
-                    "role": "user",
-                    "content": [{ "type": "input_text", "text": "x" }]
-                }],
-                "transportMode": "sse",
-                "providerSupportsWebsockets": false,
-                "connection": fixture_connection(base_url),
-            }),
-            &CancellationToken::new(),
-        )
-        .await
-        .expect("summary request should complete");
-        assert_eq!(result.status, TerminalStatus::Completed);
-        let result = result.result;
-        assert_eq!(result["summary"], "portable fixture summary");
-        assert_eq!(result["usage"]["inputTokens"], 7);
-        assert_eq!(result["usage"]["cachedInputTokens"], 2);
-        assert_eq!(result["usage"]["outputTokens"], 3);
-        assert_eq!(result["usage"]["reasoningTokens"], 1);
-
-        let request = request.await.expect("fixture request should be captured");
-        assert_eq!(fixture_header(&request, "session-id"), None);
-        assert_eq!(fixture_header(&request, "x-codex-beta-features"), None);
-        let body = fixture_request_body(&request);
-        assert_eq!(body["model"], "fixture-model");
-        assert_eq!(body["tool_choice"], "none");
-        assert!(body.get("tools").is_none());
-        assert!(body.get("prompt_cache_key").is_none());
-        assert!(body.get("client_metadata").is_none());
-        server.await.expect("fixture server should join");
-    }
-
-    #[tokio::test]
-    #[allow(clippy::large_futures)]
-    async fn summary_remote_v2_attribution_matches_the_compaction_prefix_policy() {
-        let (base_url, request, server) = spawn_capturing_fixture_http_server(
-            concat!(
-                "event: response.output_item.done\n",
-                "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"summary with attribution\"}]}}\n\n",
-                "event: response.completed\n",
-                "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"summary-response\",\"output\":[]}}\n\n",
-            )
-            .to_owned(),
-        )
-        .await;
-        let result = contexts_summarize(
-            json!({
-                "modelId": "fixture-model",
-                "input": [{
-                    "type": "compaction",
-                    "encrypted_content": "opaque"
-                }],
-                "transportMode": "sse",
-                "providerSupportsWebsockets": false,
-                "remoteCompactionV2Context": {
-                    "sessionId": "remote-v2-session",
-                    "compactionTrigger": "manual"
-                },
-                "connection": fixture_connection(base_url),
-            }),
-            &CancellationToken::new(),
-        )
-        .await
-        .expect("summary request should complete");
-        assert_eq!(result.status, TerminalStatus::Completed);
-
-        let request = request.await.expect("fixture request should be captured");
-        assert_eq!(
-            fixture_header(&request, "session-id"),
-            Some("remote-v2-session")
-        );
-        assert_eq!(
-            fixture_header(&request, "x-codex-beta-features"),
-            Some("remote_compaction_v2")
-        );
-        let body = fixture_request_body(&request);
-        let metadata = &body["client_metadata"];
-        assert_eq!(metadata["session_id"], "remote-v2-session");
-        let turn: Value = serde_json::from_str(
-            metadata["x-codex-turn-metadata"]
-                .as_str()
-                .expect("turn metadata should be a string"),
-        )
-        .expect("turn metadata should be JSON");
-        assert_eq!(turn["request_kind"], "compaction");
-        assert_eq!(turn["compaction"]["trigger"], "manual");
-        assert_eq!(turn["compaction"]["reason"], "user_requested");
-        server.await.expect("fixture server should join");
-    }
-
-    #[tokio::test]
-    async fn contexts_summarize_rejects_missing_unknown_and_invalid_parameters() {
-        let cases = [
-            json!({}),
-            json!({
-                "connection": fixture_connection("https://example.invalid/v1".to_owned()),
-                "input": [{ "type": "message", "role": "user", "content": [{ "type": "input_text", "text": "x" }] }]
-            }),
-            json!({
-                "modelId": "fixture-model",
-                "connection": fixture_connection("https://example.invalid/v1".to_owned()),
-                "input": [],
-            }),
-            json!({
-                "modelId": "fixture-model",
-                "connection": fixture_connection("https://example.invalid/v1".to_owned()),
-                "input": [{ "type": "message", "role": "user", "content": [{ "type": "input_text", "text": "x" }] }],
-                "unexpected": true,
-            }),
-        ];
-
-        for params in cases {
-            let error = contexts_summarize(params, &CancellationToken::new())
-                .await
-                .expect_err("invalid contexts.summarize parameters should fail");
-            assert!(matches!(
-                error,
-                RequestFailure::Bridge(error) if error.code == "invalid_params"
-            ));
-        }
-    }
-
-    #[tokio::test]
-    #[allow(clippy::large_futures)]
-    async fn rejects_malformed_portable_summary_output() {
-        let (base_url, server) = spawn_fixture_http_server(
-            concat!(
-                "event: response.output_item.done\n",
-                "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"first summary\"}]}}\n\n",
-                "event: response.output_item.done\n",
-                "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"second summary\"}]}}\n\n",
-                "event: response.completed\n",
-                "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"summary-response\",\"output\":[]}}\n\n",
-            )
-            .to_owned(),
-        )
-        .await;
-        let error = contexts_summarize(
-            json!({
-                "modelId": "fixture-model",
-                "input": [{
-                    "type": "message",
-                    "role": "user",
-                    "content": [{ "type": "input_text", "text": "x" }]
-                }],
-                "transportMode": "sse",
-                "providerSupportsWebsockets": false,
-                "connection": fixture_connection(base_url),
-            }),
-            &CancellationToken::new(),
-        )
-        .await
-        .expect_err("malformed summary output should fail");
-        assert!(matches!(
-            error,
-            RequestFailure::Bridge(error)
-                if error.code == "portable_summary_invalid_output"
-                    && error.message == "portable context summary returned invalid output"
-        ));
-        server.await.expect("fixture server should join");
-    }
-
-    #[test]
-    fn rejects_portable_summary_output_that_exceeds_the_bound() {
-        let item = ResponseItem::Message {
-            id: None,
-            role: "assistant".to_owned(),
-            content: vec![ContentItem::OutputText {
-                text: "fixture ".repeat(PORTABLE_SUMMARY_MAX_OUTPUT_TOKENS),
-            }],
-            phase: None,
-            internal_chat_message_metadata_passthrough: None,
-        };
-        let error =
-            extract_portable_summary(&item).expect_err("oversized summary output should fail");
-        assert_eq!(error.code, "portable_summary_invalid_output");
-        assert_eq!(
-            error.message,
-            "portable context summary exceeded the output limit"
-        );
-    }
-
-    #[tokio::test]
-    async fn contexts_summarize_honors_cancellation() {
-        let (base_url, server) = spawn_stalling_fixture_http_server().await;
-        let cancellation = CancellationToken::new();
-        let task_cancellation = cancellation.clone();
-        let task = tokio::spawn(async move {
-            contexts_summarize(
-                json!({
-                    "modelId": "fixture-model",
-                    "input": [{
-                        "type": "message",
-                        "role": "user",
-                        "content": [{ "type": "input_text", "text": "x" }]
-                    }],
-                    "transportMode": "sse",
-                    "providerSupportsWebsockets": false,
-                    "connection": fixture_connection(base_url),
-                }),
-                &task_cancellation,
-            )
-            .await
-        });
-        tokio::task::yield_now().await;
-        cancellation.cancel();
-        let result = task
-            .await
-            .expect("summary task should join")
-            .expect_err("cancelled summary should fail");
-        assert!(matches!(result, RequestFailure::Cancelled));
-        server.abort();
-    }
-
-    #[tokio::test]
-    #[allow(clippy::large_futures)]
     async fn preserves_remote_v2_compaction_items_without_rebuilding_them() {
         let (base_url, server) = spawn_fixture_http_server(
             concat!(
@@ -5241,6 +5034,215 @@ mod tests {
         assert_eq!(result["output"][1]["type"], "compaction");
         assert_eq!(result["output"][1]["encrypted_content"], "opaque");
         server.await.expect("fixture server should join");
+    }
+
+    #[tokio::test]
+    #[allow(clippy::large_futures)]
+    async fn remote_v2_retries_midstream_with_server_delay_and_accepts_unrelated_output() {
+        let (base_url, hits, server) = spawn_remote_retry_fixture_http_server().await;
+        let result = responses_compact(
+            json!({
+                "implementation": "remote_v2",
+                "transportMode": "sse",
+                "providerSupportsWebsockets": false,
+                "request": {
+                    "model": "fixture-model",
+                    "input": [{
+                        "type": "message",
+                        "role": "user",
+                        "content": [{ "type": "input_text", "text": "fixture input" }]
+                    }],
+                    "instructions": "",
+                    "tools": null,
+                    "parallel_tool_calls": true,
+                    "reasoning": null,
+                    "service_tier": null,
+                    "prompt_cache_key": null,
+                    "text": null
+                },
+                "requestTimeoutMs": 3_000,
+                "connection": {
+                    "providerId": "fixture-provider",
+                    "baseUrl": base_url,
+                    "headers": {},
+                    "authentication": { "kind": "none" },
+                    "maxRetries": 2
+                },
+            }),
+            &CancellationToken::new(),
+        )
+        .await
+        .expect("remote compaction should recover from a retryable stream error");
+
+        assert_eq!(result.status, TerminalStatus::Completed);
+        let output = result.result["output"]
+            .as_array()
+            .expect("compaction output should be an array");
+        assert_eq!(
+            output
+                .iter()
+                .filter(|item| item["type"] == "compaction")
+                .count(),
+            1
+        );
+        assert_eq!(output[0]["type"], "message");
+        assert_eq!(output[1]["encrypted_content"], "retry-compaction");
+        assert!(!result.result.to_string().contains("ignored stream output"));
+        assert_eq!(hits.load(Ordering::SeqCst), 2);
+        server.abort();
+    }
+
+    #[tokio::test]
+    #[allow(clippy::large_futures)]
+    async fn remote_v2_falls_back_to_sse_after_websocket_connect_failure() {
+        let (base_url, websocket_request, server) = spawn_websocket_fallback_server().await;
+        let result = responses_compact(
+            json!({
+                "implementation": "remote_v2",
+                "transportMode": "auto",
+                "providerSupportsWebsockets": true,
+                "remoteCompactionV2Context": { "sessionId": "fallback-session" },
+                "request": {
+                    "model": "fixture-model",
+                    "input": [],
+                    "instructions": "",
+                    "tools": null,
+                    "parallel_tool_calls": true,
+                    "reasoning": null,
+                    "service_tier": null,
+                    "prompt_cache_key": null,
+                    "text": null
+                },
+                "requestTimeoutMs": 2_000,
+                "connection": fixture_connection(base_url),
+            }),
+            &CancellationToken::new(),
+        )
+        .await
+        .expect("remote compaction should use the one-way SSE fallback");
+
+        assert_eq!(result.status, TerminalStatus::Completed);
+        assert_eq!(
+            result.result["output"][0]["encrypted_content"],
+            "fallback-compaction"
+        );
+        let websocket_request = websocket_request
+            .await
+            .expect("websocket fallback request should be captured");
+        assert_eq!(
+            fixture_header(&websocket_request, "x-codex-beta-features"),
+            Some("remote_compaction_v2")
+        );
+        server.await.expect("fallback fixture server should join");
+    }
+
+    #[tokio::test]
+    #[allow(clippy::large_futures)]
+    async fn remote_v2_caps_stream_retries_at_two_even_when_provider_allows_more() {
+        let (base_url, hits, server) = spawn_counting_fixture_http_server().await;
+        let error = responses_compact(
+            json!({
+                "implementation": "remote_v2",
+                "transportMode": "sse",
+                "providerSupportsWebsockets": false,
+                "request": {
+                    "model": "fixture-model",
+                    "input": [],
+                    "instructions": "",
+                    "tools": null,
+                    "parallel_tool_calls": true,
+                    "reasoning": null,
+                    "service_tier": null,
+                    "prompt_cache_key": null,
+                    "text": null
+                },
+                "requestTimeoutMs": 2_000,
+                "connection": {
+                    "providerId": "fixture-provider",
+                    "baseUrl": base_url,
+                    "headers": {},
+                    "authentication": { "kind": "none" },
+                    "maxRetries": 10
+                },
+            }),
+            &CancellationToken::new(),
+        )
+        .await
+        .expect_err("three failed remote attempts should exhaust the bounded budget");
+
+        assert!(matches!(error, RequestFailure::Bridge(error) if error.retryable));
+        assert_eq!(hits.load(Ordering::SeqCst), 3);
+        server.abort();
+    }
+
+    #[test]
+    fn remote_v2_backoff_uses_the_official_jitter_window() {
+        let first = remote_v2_backoff(1).as_millis();
+        let second = remote_v2_backoff(2).as_millis();
+        assert!((180..=220).contains(&first));
+        assert!((360..=440).contains(&second));
+    }
+
+    #[tokio::test]
+    async fn remote_v2_non_retryable_failure_does_not_fallback_to_sse() {
+        let mut retry_state = RemoteCompactionRetryState {
+            stream_retries: 0,
+            max_stream_retries: 2,
+            use_websocket: true,
+            websocket_fallback_used: false,
+            transport_mode: ResponsesTransportMode::Auto,
+            provider_supports_websockets: true,
+        };
+        let result = retry_remote_compaction_stream(
+            StreamStartFailure {
+                error: BridgeError {
+                    category: ErrorCategory::CapabilityError,
+                    code: "non_retryable_fixture".to_owned(),
+                    message: "fixture failure".to_owned(),
+                    retryable: false,
+                },
+                retry_delay: None,
+            },
+            &mut retry_state,
+            &CancellationToken::new(),
+            false,
+        )
+        .await
+        .expect("non-retryable failure should return directly");
+
+        assert!(matches!(result, Some(error) if error.code == "non_retryable_fixture"));
+        assert!(retry_state.use_websocket);
+        assert!(!retry_state.websocket_fallback_used);
+    }
+
+    #[tokio::test]
+    async fn remote_v2_cancellation_interrupts_retry_backoff() {
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+        let mut retry_state = RemoteCompactionRetryState {
+            stream_retries: 0,
+            max_stream_retries: 2,
+            use_websocket: false,
+            websocket_fallback_used: false,
+            transport_mode: ResponsesTransportMode::Sse,
+            provider_supports_websockets: false,
+        };
+        let result = retry_remote_compaction_stream(
+            StreamStartFailure {
+                error: BridgeError {
+                    category: ErrorCategory::CapabilityError,
+                    code: "retryable_fixture".to_owned(),
+                    message: "fixture failure".to_owned(),
+                    retryable: true,
+                },
+                retry_delay: None,
+            },
+            &mut retry_state,
+            &cancellation,
+            false,
+        )
+        .await;
+        assert!(matches!(result, Err(RequestFailure::Cancelled)));
     }
 
     #[tokio::test]
@@ -5447,11 +5449,6 @@ mod tests {
         assert_eq!(result.status, TerminalStatus::TimedOut);
         assert_eq!(result.result, json!({}));
         server.abort();
-    }
-
-    #[test]
-    fn portable_summary_timeout_matches_the_maximum_compaction_deadline() {
-        assert_eq!(PORTABLE_SUMMARY_TIMEOUT_MS, 600_000);
     }
 
     #[test]
@@ -6972,6 +6969,59 @@ mod tests {
                 Some(name) => assert_eq!(resolved["dispatchTools"][0]["name"], name),
                 None => assert_eq!(resolved["dispatchTools"].as_array().map(Vec::len), Some(0)),
             }
+        }
+    }
+
+    #[test]
+    fn host_tool_policy_can_disable_every_model_and_dispatch_tool() {
+        let resolved = tools_resolve(json!({
+            "model": fixture_model("shell_command", false),
+            "allowedLocalToolNames": [],
+            "webSearchMode": "indexed",
+            "providerContract": complete_provider_contract(true, true, true, true),
+            "standaloneWebSearch": { "featureEnabled": true, "executorAvailable": true },
+            "sessions": { "enabled": true, "executorAvailable": true },
+            "shell": { "allowLoginShell": true, "execPermissionApprovalsEnabled": false },
+            "optional": { "viewImage": true, "imageGeneration": true },
+        }))
+        .expect("tool-less host policy should resolve");
+
+        assert_eq!(resolved["modelTools"].as_array().map(Vec::len), Some(0));
+        assert_eq!(resolved["dispatchTools"].as_array().map(Vec::len), Some(0));
+        assert_eq!(resolved["localToolNames"].as_array().map(Vec::len), Some(0));
+        assert_eq!(
+            resolved["hostedToolNames"].as_array().map(Vec::len),
+            Some(0)
+        );
+        assert_eq!(resolved["shellSurface"], "disabled");
+        assert_eq!(resolved["sessionSurface"], "disabled");
+        assert_eq!(
+            resolved["capabilities"]["sessions"]["reason"],
+            "disabled_by_host_tool_policy"
+        );
+        assert_eq!(
+            resolved["capabilities"]["webSearch"]["reason"],
+            "disabled_by_host_tool_policy"
+        );
+    }
+
+    #[test]
+    fn host_tool_policy_rejects_unknown_or_duplicate_names() {
+        let base = json!({
+            "model": fixture_model("disabled", false),
+            "webSearchMode": "disabled",
+            "providerContract": complete_provider_contract(false, false, false, false),
+            "standaloneWebSearch": { "featureEnabled": false, "executorAvailable": false },
+            "sessions": { "enabled": false, "executorAvailable": true },
+            "shell": { "allowLoginShell": true, "execPermissionApprovalsEnabled": false },
+        });
+        for names in [json!(["unknown"]), json!(["update_plan", "update_plan"])] {
+            let mut input = base.clone();
+            input["allowedLocalToolNames"] = names;
+            let error = tools_resolve(input).expect_err("invalid host tool policy must fail");
+            assert!(
+                matches!(error, RequestFailure::Bridge(error) if error.code == "invalid_params")
+            );
         }
     }
 
@@ -9342,6 +9392,67 @@ mod tests {
         (format!("http://{address}/v1"), hits, server)
     }
 
+    async fn spawn_remote_retry_fixture_http_server()
+    -> (String, Arc<AtomicU64>, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("remote retry fixture listener should bind");
+        let address = listener
+            .local_addr()
+            .expect("remote retry fixture listener should have an address");
+        let hits = Arc::new(AtomicU64::new(0));
+        let hit_counter = Arc::clone(&hits);
+        let server = tokio::spawn(async move {
+            loop {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    break;
+                };
+                let attempt = hit_counter.fetch_add(1, Ordering::SeqCst);
+                let mut request = vec![0_u8; 16 * 1024];
+                let length = stream
+                    .read(&mut request)
+                    .await
+                    .expect("remote retry fixture request should be readable");
+                assert!(
+                    String::from_utf8_lossy(&request[..length]).starts_with("POST /v1/responses")
+                );
+                let body = if attempt == 0 {
+                    concat!(
+                        "event: response.output_text.delta\n",
+                        "data: {\"type\":\"response.output_text.delta\",\"delta\":\"ignored stream output\"}\n\n",
+                        "event: response.failed\n",
+                        "data: {\"type\":\"response.failed\",\"response\":{\"id\":\"retry-response\",\"error\":{\"code\":\"rate_limit_exceeded\",\"message\":\"try again in 1ms\"}}}\n\n",
+                    )
+                } else {
+                    concat!(
+                        "event: response.output_text.delta\n",
+                        "data: {\"type\":\"response.output_text.delta\",\"delta\":\"ignored second output\"}\n\n",
+                        "event: response.output_item.done\n",
+                        "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"compaction\",\"encrypted_content\":\"retry-compaction\"}}\n\n",
+                        "event: response.completed\n",
+                        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"retry-completed\"}}\n\n",
+                    )
+                };
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                stream
+                    .write_all(response.as_bytes())
+                    .await
+                    .expect("remote retry fixture response should be writable");
+                stream
+                    .shutdown()
+                    .await
+                    .expect("remote retry fixture response should close");
+                if attempt >= 1 {
+                    break;
+                }
+            }
+        });
+        (format!("http://{address}/v1"), hits, server)
+    }
+
     async fn spawn_websocket_fallback_server() -> (
         String,
         oneshot::Receiver<String>,
@@ -9380,6 +9491,8 @@ mod tests {
                 .expect("websocket rejection should close");
 
             let body = concat!(
+                "event: response.output_item.done\n",
+                "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"compaction\",\"encrypted_content\":\"fallback-compaction\"}}\n\n",
                 "event: response.completed\n",
                 "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"fallback-response\"}}\n\n",
             );
@@ -9747,7 +9860,7 @@ mod tests {
         };
         assert!(request_id.is_none());
         assert_eq!(error.code, "invalid_frame");
-        assert_eq!(error.message, "bridge frame does not match protocol v5");
+        assert_eq!(error.message, "bridge frame does not match protocol v6");
         assert!(!error.message.contains(secret));
         assert!(!error.message.contains("fixture-secret-sentinel"));
         assert!(!format!("{messages:?}").contains(secret));

@@ -2,188 +2,142 @@
 
 ## Baseline
 
-The production baseline is OpenAI Codex `0.144.3`, tag `rust-v0.144.3`, peeled source commit
-`78ad6e6bfd1d3b6a209acd3ef82172a96b25179c`, and Rust `1.95.0`. A native bridge handshake must
-report these values together with bridge protocol version `5`, its build target, build source commit,
-and capabilities. A mismatch is fatal.
+The native implementation is pinned to OpenAI Codex `0.144.3`, tag `rust-v0.144.3`, peeled source
+commit `78ad6e6bfd1d3b6a209acd3ef82172a96b25179c`, and Rust `1.95.0`. The TypeScript/native JSONL
+bridge is protocol version `6`. A handshake mismatch is fatal before provider registration.
 
-## Product boundary
+The paired Pi fork remains session format version `3`, common extension ABI version `1`, and
+provider payload compaction API version `1`. Remote checkpoint persistence uses the additive
+`providerCheckpointCommitApiVersion: 1` capability. Pi product versions do not define compatibility.
 
-Pi owns sessions, model selection, tool dispatch, approvals, persistence, and the terminal UI. This
-package adapts supported OpenAI Codex provider models to selected public Codex runtime contracts. Its
-single production child process is `codex-bridge`; it never starts Codex CLI, Codex SDK, or app-server
-as a second agent.
+## Ownership
 
-The first stable release will provide:
+Pi owns sessions, canonical history, model selection, provider registration, tool profile lifecycle,
+approval UI, persistence, and generic context projection. The adaptor owns Codex identity binding,
+checkpoint validation, replay selection, and threshold decisions. The native bridge owns Responses
+wire behavior, SSE/WebSocket transport, Remote Compaction, cancellation, and retry.
 
-- official Responses SSE and WebSocket transport, retry behavior, replay, and compaction through the
-  vendored native modules;
-- `update_plan` on every supported activation;
-- the official primary shell resolver plus native managed sessions: shell-command models retain
-  `shell_command` and receive the pinned `exec_command`/`write_stdin` contracts as a supplemental
-  surface when background sessions are enabled;
-- `apply_patch`, `view_image`, and `image_gen.imagegen` when their official capabilities resolve;
-- standalone `web.run` or hosted `web_search`, selected by provider capability;
-- Pi interactive approval before native command, patch, filesystem, image, network, or non-empty
-  session stdin execution in prompt mode, with an explicit Pi-owned per-request bypass option;
-- one `/codex` settings and diagnostics entry point.
+TypeScript does not implement Responses wire formats, SSE, WebSocket, retry timers, compaction wire
+behavior, PTY handling, or patch execution. The only TypeScript/native operations are the versioned
+bridge methods listed in [`docs/bridge-protocol.md`](./docs/bridge-protocol.md).
 
-## Interrupted tool-call continuation
+## Compaction
 
-When an active Pi branch contains a completed assistant tool call without its matching persisted
-result, the adaptor adds one request-local error output before the next provider turn:
+Every manual, threshold, overflow, and provider-inline Codex compaction uses exactly one
+`responses.compact` operation per native attempt. `remote_v2` is selected when negotiated;
+`compact_endpoint` is selected otherwise. A failed operation never changes implementation, creates a
+second request in TypeScript, or commits partial state. Non-Codex providers and inactive adaptor
+routes remain on canonical Pi behavior.
 
-```text
-Tool result was not recorded. The tool may have partially executed; inspect state before retrying.
-```
+Activated Codex sessions support plain `/compact`; custom `/compact` instructions are rejected before
+any remote request because the pinned official operation has no instruction parameter.
 
-The result is rebuilt only for provider projection. Pi remains the sole owner of session persistence,
-and the adaptor never writes this result to the session, re-executes the interrupted tool, or assumes
-that the tool had no side effects. Complete call/result histories retain their existing structured
-provider input without an additional output.
+Remote V2 accepts unrelated stream output, requires exactly one `compaction` item and a completed
+terminal event, retries retryable open or mid-stream failures in native code, and performs at most
+one WebSocket-to-SSE fallback. The retry budget is the initial attempt plus
+`min(connection.maxRetries, 2)` stream retries for each transport path. Server delay wins over the
+pinned 200 ms exponential backoff with 0.9-1.1 jitter. Cancellation interrupts the stream or delay.
+The official compact endpoint retains its pinned `CompactClient` retry policy and output contract.
 
-## Compaction ownership
+## Checkpoint contract
 
-Pi remains the owner of every durable compaction boundary. Every new adaptor-owned compaction now
-commits a real Pi `CompactionEntry` whose primary durable context is the portable Pi summary plus the
-Pi-materialized `retainedTail`. The adaptor may attach an optional opaque OpenAI accelerator to the
-same entry, but no request depends on opaque state for correctness.
-
-Automatic compaction is inline automatic compaction owned by the adaptor's paired
-`before_provider_payload` transaction. When the active request is known to be over the configured
-threshold, the hook prepares one proposal against Pi's candidate leaf, runs native portable summary
-generation and native opaque compaction against the same normalized prefix, and returns a rewritten
-payload plus one optional compaction proposal. Pi validates the token-bound snapshot, materializes
-the retained tail, persists the real `CompactionEntry`, emits the committed event, and only then
-allows final provider dispatch. It does not abort the run, call `ctx.compact()`, add a turn, or send
-a continuation message. A repeated request with the same active branch reuses the last matching
-accelerator instead of compacting the same input again.
-
-Manual and overflow compaction remain Pi-owned commit paths. The adaptor now requires a portable
-summary before returning a compaction result. When opaque compact succeeds, it is stored as optional
-version `3` details on the same Pi entry; when opaque compact fails, the portable summary still
-commits and the request continues from that portable boundary.
-
-Legacy automatic custom checkpoints (`pi-codex-adaptor.auto-compaction`) and legacy manual opaque
-details remain readable only for exact-identity replay or one-time migration. A matching provider
-identity may still reuse the legacy opaque window. Any identity change or opaque miss falls back to
-portable Pi context or, for opaque-only legacy sessions, performs one migration compaction from Pi's
-full active path before dispatch. Unsupported or ambiguous state fails closed rather than sending
-mismatched opaque state.
-
-This contract does not promise complete Codex CLI parity. P1 and P2 capabilities are tracked in
-[`docs/remaining-gaps.md`](./docs/remaining-gaps.md) and require explicit contract additions.
-
-## Non-goals
-
-- Compatibility with arbitrary Responses-compatible providers.
-- Subscription usage, rate-limit windows, reset credit, account management, or Codex agent lifecycle.
-
-## Protocol and errors
-
-Bridge protocol v5 is newline-delimited JSON with bounded frames and request IDs. It defines
-handshake, request, stream event, cancellation, session write/resize/terminate, result, error, and
-backpressure envelopes. The bridge now includes adaptor-owned `contexts.summarize` in addition to
-`responses.create` and `responses.compact`. Unknown events are retained for safe diagnostics and
-never imply successful termination. The normative envelope contract and limits are documented in
-[`docs/bridge-protocol.md`](./docs/bridge-protocol.md).
-
-Terminal states are `completed`, `incomplete`, `failed`, `aborted`, and `timed_out`. Public error
-categories are `ConfigurationError`, `AuthenticationError`, `ProtocolError`, `CapabilityError`, and
-`NativeToolError`. Safe diagnostics retain causes without exposing secrets or user content.
-
-## Privacy and authorization
-
-Credentials enter the bridge only through bounded, request-scoped provider connections. They must not
-appear in argv, configuration files, logs, snapshots, errors, or diagnostics.
-Prompts, messages, headers, opaque compaction items, and absolute user paths are excluded from default
-diagnostics. `prompt` is the safe default: native operations wait for an explicit Pi approval decision
-and workspace policy result. `bypass` is explicit Pi-owned per-request preauthorization for the fixed
-native allowlist; it is not an OS sandbox. Native commands run with the user's permissions, and
-workspace roots do not sandbox shell behavior. Validation, workspace containment, cancellation, and
-side-effect ordering remain native responsibilities in both modes.
-
-## Configuration
-
-The only supported configuration location is `~/.pi/agent/pi-codex-adaptor.json`. It accepts this
-project's `schemaVersion: 2` model only and does not read Codex `config.toml`. Invalid existing files
-are preserved rather than guessed or overwritten.
-
-The new-install default is:
+The single new extension checkpoint schema is:
 
 ```json
 {
-  "schemaVersion": 2,
-  "activation": {
-    "providers": ["openai-codex"]
-  },
-  "tools": {
-    "backgroundSessions": true,
-    "optional": {
-      "viewImage": "auto",
-      "imageGeneration": "auto"
-    }
-  },
-  "security": {
-    "approvalPolicy": "prompt"
-  },
-  "codex": {
-    "serviceTier": "default",
-    "verbosity": "low",
-    "transport": { "mode": "auto" },
-    "webSearch": { "mode": "cached" },
-    "compaction": {
-      "mode": "auto",
-      "autoCompactTokenLimit": "model"
-    }
-  },
-  "ui": {
-    "status": true
-  }
+  "kind": "pi-codex-adaptor.remote-compaction",
+  "version": 1,
+  "sessionFingerprint": "<opaque fingerprint>",
+  "providerId": "<provider id>",
+  "api": "<api>",
+  "baseUrl": "<normalized base URL>",
+  "modelId": "<model id>",
+  "authenticationBinding": { "kind": "credential", "fingerprint": "<fingerprint>" },
+  "checkpointId": "<correlation id>",
+  "coveredEntryId": "<canonical branch entry id>",
+  "implementation": "remote_v2",
+  "output": [{ "type": "compaction", "encrypted_content": "<opaque output>" }],
+  "tokensBefore": 12345
 }
 ```
 
-Shell and web tool surfaces are resolver outputs, not user-forced configuration. Optional image tools
-accept only `auto | off`; transport accepts `auto | sse`; compaction accepts `off` or `auto` with a
-model threshold or a positive integer below the model context window. `backgroundSessions` enables
-managed retention for Unified Exec and supplements shell-command models with the pinned
-`exec_command` and `write_stdin` contracts. Disabling it removes the supplemental tools and causes a
-Unified Exec process still running after its initial yield to terminate instead of being retained.
+The actual output may include the other supported structured response items returned by the official
+operation, but it must contain exactly one compaction item and remain within the bounded schema.
+Pi appends one context-invisible `CustomEntry`, reads it back, and verifies its parent, ID, custom
+type, data, active branch, and commit token before dispatching the sealed rewritten payload. An
+indeterminate append blocks dispatch and is never retried.
 
-## Current implementation status
+For an exact identity, replay is:
 
-The package version is `0.0.0` and has not been published. The worktree defines and tests protocol v5
-envelopes, the baseline handshake, concurrent request correlation, cancellation, bounded event
-backpressure, and safe process shutdown. The bridge compiles and links the pinned official wire
-modules and advertises `contexts.summarize`, Responses SSE/WebSocket, the Compact endpoint,
-RemoteCompactionV2, model metadata, update-plan, hosted and standalone web, Unified Exec,
-shell-command, apply-patch, view-image, and image generation capabilities. It resolves the official
-tool contracts, including hidden unified-exec fallback dispatch, and supports either prompt approval
-or explicit per-request preauthorization for command, patch, filesystem, image, and network work.
-Separately, canonical workspace roots constrain command working directories, patch targets, viewed
-images, and referenced image-generation inputs. Unified Exec pipe/PTY sessions support bounded
-polling, prompt-approved or preauthorized non-empty stdin writes, resize, termination, cancellation,
-and shutdown cleanup. Pi activation is reversible, preserves additive external tools, and suppresses
-Pi core tools while the Codex provider is active. A pending or unavailable activated Codex profile
-fails closed without restoring Pi core tools; deactivation restores only the Pi core selection
-captured before activation. It implements portable-primary inline automatic compaction, manual Pi
-compaction, optional opaque accelerators, exact-identity replay, and legacy migration without
-client-side decryption. Both Responses API registrations use process-stable functions that route by
-Pi's session identifier to exactly one session-local activation, profile, compaction, capability,
-fallback, and runtime owner. Nested adaptor loads cannot replace another session's dispatcher;
-missing or ambiguous attribution fails locally without a provider call.
+```text
+validated checkpoint output + Pi canonical model projection after coveredEntryId
+```
 
-## Provider error visibility
+The selected checkpoint, historical checkpoint entries, and all other context-invisible entries are
+excluded from the suffix. No opaque content is decrypted or converted to text. On a verified commit,
+Pi records the custom entry ID as a context-usage epoch boundary. Usage is unknown until a later
+successful assistant response supplies valid non-zero usage; the boundary is restored from the active
+branch and cleared on identity mismatch without Pi parsing checkpoint data.
 
-For eligible official upstream failures, the native bridge exposes one bounded status/body/message
-diagnostic to Pi while retaining the existing error category, code, and retryability. Pi displays
-that trusted detail through its normal assistant-error and compaction-error paths. Retryable normal
-failures retain Pi's stable service-unavailable prefix, and Pi alone owns retry scheduling. Provider
-contract mismatch, cancellation, arbitrary local exceptions, logs, diagnostics, credentials,
-headers, request data, and opaque compaction data remain excluded from this diagnostic channel.
+The threshold state machine is derived from the active branch on every request:
 
-Normal failed assistant messages may persist their displayed provider error in Pi session history;
-compaction failures are transient `compaction_end` events and create no compaction entry.
-`/codex` exposes settings, manual compaction, and a confirmed, redacted diagnostics export. Remaining
-release gates, including Trusted Publishing and a published prerelease, are not complete. The planned
-first prerelease version is `0.1.0-rc.0`.
+| State | Behavior |
+| --- | --- |
+| canonical | canonical Pi payload; compact once when effective tokens exceed the threshold |
+| replay clean | matching checkpoint and no canonical suffix; replay without a request |
+| replay below threshold | matching checkpoint plus suffix within threshold; replay without a request |
+| recompact | matching checkpoint plus an over-threshold suffix; one request and one proposal |
+| mismatch | no opaque replay; one warning per session and exact identity; canonical payload |
+| stale | no append and no dispatch |
+
+Repeated preparation of an unchanged covered prefix produces zero compact calls and zero custom
+entries. A growing suffix remains canonical until its first over-threshold preparation.
+
+## Continuity
+
+Opaque continuity is guaranteed only for the exact session fingerprint, provider, API, normalized base
+URL, model, authentication binding, checkpoint ID, and covered active-branch entry. Provider, model,
+authentication, or adaptor changes use canonical Pi history and never replay opaque output. The UI
+emits one bounded, non-sensitive warning per selected identity. There is no portable migration,
+automatic textual compaction, hidden compatibility flag, or fallback summary request. Starting a new
+session is the supported recovery when canonical history does not fit the destination.
+
+Old adaptor-specific checkpoint entries, automatic checkpoint kinds, and prior compaction details are
+not read, written, migrated, or used as usage boundaries. They remain ordinary inert Pi custom entries
+and are outside adaptor continuity guarantees. Ordinary Pi sessions and textual `CompactionEntry`
+records remain readable through Pi without adaptor parsing. Install or upgrade acceptance starts a
+new session.
+
+## Pi host contract
+
+The fork adds only an independently versioned optional capability:
+
+```ts
+providerCheckpointCommitApiVersion: 1;
+setProviderCheckpointUsageBoundary?(entryId?: string): boolean;
+```
+
+The additive `providerCheckpoint` proposal and manual result are mutually exclusive with the existing
+textual compaction proposal. Existing textual proposal behavior is unchanged. Pi's session schema,
+`SessionEntry`, `CompactionEntry`, session migrations, and generic context projection do not gain
+provider-specific branches.
+
+## Protocol and configuration
+
+Protocol v6 is bounded JSONL with request IDs, cancellation, acknowledgement/backpressure, approval,
+and terminal results. It contains `responses.create`, `responses.compact`, `models.resolve`,
+`tools.resolve`, `tools.execute`, and `diagnostics.read`; the removed context-summary operation is not
+part of the contract. Capabilities include `remote_compaction_v2` and `compact_endpoint`.
+
+The supported configuration is schema version `2` in
+`~/.pi/agent/pi-codex-adaptor.json`. Compaction is `off` or `auto`, with a model-derived or positive
+configured threshold below the model context window. The package is private and is not published.
+
+## Privacy and non-goals
+
+Credentials enter native code only in bounded request-scoped connections. Prompts, messages, headers,
+opaque output, account data, and absolute user paths do not enter diagnostics, fixtures, snapshots, or
+errors. Native commands run with the user's permissions; bypass approval is not an OS sandbox.
+
+The product does not add account usage, rate-limit windows, reset-credit handling, app-server agent
+lifecycle, release publication, or registry installation automation.

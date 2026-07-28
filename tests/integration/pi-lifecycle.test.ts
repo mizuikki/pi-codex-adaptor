@@ -6,11 +6,14 @@ import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { CodexCompactionStore } from "../../src/application/compaction.ts";
 import { ConfigurationService } from "../../src/application/configuration.ts";
 import { ProviderActivationPolicy } from "../../src/application/provider-activation.ts";
+import { ResolveEffectiveCapabilities } from "../../src/application/resolve-effective-capabilities.ts";
+import { MANAGED_TOOL_NAMES } from "../../src/domain/capability.ts";
 import piCodexAdaptor from "../../src/extension.ts";
 import { FileConfigurationRepository } from "../../src/infrastructure/configuration/file-config-repository.ts";
 import { createCodexStreamSimple } from "../../src/integration/pi/codex-provider.ts";
 import {
 	type CodexToolProfileCoordinator,
+	createCodexToolProfile,
 	PI_CORE_AGENT_TOOL_NAMES,
 } from "../../src/integration/pi/codex-tool-profile.ts";
 import { registerCodexTools } from "../../src/integration/pi/codex-tools.ts";
@@ -51,6 +54,7 @@ function healthyProfile(): CodexToolProfileCoordinator {
 	return {
 		readiness: { kind: "healthy", capabilityKey: "fixture-key" },
 		skillLoader: "shell_command",
+		registeredManagedTools: () => MANAGED_TOOL_NAMES,
 		enterPending: () => {},
 		installHealthy: () => true,
 		installUnavailable: () => {},
@@ -67,7 +71,9 @@ describe("fake Pi + real native lifecycle", () => {
 		const lifecycleApi = {
 			extensionSdkApiVersion: 1,
 			providerPayloadCompactionApiVersion: 1,
+			providerCheckpointCommitApiVersion: 1,
 			compactionFailureResultApiVersion: 1,
+			setProviderCheckpointUsageBoundary: () => true,
 			registerCommand: pi.api.registerCommand,
 			registerProvider: pi.api.registerProvider,
 			on: pi.api.on,
@@ -299,6 +305,107 @@ describe("fake Pi + real native lifecycle", () => {
 		expect(events).toContain("done");
 		expect(finalText).toBe("fixture");
 		expect(server.requests.some((entry) => entry.path.endsWith("/responses"))).toBe(true);
+	}, 60_000);
+
+	test("keeps an explicitly tool-less Codex profile healthy and advertises no tools", async () => {
+		const server = await startFakeResponsesServer([
+			fixtureModelSpec({ slug: "gpt-5.5", shellType: "shell_command" }),
+		]);
+		cleanups.push(() => server.stop());
+
+		const token = fixtureToken();
+		const { runtime } = await createIntegrationRuntime();
+		cleanups.push(async () => runtime.shutdown());
+		const service = await configurationService();
+		const activation = new ProviderActivationPolicy(service);
+		const capabilities = new ResolveEffectiveCapabilities(runtime);
+		const pi = createFakePi({ token, activeTools: [], allowedToolNames: [] });
+		const profile = createCodexToolProfile(pi.api);
+		registerCodexTools(pi.api, runtime, service, activation, capabilities, profile);
+		const model = fixtureModel("gpt-5.5", "openai-codex", server.baseUrl);
+		await emit(pi, "session_start", pi.context(model));
+
+		expect(profile.readiness.kind).toBe("healthy");
+		expect(profile.registeredManagedTools()).toEqual([]);
+		expect(pi.activeTools).toEqual([]);
+		expect(pi.status.get("codex-adaptor")).toBe("Codex");
+
+		const stream = createCodexStreamSimple(
+			runtime,
+			service,
+			activation,
+			new CodexCompactionStore(),
+			capabilities,
+			profile,
+		)(
+			model,
+			{
+				systemPrompt: "",
+				messages: [{ role: "user", content: "tool-less fixture", timestamp: 1 }],
+				tools: [],
+			},
+			{ apiKey: token },
+		);
+		const events: string[] = [];
+		for await (const event of stream) events.push(event.type);
+		expect(events).toContain("done");
+		const request = server.requests.find(
+			(entry) => entry.method === "POST" && entry.path.endsWith("/responses"),
+		);
+		expect(JSON.parse(request?.body ?? "{}")).not.toHaveProperty("tools");
+	}, 60_000);
+
+	test("treats a host-excluded managed tool as disabled rather than foreign-owned", async () => {
+		const server = await startFakeResponsesServer([
+			fixtureModelSpec({ slug: "gpt-5.5", shellType: "shell_command" }),
+		]);
+		cleanups.push(() => server.stop());
+
+		const token = fixtureToken();
+		const { runtime } = await createIntegrationRuntime();
+		cleanups.push(async () => runtime.shutdown());
+		const service = await configurationService();
+		const activation = new ProviderActivationPolicy(service);
+		const capabilities = new ResolveEffectiveCapabilities(runtime);
+		const allowedToolNames = MANAGED_TOOL_NAMES.filter((name) => name !== "update_plan");
+		const pi = createFakePi({ token, activeTools: [], allowedToolNames });
+		const profile = createCodexToolProfile(pi.api);
+		registerCodexTools(pi.api, runtime, service, activation, capabilities, profile);
+		const model = fixtureModel("gpt-5.5", "openai-codex", server.baseUrl);
+		await emit(pi, "session_start", pi.context(model));
+
+		expect(profile.readiness.kind).toBe("healthy");
+		expect(pi.notifications).not.toContain(
+			"Codex unavailable: managed tool ownership conflict for update_plan",
+		);
+		expect(pi.activeTools).not.toContain("update_plan");
+		const updatePlan = pi.tools.get("update_plan");
+		if (updatePlan === undefined) throw new Error("update_plan fixture was not registered");
+
+		const stream = createCodexStreamSimple(
+			runtime,
+			service,
+			activation,
+			new CodexCompactionStore(),
+			capabilities,
+			profile,
+		)(
+			model,
+			{
+				systemPrompt: "",
+				messages: [{ role: "user", content: "filtered fixture", timestamp: 1 }],
+				tools: [updatePlan],
+			},
+			{ apiKey: token },
+		);
+		for await (const _event of stream) {
+			// Drain the real native response.
+		}
+		const request = server.requests.find(
+			(entry) => entry.method === "POST" && entry.path.endsWith("/responses"),
+		);
+		const body = JSON.parse(request?.body ?? "{}") as { tools?: Array<{ name?: string }> };
+		expect(body.tools?.map((tool) => tool.name)).not.toContain("update_plan");
 	}, 60_000);
 
 	test("runs a selected openai-responses provider with an opaque API key", async () => {

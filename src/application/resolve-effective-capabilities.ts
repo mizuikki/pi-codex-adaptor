@@ -3,6 +3,7 @@ import {
 	buildToolsResolveParams,
 	type CompleteCodexProviderContract,
 	completeProviderContract,
+	MANAGED_TOOL_NAMES,
 	type ManagedToolName,
 	parseModelResolution,
 	parseToolResolution,
@@ -49,6 +50,7 @@ export interface ResolveEffectiveCapabilitiesInput {
 	providerId: string;
 	config: CodexConfig;
 	contextWindow?: number;
+	hostToolNames?: readonly ManagedToolName[];
 }
 
 export class ResolveEffectiveCapabilities {
@@ -89,6 +91,7 @@ export class ResolveEffectiveCapabilities {
 			await this.#runtime.resolveTools(
 				buildToolsResolveParams(modelResolution, {
 					providerId: input.providerId,
+					allowedLocalToolNames: input.hostToolNames ?? MANAGED_TOOL_NAMES,
 					webSearchMode: input.config.codex.webSearch.mode,
 					viewImage: input.config.tools.optional.viewImage === "auto",
 					imageGeneration: input.config.tools.optional.imageGeneration === "auto",
@@ -104,13 +107,11 @@ export class ResolveEffectiveCapabilities {
 			providerContract.responsesWebsocket === "official-only" &&
 			bridge.has("responses_websocket") &&
 			input.providerId === "openai-codex";
-		const portableContextSummary = bridge.has("portable_context_summary");
 		const transport = bridge.has("responses_sse")
 			? available("provider-contract")
 			: unavailable("responses_sse_executor_unavailable");
 		const implementation =
-			portableContextSummary &&
-			(bridge.has("remote_compaction_v2") || bridge.has("compact_endpoint"))
+			bridge.has("remote_compaction_v2") || bridge.has("compact_endpoint")
 				? bridge.has("remote_compaction_v2")
 					? "remote_v2"
 					: "compact_endpoint"
@@ -203,7 +204,6 @@ export function capabilityContextFromSnapshot(
 		providerSupportsWebsockets: snapshot.providerSupportsWebsockets,
 		remoteCompactionV2: snapshot.compaction.implementation === "remote_v2",
 		compactEndpoint: snapshot.compaction.implementation === "compact_endpoint",
-		portableContextSummary: snapshot.bridgeCapabilities.includes("portable_context_summary"),
 	};
 }
 
@@ -287,6 +287,7 @@ export function capabilityCacheKey(input: ResolveEffectiveCapabilitiesInput): st
 		input.modelId,
 		input.providerId,
 		input.contextWindow ?? null,
+		input.hostToolNames ?? MANAGED_TOOL_NAMES,
 		{
 			webSearchMode: input.config.codex.webSearch.mode,
 			viewImage: input.config.tools.optional.viewImage,

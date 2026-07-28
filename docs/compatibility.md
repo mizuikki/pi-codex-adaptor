@@ -7,6 +7,8 @@ The adaptor is delivered with a paired Pi fork, not with an upstream Pi npm rele
 for development; it is not a runtime dependency graph. A compatible host exposes
 `ExtensionAPI.extensionSdkApiVersion === 1`,
 `ExtensionAPI.providerPayloadCompactionApiVersion === 1`, and
+`ExtensionAPI.providerCheckpointCommitApiVersion === 1` with
+`setProviderCheckpointUsageBoundary`, and
 `ExtensionAPI.compactionFailureResultApiVersion === 1`.
 The adaptor rejects a host without that marker before it registers providers or before any provider
 dispatch can occur.
@@ -26,7 +28,7 @@ The repository skeleton is developed with:
 | npm CLI | `12.0.1` |
 | Rust | `1.95.0` |
 | Pi development source | sibling `../pi` workspaces |
-| Pi runtime host | extension SDK API version `1`, provider payload compaction API version `1`, compaction failure result API version `1` |
+| Pi runtime host | extension SDK API version `1`, provider payload compaction API version `1`, provider checkpoint commit API version `1`, compaction failure result API version `1` |
 | TypeBox | `1.3.6` |
 
 Before the first release, installation and loading will be tested on the candidate Node.js floor,

@@ -31,18 +31,21 @@ class ResolverRuntime implements CodexRuntime {
 		this.resolveToolsCalls += 1;
 		const input = params as Record<string, unknown>;
 		const enabled = (input.sessions as Record<string, unknown>).enabled === true;
+		const allowed = new Set(input.allowedLocalToolNames as string[]);
+		const modelTools = enabled
+			? ["shell_command", "exec_command", "write_stdin"]
+			: ["shell_command"];
 		return {
-			modelTools: enabled
-				? [
-						{ type: "function", name: "shell_command" },
-						{ type: "function", name: "exec_command" },
-						{ type: "function", name: "write_stdin" },
-					]
-				: [{ type: "function", name: "shell_command" }],
-			dispatchTools: [{ type: "function", name: "shell_command" }],
-			localToolNames: enabled
-				? ["shell_command", "exec_command", "write_stdin"]
-				: ["shell_command"],
+			modelTools: modelTools
+				.filter((name) => allowed.has(name))
+				.map((name) => ({
+					type: "function",
+					name,
+				})),
+			dispatchTools: allowed.has("shell_command")
+				? [{ type: "function", name: "shell_command" }]
+				: [],
+			localToolNames: modelTools.filter((name) => allowed.has(name)),
 			hostedToolNames: ["web_search"],
 			shellSurface: "shell-command",
 			sessionSurface: enabled ? "supplemental" : "disabled",
@@ -63,9 +66,6 @@ class ResolverRuntime implements CodexRuntime {
 	async createResponse(): Promise<never> {
 		throw new Error("unused");
 	}
-	async summarizeContext(): Promise<never> {
-		throw new Error("unused");
-	}
 	async compact(): Promise<never> {
 		throw new Error("unused");
 	}
@@ -78,7 +78,6 @@ class ResolverRuntime implements CodexRuntime {
 const capabilities = [
 	"responses_sse",
 	"responses_websocket",
-	"portable_context_summary",
 	"remote_compaction_v2",
 	"compact_endpoint",
 	"unified_exec",
@@ -150,9 +149,38 @@ describe("effective capability application use case", () => {
 		expect(capabilityContextFromSnapshot(snapshot).backgroundSessionsAvailable).toBe(false);
 	});
 
-	test("requires the portable context summary bridge capability for compaction", async () => {
+	test("keys cached snapshots by the host-managed tool policy", async () => {
+		const runtime = new ResolverRuntime(capabilities);
+		const resolver = new ResolveEffectiveCapabilities(runtime);
+		const config = createDefaultConfig();
+		const toolLess = await resolver.resolve({
+			modelId: "gpt-5.5",
+			providerId: "openai-codex",
+			config,
+			hostToolNames: [],
+		});
+		const same = await resolver.resolve({
+			modelId: "gpt-5.5",
+			providerId: "openai-codex",
+			config,
+			hostToolNames: [],
+		});
+		const shellOnly = await resolver.resolve({
+			modelId: "gpt-5.5",
+			providerId: "openai-codex",
+			config,
+			hostToolNames: ["shell_command"],
+		});
+
+		expect(same).toBe(toolLess);
+		expect(toolLess.localTools).toEqual([]);
+		expect(shellOnly.localTools).toEqual(["shell_command"]);
+		expect(runtime.resolveToolsCalls).toBe(2);
+	});
+
+	test("requires an official remote compaction bridge capability", async () => {
 		const runtime = new ResolverRuntime(
-			capabilities.filter((name) => name !== "portable_context_summary"),
+			capabilities.filter((name) => name !== "remote_compaction_v2" && name !== "compact_endpoint"),
 		);
 		const snapshot = await new ResolveEffectiveCapabilities(runtime).resolve({
 			modelId: "gpt-5.5",
@@ -164,6 +192,5 @@ describe("effective capability application use case", () => {
 			status: "unavailable",
 			reason: "compaction_executor_unavailable",
 		});
-		expect(capabilityContextFromSnapshot(snapshot).portableContextSummary).toBe(false);
 	});
 });

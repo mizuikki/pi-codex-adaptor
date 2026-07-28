@@ -80,6 +80,7 @@ export class CapabilityError extends Error {
 
 export interface ToolsResolveHostOptions {
 	providerId: string;
+	allowedLocalToolNames: readonly ManagedToolName[];
 	webSearchMode: WebSearchMode;
 	viewImage: boolean;
 	imageGeneration: boolean;
@@ -130,6 +131,7 @@ export function buildToolsResolveParams(
 	const bridge = new Set(options.bridgeCapabilities);
 	return {
 		model: resolution.model,
+		allowedLocalToolNames: [...options.allowedLocalToolNames],
 		webSearchMode: options.webSearchMode,
 		providerContract: completeProviderContract(options.providerId),
 		standaloneWebSearch: {

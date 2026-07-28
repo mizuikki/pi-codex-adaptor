@@ -45,3 +45,5 @@ const { validateManagedToolOwnership } = (await import(profileModulePath.href)) 
 if (!validateManagedToolOwnership(tools, managedNames, extensionPath).ok) {
 	throw new Error("Packed extension managed-tool provenance did not match its entry");
 }
+
+process.exit(0);

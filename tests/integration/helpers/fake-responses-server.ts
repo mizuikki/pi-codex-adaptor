@@ -68,7 +68,7 @@ export async function startFakeResponsesServer(
 			}
 			if (request.method === "POST" && url.pathname.endsWith("/responses/compact")) {
 				return Response.json({
-					output: [{ type: "message", role: "assistant", content: [] }],
+					output: [{ type: "compaction", encrypted_content: "fixture-compaction" }],
 				});
 			}
 			// Official clients may probe websocket upgrade with GET /responses first.

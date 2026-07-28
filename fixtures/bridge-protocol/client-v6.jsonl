@@ -1,4 +1,4 @@
-{"type":"initialize","requestId":"init-1","protocolVersion":5,"client":{"name":"pi-codex-adaptor","version":"0.0.0"}}
+{"type":"initialize","requestId":"init-1","protocolVersion":6,"client":{"name":"pi-codex-adaptor","version":"0.0.0"}}
 {"type":"request","requestId":"request-0","method":"responses.compact","params":{"implementation":"compact_endpoint","request":{"model":"fixture-model","input":[]}}}
 {"type":"request","requestId":"request-1","method":"models.resolve","params":{"modelId":"fixture-model"}}
 {"type":"cancel","requestId":"cancel-1","targetRequestId":"request-1"}

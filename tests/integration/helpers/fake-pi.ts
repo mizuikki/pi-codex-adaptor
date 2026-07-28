@@ -28,6 +28,7 @@ export function createFakePi(options: {
 	cwd?: string;
 	thirdPartyTools?: readonly string[];
 	activeTools?: readonly string[];
+	allowedToolNames?: readonly string[];
 	sessionId?: string;
 }): FakePi {
 	const tools = new Map<string, ToolDefinition>();
@@ -39,6 +40,8 @@ export function createFakePi(options: {
 	const widgets = new Map<string, string[] | undefined>();
 	const notifications: string[] = [];
 	const thirdPartyTools = [...(options.thirdPartyTools ?? ["third_party"])] as string[];
+	const allowedToolNames =
+		options.allowedToolNames === undefined ? undefined : new Set(options.allowedToolNames);
 	const availableBuiltinTools = PI_CORE_AGENT_TOOL_NAMES.map((name) => ({
 		name,
 		description: `Fixture ${name}`,
@@ -67,7 +70,9 @@ export function createFakePi(options: {
 	const api = {
 		extensionSdkApiVersion: 1,
 		providerPayloadCompactionApiVersion: 1,
+		providerCheckpointCommitApiVersion: 1,
 		compactionFailureResultApiVersion: 1,
+		setProviderCheckpointUsageBoundary: () => true,
 		registerTool: (tool: ToolDefinition) => {
 			tools.set(tool.name, tool);
 		},
@@ -85,19 +90,20 @@ export function createFakePi(options: {
 		setActiveTools: (next: string[]) => {
 			activeTools = next;
 		},
-		getAllTools: () => [
-			...availableBuiltinTools,
-			...availableExternalTools,
-			...[...tools.values()].map((tool) => ({
-				...tool,
-				sourceInfo: {
-					path: "<fixture:pi-codex-adaptor>",
-					source: "fixture",
-					scope: "temporary" as const,
-					origin: "top-level" as const,
-				},
-			})),
-		],
+		getAllTools: () =>
+			[
+				...availableBuiltinTools,
+				...availableExternalTools,
+				...[...tools.values()].map((tool) => ({
+					...tool,
+					sourceInfo: {
+						path: "<fixture:pi-codex-adaptor>",
+						source: "fixture",
+						scope: "temporary" as const,
+						origin: "top-level" as const,
+					},
+				})),
+			].filter((tool) => allowedToolNames === undefined || allowedToolNames.has(tool.name)),
 		getThinkingLevel: () => "off",
 	} as unknown as ExtensionAPI;
 

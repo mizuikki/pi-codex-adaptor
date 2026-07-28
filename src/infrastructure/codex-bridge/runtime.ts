@@ -5,8 +5,6 @@ import type {
 	CreateResponseOptions,
 	CreateResponseResult,
 	ExecuteToolOptions,
-	SummarizeContextOptions,
-	SummarizeContextResult,
 } from "../../application/codex-runtime.ts";
 import { connectBundledBridge } from "./binary.ts";
 import {
@@ -30,7 +28,6 @@ export interface BundledCodexRuntimeOptions {
 	openBridge?: () => Promise<BridgeClient>;
 }
 
-type CompletedSummarizeContextResult = Extract<SummarizeContextResult, { status: "completed" }>;
 type CompletedCompactResponseResult = Extract<CompactResponseResult, { status: "completed" }>;
 
 export class BundledCodexRuntime implements CodexRuntime {
@@ -62,35 +59,6 @@ export class BundledCodexRuntime implements CodexRuntime {
 					onEvent: options.onEvent,
 				},
 			);
-		} catch (error) {
-			this.#discardClientIfFatal(client, error);
-			throw error;
-		}
-	}
-
-	async summarizeContext(options: SummarizeContextOptions): Promise<SummarizeContextResult> {
-		const client = await this.#connect();
-		try {
-			const result = await client.request(
-				"contexts.summarize",
-				{
-					connection: options.connection,
-					modelId: options.modelId,
-					input: options.input,
-					transportMode: options.transportMode,
-					providerSupportsWebsockets: options.providerSupportsWebsockets,
-					...(options.remoteCompactionV2Context === undefined
-						? {}
-						: { remoteCompactionV2Context: options.remoteCompactionV2Context }),
-				},
-				options.signal === undefined ? {} : { signal: options.signal },
-			);
-			return result.status === "completed"
-				? {
-						status: "completed",
-						result: result.result as CompletedSummarizeContextResult["result"],
-					}
-				: { status: result.status };
 		} catch (error) {
 			this.#discardClientIfFatal(client, error);
 			throw error;

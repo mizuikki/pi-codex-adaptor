@@ -40,25 +40,24 @@ describe("redacted diagnostics", () => {
 		});
 	});
 
-	test("drops portable summaries and opaque compaction payloads from bridge diagnostics", () => {
+	test("drops opaque compaction payloads from bridge diagnostics", () => {
 		const snapshot = createDiagnosticsSnapshot(createDefaultConfig(), {
 			bridgeProtocolVersion: 5,
 			officialCodexVersion: "0.144.3",
-			capabilities: ["responses_sse", "portable_context_summary"],
-			portableSummary: "secret portable summary",
+			capabilities: ["responses_sse", "remote_compaction_v2"],
 			compaction: {
-				summary: "secret portable summary",
+				summary: "secret summary",
 				opaque: "opaque fixture",
 			},
 		});
 
 		const serialized = JSON.stringify(snapshot);
-		expect(serialized).not.toContain("secret portable summary");
+		expect(serialized).not.toContain("secret summary");
 		expect(serialized).not.toContain("opaque fixture");
 		expect(snapshot.bridge).toEqual({
 			bridgeProtocolVersion: 5,
 			officialCodexVersion: "0.144.3",
-			capabilities: ["responses_sse", "portable_context_summary"],
+			capabilities: ["responses_sse", "remote_compaction_v2"],
 		});
 	});
 

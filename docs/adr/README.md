@@ -10,7 +10,7 @@ uses the same structure: context, decision, and consequences.
 | [0003](./0003-layered-architecture-and-bridge-boundary.md) | Layered TypeScript architecture and native bridge boundary |
 | [0004](./0004-official-codex-source-and-conformance.md) | Pinned official Codex source, minimal vendor closure, and isolated conformance |
 | [0005](./0005-core-tool-surface-resolution.md) | Official core tool surface and capability resolvers |
-| [0006](./0006-official-compaction-paths.md) | Official capability-driven compaction paths |
+| [0006](./0006-official-compaction-paths.md) | Superseded official capability-driven compaction paths |
 | [0007](./0007-versioned-project-configuration.md) | Versioned project-owned configuration schema |
 | [0008](./0008-single-package-native-delivery.md) | Single npm package and release-built native sidecar delivery |
 | [0009](./0009-release-please-and-exact-tarball-publishing.md) | Release Please and exact-tarball Trusted Publishing |
@@ -19,11 +19,12 @@ uses the same structure: context, decision, and consequences.
 | [0012](./0012-capability-completeness-and-supplemental-sessions.md) | Effective capability snapshots and supplemental managed sessions |
 | [0013](./0013-codex-agent-tool-profile-isolation.md) | Reversible Codex core tool-profile isolation and additive external tools |
 | [0014](./0014-session-affine-provider-dispatch.md) | Process-stable registration and session-affine provider dispatch |
-| [0015](./0015-inline-automatic-compaction-and-opaque-replay.md) | Superseded inline automatic compaction and opaque replay design |
+| [0015](./0015-inline-automatic-compaction-and-opaque-replay.md) | Obsolete pre-clean-slate replay design |
 | [0016](./0016-activated-compaction-failure-ownership.md) | Terminal ownership of activated compaction failures |
-| [0017](./0017-portable-primary-compaction-checkpoints.md) | Portable-primary v3 checkpoints and paired Pi compaction transaction |
+| [0017](./0017-portable-primary-compaction-checkpoints.md) | Obsolete cross-provider checkpoint design |
 | [0018](./0018-private-local-fork-integration.md) | Private local Pi fork integration and removal of publication automation |
 | [0019](./0019-upstream-provider-error-visibility.md) | Bounded upstream provider error visibility in Pi |
+| [0020](./0020-extension-owned-remote-compaction-clean-slate.md) | Extension-owned Remote Compaction and identity-bound continuity |
 
 Accepted ADRs are changed only to correct factual errors. A decision change requires a new ADR that
 explicitly supersedes the earlier record. Baseline upgrades and product-boundary changes must remain

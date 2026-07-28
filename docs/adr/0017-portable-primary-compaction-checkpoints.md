@@ -1,6 +1,9 @@
-# ADR 0017: Portable-Primary Compaction Checkpoints
+# ADR 0017: Obsolete Portable-Primary Compaction Checkpoints
 
-- Status: Accepted
+> This historical ADR is retained only to explain the rejected design. It is not an active reader,
+> writer, migration, fallback, or product contract. The current decision is [ADR 0020](./0020-extension-owned-remote-compaction-clean-slate.md).
+
+- Status: Obsolete. Superseded by [0020](./0020-extension-owned-remote-compaction-clean-slate.md)
 - Date: 2026-07-24
 - Supersedes: [0015](./0015-inline-automatic-compaction-and-opaque-replay.md)
 

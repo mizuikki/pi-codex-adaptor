@@ -54,14 +54,13 @@ host-owned limits remain explicit rather than being treated as product guarantee
 - Pi swallows a later `before_provider_payload` hook exception without exposing whether the callback
   chain had an error. The guard rejects replacement or effective mutation of an approved request, but
   cannot detect a swallowed exception that leaves the same approved object unchanged.
-- Bridge protocol v5 cancellation is cooperative. A local abort after a compact or Responses invocation
+- Bridge protocol v6 cancellation is cooperative. A local abort after a compact or Responses invocation
   does not prove whether the remote server accepted a frame.
 - Bare `AgentSession.dispose()` does not emit `session_shutdown`. In-flight records check their signal
   and clean up in `finally`; a stale weak router lease may remain ambiguous until public release or
   eventual weak pruning.
-- The locked Pi `0.81.1` host supplies the complete auxiliary request attribution contract: a non-empty
+- The paired Pi host supplies the complete auxiliary request attribution contract: a non-empty
   `SessionManager` session id, explicit origin, request-scoped abort signal, and payload approval
-  semantics for manual/overflow summaries, turn-prefix summaries, and branch summaries. The adaptor
-  accepts those attributed auxiliary requests without checkpoint replay; older unattributed hosts fail
-  closed rather than inferring a router lease. Activated Codex compaction failures remain terminal on
-  every host.
+  semantics. The adaptor accepts only attributed non-agent requests unchanged; older unattributed
+  hosts fail closed rather than inferring a router lease. Activated Codex compaction failures remain
+  terminal on every host.

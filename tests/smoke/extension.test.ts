@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { ExtensionContext, ProviderConfig } from "@earendil-works/pi-coding-agent";
 
+import type { CodexRuntime } from "../../src/application/codex-runtime.ts";
 import piCodexAdaptor from "../../src/extension.ts";
 
 describe("extension entry point", () => {
@@ -13,8 +14,8 @@ describe("extension entry point", () => {
 	test("registers process-stable Responses dispatchers and lifecycle bindings", async () => {
 		const first = registrationFixture();
 		const second = registrationFixture();
-		await piCodexAdaptor(first.api);
-		await piCodexAdaptor(second.api);
+		await piCodexAdaptor(first.api, { runtime: compatibleRuntime() });
+		await piCodexAdaptor(second.api, { runtime: compatibleRuntime() });
 
 		expect(first.commands).toEqual(["codex"]);
 		const codexProvider = first.providers.find((provider) => provider.name === "openai-codex");
@@ -36,6 +37,38 @@ describe("extension entry point", () => {
 		await second.emit("session_shutdown", "session-second");
 	});
 
+	test("fails before provider registration when native Remote Compaction is unavailable", async () => {
+		const fixture = registrationFixture();
+		let shutdownCalls = 0;
+		const runtime = {
+			readDiagnostics: async () => ({ capabilities: ["responses_sse"] }),
+			shutdown: async () => {
+				shutdownCalls += 1;
+			},
+		} as unknown as CodexRuntime;
+
+		await expect(piCodexAdaptor(fixture.api, { runtime })).rejects.toThrow(
+			"Native bridge is incompatible: Remote Compaction is unavailable",
+		);
+		expect(fixture.providers).toHaveLength(0);
+		expect(fixture.commands).toHaveLength(0);
+		expect(shutdownCalls).toBe(1);
+	});
+
+	test("fails before provider registration when the native handshake rejects the client protocol", async () => {
+		const fixture = registrationFixture();
+		const runtime = {
+			readDiagnostics: async () => {
+				throw new Error("bridge protocol version 5 is unsupported; expected 6");
+			},
+			shutdown: async () => {},
+		} as unknown as CodexRuntime;
+
+		await expect(piCodexAdaptor(fixture.api, { runtime })).rejects.toThrow("protocol version 5");
+		expect(fixture.providers).toHaveLength(0);
+		expect(fixture.commands).toHaveLength(0);
+	});
+
 	test("fails closed when the Pi transaction capability is absent", async () => {
 		await expect(
 			piCodexAdaptor({
@@ -52,9 +85,22 @@ describe("extension entry point", () => {
 			piCodexAdaptor({
 				extensionSdkApiVersion: 1,
 				providerPayloadCompactionApiVersion: 1,
+				providerCheckpointCommitApiVersion: 1,
+				setProviderCheckpointUsageBoundary: () => true,
 				registerCommand: () => {},
 			} as never),
 		).rejects.toThrow("Pi host is incompatible: requires compaction failure result API version 1");
+	});
+
+	test("fails closed when the Pi checkpoint commit capability is absent", async () => {
+		await expect(
+			piCodexAdaptor({
+				extensionSdkApiVersion: 1,
+				providerPayloadCompactionApiVersion: 1,
+				compactionFailureResultApiVersion: 1,
+				registerCommand: () => {},
+			} as never),
+		).rejects.toThrow("Pi host is incompatible: requires provider checkpoint commit API version 1");
 	});
 
 	test("fails closed when the extension SDK capability is absent", async () => {
@@ -67,6 +113,15 @@ describe("extension entry point", () => {
 });
 
 type LifecycleHandler = (event: unknown, ctx: ExtensionContext) => unknown | Promise<unknown>;
+
+function compatibleRuntime(): CodexRuntime {
+	return {
+		readDiagnostics: async () => ({
+			capabilities: ["responses_sse", "remote_compaction_v2", "compact_endpoint"],
+		}),
+		shutdown: async () => {},
+	} as unknown as CodexRuntime;
+}
 
 function registrationFixture(): {
 	api: never;
@@ -83,7 +138,9 @@ function registrationFixture(): {
 		api: {
 			extensionSdkApiVersion: 1,
 			providerPayloadCompactionApiVersion: 1,
+			providerCheckpointCommitApiVersion: 1,
 			compactionFailureResultApiVersion: 1,
+			setProviderCheckpointUsageBoundary: () => true,
 			registerCommand: (name: string) => commands.push(name),
 			registerProvider: (name: string, config: ProviderConfig) => {
 				providers.push({ name, config });

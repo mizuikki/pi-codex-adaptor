@@ -116,7 +116,7 @@ async function main(): Promise<void> {
 			exactTarball = resolve(tarball);
 		}
 		const tarballResult = await verifyTarball(exactTarball, paths);
-		const maximumUnpackedSize = requireNative ? 250 * 1024 * 1024 : 5 * 1024 * 1024;
+		const maximumUnpackedSize = nativeFiles.length > 0 ? 250 * 1024 * 1024 : 5 * 1024 * 1024;
 		const unpackedSize =
 			tarballResult.unpackedSize ?? tarballResult.files.reduce((sum, file) => sum + file.size, 0);
 		if (unpackedSize > maximumUnpackedSize) {
@@ -205,6 +205,7 @@ async function smokeInstallManifestTarball(
 			"const extensionPath = process.argv[2];",
 			"const result = await discoverAndLoadExtensions([extensionPath], process.cwd(), process.env.HOME);",
 			'if (result.errors.length > 0 || result.extensions.length !== 1) throw new Error(result.errors.map((entry) => entry.error).join("; "));',
+			"process.exit(0);",
 		].join("\n"),
 	);
 	const piHome = await mkdtemp(resolve(tmpdir(), "pi-codex-adaptor-private-host-"));

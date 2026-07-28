@@ -10,7 +10,7 @@ represent a terminal extension compaction failure in the normal `compaction_end`
 ## Decision
 
 Native Rust extracts one bounded diagnostic from known official `ApiError` variants before it builds
-the existing protocol-v5 `BridgeError`. The message contains only a status/body or variant message,
+the existing protocol-v6 `BridgeError`. The message contains only a status/body or variant message,
 is capped to a 4,000-character detail budget, and never serializes headers, credentials, request
 data, opaque values, URLs from transport metadata, or a full debug representation. Error category,
 code, retryability, and provider-contract-mismatch handling remain unchanged.
@@ -26,7 +26,7 @@ cancellation handling. This blocks the default compactor and creates no compacti
 
 ## Consequences
 
-- Bridge protocol v5 remains structurally unchanged.
+- Bridge protocol v6 retains the same bounded error shape.
 - The common extension SDK remains version 1. Hosts without compaction-failure-result API v1 fail
   closed before adaptor registration; the provider-payload API remains version 1.
 - Pi owns compaction formatting, event delivery, and UI rendering. The adaptor no longer calls

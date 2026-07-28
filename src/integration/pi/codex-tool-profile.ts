@@ -26,6 +26,7 @@ export type CodexToolProfileReadiness =
 export interface CodexToolProfileCoordinator {
 	readonly readiness: CodexToolProfileReadiness;
 	readonly skillLoader: "exec_command" | "shell_command" | undefined;
+	registeredManagedTools(): readonly ManagedToolName[];
 	enterPending(capabilityKey?: string): void;
 	installHealthy(
 		capabilityKey: string,
@@ -154,6 +155,14 @@ export function validateManagedToolOwnership(
 	return { ok: true };
 }
 
+export function registeredManagedToolNames(
+	tools: readonly ToolInfo[] | undefined,
+): ManagedToolName[] {
+	if (tools === undefined) return [];
+	const available = new Set(tools.map((tool) => tool.name));
+	return MANAGED_TOOL_NAMES.filter((name) => available.has(name));
+}
+
 export function createCodexToolProfile(
 	pi: ExtensionAPI,
 	expectedEntryPath?: string,
@@ -186,6 +195,10 @@ class CodexToolProfile implements CodexToolProfileCoordinator {
 
 	get skillLoader(): "exec_command" | "shell_command" | undefined {
 		return this.#state.kind === "codex" ? this.#state.skillLoader : undefined;
+	}
+
+	registeredManagedTools(): readonly ManagedToolName[] {
+		return registeredManagedToolNames(this.#readTools());
 	}
 
 	enterPending(capabilityKey?: string): void {
@@ -360,6 +373,9 @@ class CodexToolProfile implements CodexToolProfileCoordinator {
 class UnavailableCodexToolProfile implements CodexToolProfileCoordinator {
 	readonly readiness: CodexToolProfileReadiness = { kind: "inactive" };
 	readonly skillLoader = undefined;
+	registeredManagedTools(): readonly ManagedToolName[] {
+		return [];
+	}
 
 	enterPending(): void {}
 	installHealthy(): boolean {
