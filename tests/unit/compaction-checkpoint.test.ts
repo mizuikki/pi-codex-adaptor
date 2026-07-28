@@ -230,17 +230,15 @@ describe("remote compaction checkpoint contract", () => {
 		const config = createDefaultConfig().codex.compaction;
 		const threshold = resolveCompactionThreshold(config, 90_000, 100_000);
 		expect(threshold).toBe(90_000);
-		for (let attempt = 0; attempt < 3; attempt += 1) {
-			expect(
-				shouldCreateAutomaticCheckpoint({
-					mode: "auto",
-					contextTokens: 90_001,
-					threshold,
-					hasUncheckpointedInput: false,
-					busy: false,
-				}),
-			).toBe(false);
-		}
+		expect(
+			shouldCreateAutomaticCheckpoint({
+				mode: "auto",
+				contextTokens: 90_001,
+				threshold,
+				hasUncheckpointedInput: false,
+				busy: false,
+			}),
+		).toBe(false);
 		expect(
 			shouldCreateAutomaticCheckpoint({
 				mode: "auto",
