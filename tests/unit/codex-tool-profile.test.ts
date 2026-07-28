@@ -10,6 +10,7 @@ import {
 	normalizedEntryPath,
 	PI_CORE_AGENT_TOOL_NAMES,
 	reconcileCodexActiveToolNames,
+	registeredManagedToolNames,
 	restorePiActiveToolNames,
 	validateManagedToolOwnership,
 } from "../../src/integration/pi/codex-tool-profile.ts";
@@ -77,6 +78,17 @@ function profileFixture(options?: {
 }
 
 describe("Codex tool profile policy", () => {
+	test("projects the host-filtered managed registry without treating omissions as conflicts", () => {
+		expect(
+			registeredManagedToolNames([
+				tool("update_plan"),
+				tool("shell_command", "/other/extension.ts"),
+				tool("third_party"),
+			]),
+		).toEqual(["update_plan", "shell_command"]);
+		expect(registeredManagedToolNames([])).toEqual([]);
+	});
+
 	test("suppresses every Pi core slot and appends only registered managed names", () => {
 		const available = new Set([
 			...PI_CORE_AGENT_TOOL_NAMES,
@@ -222,6 +234,21 @@ describe("Codex tool profile policy", () => {
 		expect(fixture.setCalls.length).toBeGreaterThan(pendingWrites);
 		fixture.profile.restorePi();
 		expect(fixture.setCalls.at(-1)).toEqual(fixture.active);
+	});
+
+	test("installs a healthy profile when host policy allows no managed tools", () => {
+		const fixture = profileFixture({
+			active: [],
+			available: [],
+		});
+		fixture.profile.enterPending("tool-less-key");
+		expect(fixture.profile.registeredManagedTools()).toEqual([]);
+		expect(fixture.profile.installHealthy("tool-less-key", [], undefined)).toBe(true);
+		expect(fixture.profile.readiness).toEqual({
+			kind: "healthy",
+			capabilityKey: "tool-less-key",
+		});
+		expect(fixture.active).toEqual([]);
 	});
 
 	test("does not restore disabled or no-longer-registered Pi core slots", () => {

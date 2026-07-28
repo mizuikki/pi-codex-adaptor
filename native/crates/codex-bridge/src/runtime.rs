@@ -117,6 +117,16 @@ const PREAUTHORIZED_TOOLS: &[&str] = &[
     "image_gen.imagegen",
     "web.run",
 ];
+const MANAGED_TOOL_NAMES: &[&str] = &[
+    "update_plan",
+    "exec_command",
+    "write_stdin",
+    "shell_command",
+    "apply_patch",
+    "view_image",
+    "image_gen.imagegen",
+    "web.run",
+];
 static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
 static NEXT_APPROVAL_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -678,6 +688,8 @@ struct ModelsResolveParams {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ToolsResolveParams {
     model: ModelInfo,
+    #[serde(default = "default_allowed_local_tool_names")]
+    allowed_local_tool_names: Vec<String>,
     web_search_mode: WebSearchMode,
     provider_contract: CompleteProviderContract,
     standalone_web_search: StandaloneWebSearchCapabilities,
@@ -685,6 +697,13 @@ struct ToolsResolveParams {
     shell: ShellToolOptions,
     #[serde(default)]
     optional: OptionalToolCapabilities,
+}
+
+fn default_allowed_local_tool_names() -> Vec<String> {
+    MANAGED_TOOL_NAMES
+        .iter()
+        .map(|name| (*name).to_owned())
+        .collect()
 }
 
 #[derive(Deserialize)]
@@ -3450,6 +3469,19 @@ fn finalize_process_output(
 fn tools_resolve(params: Value) -> Result<Value, RequestFailure> {
     let parsed = serde_json::from_value::<ToolsResolveParams>(params)
         .map_err(|_| invalid_params("tools.resolve parameters are invalid"))?;
+    let allowed_local_tool_names = parsed
+        .allowed_local_tool_names
+        .iter()
+        .map(String::as_str)
+        .collect::<HashSet<_>>();
+    if allowed_local_tool_names.len() != parsed.allowed_local_tool_names.len()
+        || allowed_local_tool_names
+            .iter()
+            .any(|name| !MANAGED_TOOL_NAMES.contains(name))
+    {
+        return Err(invalid_params("tools.resolve allowed local tool names are invalid").into());
+    }
+    let local_tool_allowed = |name: &str| allowed_local_tool_names.contains(name);
     if !parsed.model.supported_in_api {
         return Err(BridgeError {
             category: ErrorCategory::CapabilityError,
@@ -3488,43 +3520,86 @@ fn tools_resolve(params: Value) -> Result<Value, RequestFailure> {
     match parsed.provider_contract.responses_websocket {
         ProviderWebsocketContract::OfficialOnly | ProviderWebsocketContract::Unavailable => {}
     }
-    let mut model_visible = vec![codex_tools::create_update_plan_tool()];
+    let mut model_visible = Vec::new();
     let mut dispatch_only = Vec::new();
-    let mut local_tool_names = vec!["update_plan"];
+    let mut local_tool_names = Vec::new();
     let mut hosted_tool_names: Vec<&str> = Vec::new();
+    if local_tool_allowed("update_plan") {
+        model_visible.push(codex_tools::create_update_plan_tool());
+        local_tool_names.push("update_plan");
+    }
     let session_surface;
     let session_capability;
     let shell_surface = match parsed.model.shell_type {
         ConfigShellToolType::UnifiedExec => {
-            model_visible.push(codex_tools::create_exec_command_tool(command_options));
-            model_visible.push(codex_tools::create_write_stdin_tool());
-            dispatch_only.push(codex_tools::create_shell_command_tool(command_options));
-            local_tool_names.extend(["exec_command", "write_stdin"]);
-            session_surface = "official";
-            session_capability = if parsed.sessions.enabled {
+            let exec_command_allowed = local_tool_allowed("exec_command");
+            let write_stdin_allowed = local_tool_allowed("write_stdin");
+            if exec_command_allowed {
+                model_visible.push(codex_tools::create_exec_command_tool(command_options));
+                local_tool_names.push("exec_command");
+            }
+            if write_stdin_allowed {
+                model_visible.push(codex_tools::create_write_stdin_tool());
+                local_tool_names.push("write_stdin");
+            }
+            if local_tool_allowed("shell_command") {
+                dispatch_only.push(codex_tools::create_shell_command_tool(command_options));
+            }
+            session_surface = if exec_command_allowed && write_stdin_allowed {
+                "official"
+            } else {
+                "disabled"
+            };
+            session_capability = if !parsed.sessions.enabled {
+                json!({ "status": "disabled", "reason": "disabled_by_configuration" })
+            } else if exec_command_allowed && write_stdin_allowed {
                 json!({ "status": "available", "source": "official" })
             } else {
-                json!({ "status": "disabled", "reason": "disabled_by_configuration" })
+                json!({ "status": "disabled", "reason": "disabled_by_host_tool_policy" })
             };
-            "unified-exec"
+            if exec_command_allowed {
+                "unified-exec"
+            } else {
+                "disabled"
+            }
         }
         ConfigShellToolType::Default
         | ConfigShellToolType::Local
         | ConfigShellToolType::ShellCommand => {
-            model_visible.push(codex_tools::create_shell_command_tool(command_options));
-            local_tool_names.push("shell_command");
+            let shell_command_allowed = local_tool_allowed("shell_command");
+            if shell_command_allowed {
+                model_visible.push(codex_tools::create_shell_command_tool(command_options));
+                local_tool_names.push("shell_command");
+            }
             if parsed.sessions.enabled {
-                model_visible.push(codex_tools::create_exec_command_tool(command_options));
-                model_visible.push(codex_tools::create_write_stdin_tool());
-                local_tool_names.extend(["exec_command", "write_stdin"]);
-                session_surface = "supplemental";
-                session_capability = json!({ "status": "available", "source": "supplemental" });
+                let exec_command_allowed = local_tool_allowed("exec_command");
+                let write_stdin_allowed = local_tool_allowed("write_stdin");
+                if exec_command_allowed {
+                    model_visible.push(codex_tools::create_exec_command_tool(command_options));
+                    local_tool_names.push("exec_command");
+                }
+                if write_stdin_allowed {
+                    model_visible.push(codex_tools::create_write_stdin_tool());
+                    local_tool_names.push("write_stdin");
+                }
+                if exec_command_allowed && write_stdin_allowed {
+                    session_surface = "supplemental";
+                    session_capability = json!({ "status": "available", "source": "supplemental" });
+                } else {
+                    session_surface = "disabled";
+                    session_capability =
+                        json!({ "status": "disabled", "reason": "disabled_by_host_tool_policy" });
+                }
             } else {
                 session_surface = "disabled";
                 session_capability =
                     json!({ "status": "disabled", "reason": "disabled_by_configuration" });
             }
-            "shell-command"
+            if shell_command_allowed {
+                "shell-command"
+            } else {
+                "disabled"
+            }
         }
         ConfigShellToolType::Disabled => {
             session_surface = "unavailable";
@@ -3533,11 +3608,14 @@ fn tools_resolve(params: Value) -> Result<Value, RequestFailure> {
             "disabled"
         }
     };
-    if parsed.model.apply_patch_tool_type.is_some() {
+    let apply_patch_available =
+        parsed.model.apply_patch_tool_type.is_some() && local_tool_allowed("apply_patch");
+    if apply_patch_available {
         model_visible.push(codex_tools::create_apply_patch_freeform_tool(false));
         local_tool_names.push("apply_patch");
     }
     let view_image_available = parsed.optional.view_image
+        && local_tool_allowed("view_image")
         && parsed
             .model
             .input_modalities
@@ -3552,6 +3630,7 @@ fn tools_resolve(params: Value) -> Result<Value, RequestFailure> {
         local_tool_names.push("view_image");
     }
     let image_generation_surface = if parsed.optional.image_generation
+        && local_tool_allowed("image_gen.imagegen")
         && parsed.provider_contract.namespace_tools
         && parsed.provider_contract.images_api
         && parsed
@@ -3566,12 +3645,16 @@ fn tools_resolve(params: Value) -> Result<Value, RequestFailure> {
         "disabled"
     };
 
-    let standalone_available = parsed.provider_contract.namespace_tools
+    let web_search_allowed = local_tool_allowed("web.run");
+    let standalone_available = web_search_allowed
+        && parsed.provider_contract.namespace_tools
         && parsed.provider_contract.search_api
         && (parsed.model.use_responses_lite || parsed.standalone_web_search.feature_enabled)
         && parsed.standalone_web_search.executor_available;
     let (web_surface, web_reason) = if parsed.web_search_mode == WebSearchMode::Disabled {
         ("disabled", "configured_disabled")
+    } else if !web_search_allowed {
+        ("disabled", "disabled_by_host_tool_policy")
     } else if standalone_available {
         model_visible.push(
             codex_tools::create_standalone_web_search_tool().map_err(|_| {
@@ -3608,8 +3691,10 @@ fn tools_resolve(params: Value) -> Result<Value, RequestFailure> {
         "imageGenerationSurface": image_generation_surface,
         "capabilities": {
             "sessions": session_capability,
-            "applyPatch": if parsed.model.apply_patch_tool_type.is_some() {
+            "applyPatch": if apply_patch_available {
                 json!({ "status": "available", "source": "official" })
+            } else if parsed.model.apply_patch_tool_type.is_some() {
+                json!({ "status": "disabled", "reason": "disabled_by_host_tool_policy" })
             } else {
                 json!({ "status": "unavailable", "reason": "model_apply_patch_disabled" })
             },
@@ -3617,6 +3702,8 @@ fn tools_resolve(params: Value) -> Result<Value, RequestFailure> {
                 json!({ "status": "available", "source": "official" })
             } else if !parsed.optional.view_image {
                 json!({ "status": "disabled", "reason": "disabled_by_configuration" })
+            } else if !local_tool_allowed("view_image") {
+                json!({ "status": "disabled", "reason": "disabled_by_host_tool_policy" })
             } else {
                 json!({ "status": "unavailable", "reason": "model_image_input_unavailable" })
             },
@@ -3624,11 +3711,13 @@ fn tools_resolve(params: Value) -> Result<Value, RequestFailure> {
                 json!({ "status": "available", "source": "provider-contract" })
             } else if !parsed.optional.image_generation {
                 json!({ "status": "disabled", "reason": "disabled_by_configuration" })
+            } else if !local_tool_allowed("image_gen.imagegen") {
+                json!({ "status": "disabled", "reason": "disabled_by_host_tool_policy" })
             } else {
                 json!({ "status": "unavailable", "reason": "image_generation_route_unavailable" })
             },
             "webSearch": if web_surface == "disabled" {
-                json!({ "status": "disabled", "reason": "disabled_by_configuration" })
+                json!({ "status": "disabled", "reason": web_reason })
             } else if web_surface == "unsupported" {
                 json!({ "status": "unavailable", "reason": "web_search_route_unavailable" })
             } else {
@@ -6880,6 +6969,59 @@ mod tests {
                 Some(name) => assert_eq!(resolved["dispatchTools"][0]["name"], name),
                 None => assert_eq!(resolved["dispatchTools"].as_array().map(Vec::len), Some(0)),
             }
+        }
+    }
+
+    #[test]
+    fn host_tool_policy_can_disable_every_model_and_dispatch_tool() {
+        let resolved = tools_resolve(json!({
+            "model": fixture_model("shell_command", false),
+            "allowedLocalToolNames": [],
+            "webSearchMode": "indexed",
+            "providerContract": complete_provider_contract(true, true, true, true),
+            "standaloneWebSearch": { "featureEnabled": true, "executorAvailable": true },
+            "sessions": { "enabled": true, "executorAvailable": true },
+            "shell": { "allowLoginShell": true, "execPermissionApprovalsEnabled": false },
+            "optional": { "viewImage": true, "imageGeneration": true },
+        }))
+        .expect("tool-less host policy should resolve");
+
+        assert_eq!(resolved["modelTools"].as_array().map(Vec::len), Some(0));
+        assert_eq!(resolved["dispatchTools"].as_array().map(Vec::len), Some(0));
+        assert_eq!(resolved["localToolNames"].as_array().map(Vec::len), Some(0));
+        assert_eq!(
+            resolved["hostedToolNames"].as_array().map(Vec::len),
+            Some(0)
+        );
+        assert_eq!(resolved["shellSurface"], "disabled");
+        assert_eq!(resolved["sessionSurface"], "disabled");
+        assert_eq!(
+            resolved["capabilities"]["sessions"]["reason"],
+            "disabled_by_host_tool_policy"
+        );
+        assert_eq!(
+            resolved["capabilities"]["webSearch"]["reason"],
+            "disabled_by_host_tool_policy"
+        );
+    }
+
+    #[test]
+    fn host_tool_policy_rejects_unknown_or_duplicate_names() {
+        let base = json!({
+            "model": fixture_model("disabled", false),
+            "webSearchMode": "disabled",
+            "providerContract": complete_provider_contract(false, false, false, false),
+            "standaloneWebSearch": { "featureEnabled": false, "executorAvailable": false },
+            "sessions": { "enabled": false, "executorAvailable": true },
+            "shell": { "allowLoginShell": true, "execPermissionApprovalsEnabled": false },
+        });
+        for names in [json!(["unknown"]), json!(["update_plan", "update_plan"])] {
+            let mut input = base.clone();
+            input["allowedLocalToolNames"] = names;
+            let error = tools_resolve(input).expect_err("invalid host tool policy must fail");
+            assert!(
+                matches!(error, RequestFailure::Bridge(error) if error.code == "invalid_params")
+            );
         }
     }
 

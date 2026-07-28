@@ -21,6 +21,7 @@ import type {
 } from "../../src/application/codex-runtime.ts";
 import type { ConfigurationService } from "../../src/application/configuration.ts";
 import { ProviderActivationPolicy } from "../../src/application/provider-activation.ts";
+import { MANAGED_TOOL_NAMES } from "../../src/domain/capability.ts";
 import { type CodexConfig, createDefaultConfig } from "../../src/domain/config.ts";
 import {
 	type CodexToolProfileCoordinator,
@@ -211,6 +212,7 @@ function healthyProfile(): CodexToolProfileCoordinator {
 	return {
 		readiness: { kind: "healthy", capabilityKey: "fixture-key" },
 		skillLoader: undefined,
+		registeredManagedTools: () => MANAGED_TOOL_NAMES,
 		enterPending: () => {},
 		installHealthy: () => true,
 		installUnavailable: () => {},

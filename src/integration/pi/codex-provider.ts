@@ -105,11 +105,13 @@ async function runResponse(
 		}
 		const connection = createProviderConnection(model, options);
 		const config = await configuration.load();
+		const hostToolNames = profile.registeredManagedTools();
 		const capabilityKey = capabilityCacheKey({
 			modelId: model.id,
 			providerId: model.provider,
 			config,
 			contextWindow: model.contextWindow,
+			hostToolNames,
 		});
 		if (!profile.isHealthy(capabilityKey)) {
 			throw new CapabilityError(
@@ -122,6 +124,7 @@ async function runResponse(
 			providerId: model.provider,
 			config,
 			contextWindow: model.contextWindow,
+			hostToolNames,
 		});
 		dispatchConnection = connection;
 		dispatchConfig = config.codex;

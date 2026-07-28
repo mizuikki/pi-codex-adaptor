@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
-
 import {
 	buildToolsResolveParams,
 	completeProviderContract,
+	MANAGED_TOOL_NAMES,
 	parseAvailability,
 	parseModelResolution,
 	parseToolResolution,
@@ -79,6 +79,7 @@ describe("capability resolution", () => {
 		expect(
 			buildToolsResolveParams(resolution, {
 				providerId: "openai-codex",
+				allowedLocalToolNames: MANAGED_TOOL_NAMES,
 				webSearchMode: "cached",
 				viewImage: true,
 				imageGeneration: true,
@@ -87,6 +88,7 @@ describe("capability resolution", () => {
 			}),
 		).toEqual({
 			model: { slug: "fixture-model", use_responses_lite: false },
+			allowedLocalToolNames: MANAGED_TOOL_NAMES,
 			webSearchMode: "cached",
 			providerContract: completeProviderContract("openai-codex"),
 			standaloneWebSearch: { featureEnabled: false, executorAvailable: true },

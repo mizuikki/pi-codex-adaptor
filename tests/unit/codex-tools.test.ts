@@ -377,6 +377,7 @@ describe("Pi core tool activation", () => {
 		const profile: CodexToolProfileCoordinator = {
 			readiness: { kind: "healthy", capabilityKey: "fixture-key" },
 			skillLoader: "exec_command",
+			registeredManagedTools: () => [],
 			enterPending: () => {},
 			installHealthy: () => true,
 			installUnavailable: () => {},

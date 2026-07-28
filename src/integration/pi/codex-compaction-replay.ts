@@ -302,11 +302,13 @@ async function handleBeforeProviderPayload(
 	const current = scan.matching;
 	const replayInput = current === undefined ? input : checkpointPayload(current, branch);
 	const config = await options.configuration.load();
+	const hostToolNames = options.profile.registeredManagedTools();
 	const capabilityKey = capabilityCacheKey({
 		modelId: record.model.id,
 		providerId: record.model.provider,
 		config,
 		contextWindow: record.model.contextWindow,
+		hostToolNames,
 	});
 	if (!options.profile.isHealthy(capabilityKey)) throw new Error(REPLAY_ERROR);
 	const snapshot = await options.capabilities.resolve({
@@ -314,6 +316,7 @@ async function handleBeforeProviderPayload(
 		providerId: record.model.provider,
 		config,
 		contextWindow: record.model.contextWindow,
+		hostToolNames,
 	});
 	const effectiveTokens = ctx.getContextUsage()?.tokens ?? estimateTokens(replayInput);
 	const hasUncheckpointedInput =

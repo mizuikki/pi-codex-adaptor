@@ -41,7 +41,11 @@ compaction operation begins. Activation also requires the Pi extension ABI marke
 stacked capability fails before provider registration.
 
 The same snapshot drives provider requests, tool activation, compaction, settings validation, status,
-and diagnostics. TypeScript does not reconstruct official model metadata or tool schemas.
+and diagnostics. Pi's filtered tool registry is included in the snapshot fingerprint. Native
+resolution intersects that host policy with the official tool profile so model-visible,
+dispatch-only, and local tools remain coherent, including an empty `--no-tools` profile. Missing
+tools are host-disabled; a visible same-name tool with foreign provenance remains an ownership
+conflict. TypeScript does not reconstruct official model metadata or tool schemas.
 
 ## Pi integration
 

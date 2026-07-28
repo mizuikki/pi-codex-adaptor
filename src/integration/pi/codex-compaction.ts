@@ -143,11 +143,13 @@ async function compactForPi(
 		);
 		const config = await state.configuration.load();
 		if (config.codex.compaction.mode === "off") return { cancel: true };
+		const hostToolNames = state.profile.registeredManagedTools();
 		const capabilityKey = capabilityCacheKey({
 			modelId: model.id,
 			providerId: model.provider,
 			config,
 			contextWindow: model.contextWindow,
+			hostToolNames,
 		});
 		if (!state.profile.isHealthy(capabilityKey)) {
 			throw new Error("Codex tool profile is unavailable for the selected capability");
@@ -157,6 +159,7 @@ async function compactForPi(
 			providerId: model.provider,
 			config,
 			contextWindow: model.contextWindow,
+			hostToolNames,
 		});
 		if (snapshot.compaction.implementation === null) {
 			throw new Error("OpenAI Codex Remote Compaction is unavailable");

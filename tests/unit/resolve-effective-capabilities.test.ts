@@ -31,18 +31,21 @@ class ResolverRuntime implements CodexRuntime {
 		this.resolveToolsCalls += 1;
 		const input = params as Record<string, unknown>;
 		const enabled = (input.sessions as Record<string, unknown>).enabled === true;
+		const allowed = new Set(input.allowedLocalToolNames as string[]);
+		const modelTools = enabled
+			? ["shell_command", "exec_command", "write_stdin"]
+			: ["shell_command"];
 		return {
-			modelTools: enabled
-				? [
-						{ type: "function", name: "shell_command" },
-						{ type: "function", name: "exec_command" },
-						{ type: "function", name: "write_stdin" },
-					]
-				: [{ type: "function", name: "shell_command" }],
-			dispatchTools: [{ type: "function", name: "shell_command" }],
-			localToolNames: enabled
-				? ["shell_command", "exec_command", "write_stdin"]
-				: ["shell_command"],
+			modelTools: modelTools
+				.filter((name) => allowed.has(name))
+				.map((name) => ({
+					type: "function",
+					name,
+				})),
+			dispatchTools: allowed.has("shell_command")
+				? [{ type: "function", name: "shell_command" }]
+				: [],
+			localToolNames: modelTools.filter((name) => allowed.has(name)),
 			hostedToolNames: ["web_search"],
 			shellSurface: "shell-command",
 			sessionSurface: enabled ? "supplemental" : "disabled",
@@ -144,6 +147,35 @@ describe("effective capability application use case", () => {
 		});
 		expect(snapshot.shell.sessionSurface).toBe("unavailable");
 		expect(capabilityContextFromSnapshot(snapshot).backgroundSessionsAvailable).toBe(false);
+	});
+
+	test("keys cached snapshots by the host-managed tool policy", async () => {
+		const runtime = new ResolverRuntime(capabilities);
+		const resolver = new ResolveEffectiveCapabilities(runtime);
+		const config = createDefaultConfig();
+		const toolLess = await resolver.resolve({
+			modelId: "gpt-5.5",
+			providerId: "openai-codex",
+			config,
+			hostToolNames: [],
+		});
+		const same = await resolver.resolve({
+			modelId: "gpt-5.5",
+			providerId: "openai-codex",
+			config,
+			hostToolNames: [],
+		});
+		const shellOnly = await resolver.resolve({
+			modelId: "gpt-5.5",
+			providerId: "openai-codex",
+			config,
+			hostToolNames: ["shell_command"],
+		});
+
+		expect(same).toBe(toolLess);
+		expect(toolLess.localTools).toEqual([]);
+		expect(shellOnly.localTools).toEqual(["shell_command"]);
+		expect(runtime.resolveToolsCalls).toBe(2);
 	});
 
 	test("requires an official remote compaction bridge capability", async () => {

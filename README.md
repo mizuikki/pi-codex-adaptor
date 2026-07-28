@@ -18,6 +18,11 @@ provider checkpoint capability is independently versioned at `1`. Old adaptor ch
 inert and unsupported for adaptor continuity. Start a new session when installing this clean-slate
 implementation.
 
+Pi tool allowlists remain authoritative. `--no-tools` activates a tool-less Codex profile without
+disabling provider requests or Remote Compaction, while `--tools` and `--exclude-tools` remove the
+matching official model tools. A visible same-name tool owned by another extension still fails
+closed as an ownership conflict.
+
 ## Development
 
 The pinned toolchain is Bun `1.3.14`, Node.js `24.18.0`, TypeScript `7.0.2`, and Rust `1.95.0`.

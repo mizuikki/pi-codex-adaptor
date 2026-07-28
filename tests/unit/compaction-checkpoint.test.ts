@@ -298,7 +298,7 @@ describe("remote compaction checkpoint contract", () => {
 			store: new CodexCompactionStore(),
 			coordinator: new CodexCompactionCoordinator(),
 			capabilities: { resolve: async () => snapshot } as never,
-			profile: { isHealthy: () => true } as never,
+			profile: { isHealthy: () => true, registeredManagedTools: () => [] } as never,
 			guard,
 		});
 		const handler = pi.handlers.get("before_provider_payload")?.[0];
@@ -494,7 +494,7 @@ describe("remote compaction checkpoint contract", () => {
 						return { compaction: { implementation } };
 					},
 				} as never,
-				{ isHealthy: () => true } as never,
+				{ isHealthy: () => true, registeredManagedTools: () => [] } as never,
 			);
 
 			const handler = pi.handlers.get("session_before_compact")?.[0];
@@ -556,7 +556,7 @@ describe("remote compaction checkpoint contract", () => {
 					shell: { sessionSurface: "official" },
 				}),
 			} as never,
-			{ isHealthy: () => true } as never,
+			{ isHealthy: () => true, registeredManagedTools: () => [] } as never,
 		);
 		const handler = pi.handlers.get("session_before_compact")?.[0];
 		if (handler === undefined) throw new Error("session_before_compact handler was not registered");

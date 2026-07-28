@@ -3,6 +3,7 @@ import {
 	buildToolsResolveParams,
 	type CompleteCodexProviderContract,
 	completeProviderContract,
+	MANAGED_TOOL_NAMES,
 	type ManagedToolName,
 	parseModelResolution,
 	parseToolResolution,
@@ -49,6 +50,7 @@ export interface ResolveEffectiveCapabilitiesInput {
 	providerId: string;
 	config: CodexConfig;
 	contextWindow?: number;
+	hostToolNames?: readonly ManagedToolName[];
 }
 
 export class ResolveEffectiveCapabilities {
@@ -89,6 +91,7 @@ export class ResolveEffectiveCapabilities {
 			await this.#runtime.resolveTools(
 				buildToolsResolveParams(modelResolution, {
 					providerId: input.providerId,
+					allowedLocalToolNames: input.hostToolNames ?? MANAGED_TOOL_NAMES,
 					webSearchMode: input.config.codex.webSearch.mode,
 					viewImage: input.config.tools.optional.viewImage === "auto",
 					imageGeneration: input.config.tools.optional.imageGeneration === "auto",
@@ -284,6 +287,7 @@ export function capabilityCacheKey(input: ResolveEffectiveCapabilitiesInput): st
 		input.modelId,
 		input.providerId,
 		input.contextWindow ?? null,
+		input.hostToolNames ?? MANAGED_TOOL_NAMES,
 		{
 			webSearchMode: input.config.codex.webSearch.mode,
 			viewImage: input.config.tools.optional.viewImage,
