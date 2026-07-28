@@ -379,6 +379,8 @@ describe("fake Pi + real native lifecycle", () => {
 			"Codex unavailable: managed tool ownership conflict for update_plan",
 		);
 		expect(pi.activeTools).not.toContain("update_plan");
+		const updatePlan = pi.tools.get("update_plan");
+		if (updatePlan === undefined) throw new Error("update_plan fixture was not registered");
 
 		const stream = createCodexStreamSimple(
 			runtime,
@@ -392,7 +394,7 @@ describe("fake Pi + real native lifecycle", () => {
 			{
 				systemPrompt: "",
 				messages: [{ role: "user", content: "filtered fixture", timestamp: 1 }],
-				tools: [],
+				tools: [updatePlan],
 			},
 			{ apiKey: token },
 		);
