@@ -1,6 +1,6 @@
 [package]
 name = "codex-network-proxy"
-version = "0.144.3"
+version = "0.146.0"
 edition = "2024"
 license = "Apache-2.0"
 publish = false
@@ -101,3 +101,7 @@ security-framework = "3"
 
 [target."cfg(windows)".dependencies]
 schannel = "0.1"
+
+[target."cfg(windows)".dependencies.windows-sys]
+version = "0.52"
+features = [ "Win32_Foundation", "Win32_NetworkManagement_IpHelper", "Win32_Networking_WinSock", "Win32_Security", "Win32_Security_Authorization", "Win32_System_Threading" ]

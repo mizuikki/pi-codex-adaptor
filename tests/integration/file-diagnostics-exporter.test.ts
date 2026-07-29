@@ -49,7 +49,7 @@ describe("file diagnostics exporter", () => {
 				createDefaultConfig(),
 				{
 					bridgeProtocolVersion: 5,
-					officialCodexVersion: "0.144.3",
+					officialCodexVersion: "0.146.0",
 					capabilities: ["responses_sse"],
 					prompt: "private",
 				},

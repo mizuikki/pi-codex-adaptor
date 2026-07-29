@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import type { TomlTable } from "smol-toml";
 import { parse, stringify } from "smol-toml";
 
-const officialVersion = "0.144.3";
+const officialVersion = "0.146.0";
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const officialWorkspaceRoot = resolve(repositoryRoot, "native/official");
 const vendorRoot = resolve(repositoryRoot, "native/vendor/openai-codex");
@@ -70,7 +70,14 @@ async function generateWrapper(packageName: string, sourcePath: string): Promise
 		dependencies,
 	};
 	if (isTomlTable(sourceManifest.target)) {
-		wrapper.target = sourceManifest.target;
+		wrapper.target = Object.fromEntries(
+			Object.entries(sourceManifest.target).map(([targetName, targetValue]) => {
+				if (!isTomlTable(targetValue)) return [targetName, targetValue];
+				const filteredTarget = { ...targetValue };
+				delete filteredTarget["dev-dependencies"];
+				return [targetName, filteredTarget];
+			}),
+		);
 	}
 
 	return `${stringify(wrapper).trimEnd()}\n`;

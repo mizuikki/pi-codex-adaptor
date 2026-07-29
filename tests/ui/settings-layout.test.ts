@@ -6,7 +6,7 @@ import { SettingsModel } from "../../src/ui/terminal/settings-model.ts";
 
 function createView(): SettingsModel {
 	return new SettingsModel(createDefaultConfig(), {
-		baseline: "0.144.3",
+		baseline: "0.146.0",
 		provider: "openai-codex-with-a-deliberately-long-provider-identifier",
 		model: "gpt-model-with-a-deliberately-long-model-identifier",
 		bridge: "protocol v6",

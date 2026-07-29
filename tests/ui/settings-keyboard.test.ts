@@ -5,7 +5,7 @@ import { SettingsModel } from "../../src/ui/terminal/settings-model.ts";
 
 function model(): SettingsModel {
 	return new SettingsModel(createDefaultConfig(), {
-		baseline: "0.144.3",
+		baseline: "0.146.0",
 		provider: "openai",
 		model: "unresolved",
 		bridge: "pending",

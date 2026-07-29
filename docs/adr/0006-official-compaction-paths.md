@@ -5,7 +5,7 @@
 
 ## Context
 
-Codex `0.144.3` supports RemoteCompactionV2 by provider capability and a typed CompactClient fallback.
+Codex `0.146.0` supports RemoteCompactionV2 by provider capability and a typed CompactClient fallback.
 Compaction output contains canonical response items that the application must not reinterpret.
 
 ## Historical Decision

@@ -72,7 +72,7 @@ export async function openSettingsOverlay(
 		? snapshot.bridge.capabilities.filter((value): value is string => typeof value === "string")
 		: undefined;
 	const model = new SettingsModel(config, {
-		baseline: "0.144.3",
+		baseline: "0.146.0",
 		provider: ctx.model?.provider ?? "unresolved",
 		model: ctx.model?.id ?? "unresolved",
 		bridge:

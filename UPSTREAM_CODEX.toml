@@ -1,33 +1,33 @@
 schema_version = 1
 
 [official]
-version = "0.144.3"
-tag = "rust-v0.144.3"
-annotated_tag_object = "13307a9036baccd2c51b685d1457a4b89b5b2f3b"
-source_commit = "78ad6e6bfd1d3b6a209acd3ef82172a96b25179c"
+version = "0.146.0"
+tag = "rust-v0.146.0"
+annotated_tag_object = "be449751a978f02e5bbba886999662956c7f38f5"
+source_commit = "e363b08c9175ac1cbe5893615dd2cb9ddf95043b"
 repository = "https://github.com/openai/codex"
 license = "Apache-2.0"
 rust_toolchain = "1.95.0"
 
 [conformance.cli]
 package = "@openai/codex"
-version = "0.144.3"
-integrity = "sha512-8Re3wp5CdYiM7nsF4StFa5js6IT11N7srhxfvwtol7ENHDht05C+HS4e1CTmYjqkhgsUzl2R1gB27iN2pdbVnA=="
+version = "0.146.0"
+integrity = "sha512-yG3sPWNda/2YAIQIDq9MrrjoCTIQ7rxYM5IasrG3VBcuhCLTkgeg/JzqmJq1V98RE4MJ5jCxDXXQlOjrditFRw=="
 
 [conformance.sdk]
 package = "@openai/codex-sdk"
-version = "0.144.3"
-integrity = "sha512-WPtEx38iVyksWujOwmsxnJznRR8T/YF+lAJghMhHL1xIWdJrrvZ1iafhIsw4egY5CRoRmFm2ta8NQsK4f4XDZA=="
+version = "0.146.0"
+integrity = "sha512-lhlcfmufd4EvjquERH3HNG0/fuxPQJBjFsAjtP2LJjAsuyMZk245ci8xfvT4QoZ7Vnbe15y7rj/NtMNcUJIJOg=="
 
 [vendor]
 status = "ready"
-tree_sha256 = "4e73a4c8efdc818b085b4abea1660b3a6d84b0fdbb6d687bda5c55dc0f07caad"
+tree_sha256 = "f61c3b46698213bba6b025f12debd46cd5e2608433dd7903fa7b79fecdb4c9bb"
 allowlist_manifest = "native/upstream/openai-codex-files.json"
-allowlist_sha256 = "6c292d4126b377d739dbea0e0d0e7d18d1d1876d698510955ce59bc9b813463d"
+allowlist_sha256 = "6726a4b029f9b72673eb171d3d6f9392194ef2e0656e82ccb1ebec53b15c3d0d"
 license_inventory = "native/upstream/openai-codex-licenses.json"
-license_inventory_sha256 = "6c6137dc1231bc16708c2b3401373a81e4996d82a6774b702cee20c5f4de8593"
+license_inventory_sha256 = "f670b47b8f973e4a3e3ff557640b3de7bd3ff648d62cf7b709232d9b299f9186"
 sbom = "native/upstream/openai-codex-sbom.json"
-sbom_sha256 = "31bf7da0ea9e58ffe18f4bd37d077dd95d3eaac121df882747a99bdd7c7c3ec4"
+sbom_sha256 = "dc75545e01b6d923029b4bce616e651e066546dda676579987784fdc7cafbef3"
 patches = [
   "native/patches/openai-codex/0001-deserialize-responses-requests.patch",
   "native/patches/openai-codex/0002-cast-windows-pseudoconsole-handle.patch",

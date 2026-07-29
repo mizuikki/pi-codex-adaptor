@@ -1,6 +1,6 @@
 [package]
 name = "codex-utils-pty"
-version = "0.144.3"
+version = "0.146.0"
 edition = "2024"
 license = "Apache-2.0"
 publish = false
@@ -32,7 +32,7 @@ workspace = true
 
 [target."cfg(windows)".dependencies.winapi]
 version = "0.3.9"
-features = [ "handleapi", "minwinbase", "processthreadsapi", "synchapi", "winbase", "wincon", "winerror", "winnt" ]
+features = [ "handleapi", "jobapi2", "minwinbase", "processthreadsapi", "synchapi", "winbase", "wincon", "winerror", "winnt" ]
 
 [target."cfg(unix)".dependencies.libc]
 workspace = true

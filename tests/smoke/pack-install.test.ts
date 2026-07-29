@@ -82,7 +82,7 @@ describe("exact npm tarball smoke", () => {
 					extensionPath,
 				],
 				{
-					cwd: repositoryRoot,
+					cwd: installRoot,
 					env: {
 						...process.env,
 						PI_CODING_AGENT_DIR: piHome,

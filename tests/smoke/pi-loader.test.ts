@@ -15,9 +15,10 @@ describe("Pi extension loading", () => {
 			const child = Bun.spawn(
 				[process.execPath, loaderProbe, resolve(repositoryRoot, "src/extension.ts")],
 				{
-					cwd: repositoryRoot,
+					cwd: piHome,
 					env: {
 						...process.env,
+						HOME: piHome,
 						PI_CODING_AGENT_DIR: piHome,
 						PI_OFFLINE: "1",
 					},

@@ -9,12 +9,10 @@ use std::time::Duration;
 /// A JSON request body serialized once into reference-counted bytes.
 ///
 /// Clones share the encoded allocation. Internally, the body can also hold the
-/// final compressed wire bytes while retaining the original JSON only when
-/// request-body trace logging is enabled.
+/// final compressed wire bytes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EncodedJsonBody {
     bytes: Bytes,
-    trace_bytes: Option<Bytes>,
     prepared: bool,
 }
 
@@ -23,7 +21,6 @@ impl EncodedJsonBody {
     pub fn encode<T: Serialize + ?Sized>(value: &T) -> Result<Self, serde_json::Error> {
         serde_json::to_vec(value).map(|bytes| Self {
             bytes: Bytes::from(bytes),
-            trace_bytes: None,
             prepared: false,
         })
     }
@@ -31,10 +28,6 @@ impl EncodedJsonBody {
     /// Returns the encoded bytes currently stored by this body.
     pub fn as_bytes(&self) -> &[u8] {
         &self.bytes
-    }
-
-    pub(crate) fn trace_bytes(&self) -> &[u8] {
-        self.trace_bytes.as_ref().unwrap_or(&self.bytes)
     }
 }
 
@@ -120,25 +113,11 @@ impl Request {
             self.body,
             Some(RequestBody::Json(_) | RequestBody::EncodedJson(_))
         );
-        let trace_bytes = if self.compression != RequestCompression::None
-            && tracing::enabled!(target: "codex_http_client::transport", tracing::Level::TRACE)
-        {
-            match self.body.as_ref() {
-                Some(RequestBody::Json(body)) => Some(Bytes::from(
-                    serde_json::to_vec(body).map_err(|err| err.to_string())?,
-                )),
-                Some(RequestBody::EncodedJson(body)) => Some(body.bytes.clone()),
-                Some(RequestBody::Raw(_)) | None => None,
-            }
-        } else {
-            None
-        };
         let prepared = self.prepare_body_for_send()?;
         self.headers = prepared.headers;
         self.body = match (is_json, prepared.body) {
             (true, Some(bytes)) => Some(RequestBody::EncodedJson(EncodedJsonBody {
                 bytes,
-                trace_bytes,
                 prepared: true,
             })),
             (false, Some(body)) => Some(RequestBody::Raw(body)),

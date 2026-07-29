@@ -37,8 +37,8 @@ function manifest(): UpstreamManifest {
 	return {
 		schema_version: 1,
 		official: {
-			version: "0.144.3",
-			tag: "rust-v0.144.3",
+			version: "0.146.0",
+			tag: "rust-v0.146.0",
 			annotated_tag_object: "a".repeat(40),
 			source_commit: "b".repeat(40),
 			repository: "https://example.invalid/codex",
@@ -185,9 +185,9 @@ describe("upstream integrity", () => {
 	test("reads bridge identity values from their named assignments only", () => {
 		const source = `
 const UNRELATED = "expected";
-export const OFFICIAL_CODEX_VERSION = "0.144.3";
+export const OFFICIAL_CODEX_VERSION = "0.146.0";
 `;
-		expect(readAssignedStringConstant(source, "OFFICIAL_CODEX_VERSION")).toBe("0.144.3");
+		expect(readAssignedStringConstant(source, "OFFICIAL_CODEX_VERSION")).toBe("0.146.0");
 		expect(() => readAssignedStringConstant(source, "OFFICIAL_SOURCE_COMMIT")).toThrow(
 			"exactly one string assignment",
 		);
@@ -200,7 +200,7 @@ export const OFFICIAL_CODEX_VERSION = "0.144.3";
 		await writeFile(resolve(directory, "codex-rs", "file.rs"), source);
 		const record = {
 			schema_version: 1 as const,
-			official_version: "0.144.3",
+			official_version: "0.146.0",
 			source_commit: "b".repeat(40),
 			files: [
 				{

@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "official_version": "0.144.3",
-  "official_source_commit": "78ad6e6bfd1d3b6a209acd3ef82172a96b25179c",
-  "cargo_lock_sha256": "6cce338cd0c7e6d5233f20725a79a99892d9ffa2857ceb79e7f525e74a88b3fe",
+  "official_version": "0.146.0",
+  "official_source_commit": "e363b08c9175ac1cbe5893615dd2cb9ddf95043b",
+  "cargo_lock_sha256": "dfcfdcdcd981c8ecbf4fe629da0a5d31c4689cfe7de6efbc4953f3968ee145a3",
   "root": "codex-bridge@0.0.0:244210e48437",
   "packages": [
     {
@@ -665,10 +665,10 @@
       ]
     },
     {
-      "ref": "codex-api@0.144.3:6d58b2fafd4e",
+      "ref": "codex-api@0.146.0:0d829e31a582",
       "name": "codex-api",
-      "version": "0.144.3",
-      "source": "official:78ad6e6bfd1d3b6a209acd3ef82172a96b25179c",
+      "version": "0.146.0",
+      "source": "official:e363b08c9175ac1cbe5893615dd2cb9ddf95043b",
       "license": "Apache-2.0",
       "checksum": null,
       "dependencies": [
@@ -676,11 +676,11 @@
         "base64@0.22.1:c19b7c6f923b",
         "bytes@1.11.1:c19b7c6f923b",
         "chrono@0.4.43:c19b7c6f923b",
-        "codex-client@0.144.3:6d58b2fafd4e",
-        "codex-http-client@0.144.3:6d58b2fafd4e",
-        "codex-protocol@0.144.3:6d58b2fafd4e",
-        "codex-utils-rustls-provider@0.144.3:6d58b2fafd4e",
-        "codex-websocket-client@0.144.3:6d58b2fafd4e",
+        "codex-client@0.146.0:0d829e31a582",
+        "codex-http-client@0.146.0:0d829e31a582",
+        "codex-protocol@0.146.0:0d829e31a582",
+        "codex-utils-rustls-provider@0.146.0:0d829e31a582",
+        "codex-websocket-client@0.146.0:0d829e31a582",
         "eventsource-stream@0.2.3:c19b7c6f923b",
         "futures@0.3.31:c19b7c6f923b",
         "http@1.4.0:c19b7c6f923b",
@@ -695,7 +695,8 @@
         "tokio@1.52.3:c19b7c6f923b",
         "tracing@0.1.44:c19b7c6f923b",
         "tungstenite@0.27.0:2186bc4d049e",
-        "url@2.5.8:c19b7c6f923b"
+        "url@2.5.8:c19b7c6f923b",
+        "uuid@1.20.0:c19b7c6f923b"
       ]
     },
     {
@@ -706,15 +707,15 @@
       "license": "Apache-2.0",
       "checksum": null,
       "dependencies": [
-        "codex-utils-path-uri@0.144.3:6d58b2fafd4e",
+        "codex-utils-path-uri@0.146.0:0d829e31a582",
         "thiserror@2.0.18:c19b7c6f923b"
       ]
     },
     {
-      "ref": "codex-async-utils@0.144.3:6d58b2fafd4e",
+      "ref": "codex-async-utils@0.146.0:0d829e31a582",
       "name": "codex-async-utils",
-      "version": "0.144.3",
-      "source": "official:78ad6e6bfd1d3b6a209acd3ef82172a96b25179c",
+      "version": "0.146.0",
+      "source": "official:e363b08c9175ac1cbe5893615dd2cb9ddf95043b",
       "license": "Apache-2.0",
       "checksum": null,
       "dependencies": [
@@ -731,16 +732,16 @@
       "checksum": null,
       "dependencies": [
         "base64@0.22.1:c19b7c6f923b",
-        "codex-api@0.144.3:6d58b2fafd4e",
+        "codex-api@0.146.0:0d829e31a582",
         "codex-apply-patch-adapter@0.0.0:244210e48437",
-        "codex-client@0.144.3:6d58b2fafd4e",
-        "codex-http-client@0.144.3:6d58b2fafd4e",
-        "codex-protocol@0.144.3:6d58b2fafd4e",
-        "codex-tools@0.144.3:6d58b2fafd4e",
-        "codex-utils-image@0.144.3:6d58b2fafd4e",
-        "codex-utils-output-truncation@0.144.3:6d58b2fafd4e",
-        "codex-utils-pty@0.144.3:6d58b2fafd4e",
-        "codex-websocket-client@0.144.3:6d58b2fafd4e",
+        "codex-client@0.146.0:0d829e31a582",
+        "codex-http-client@0.146.0:0d829e31a582",
+        "codex-protocol@0.146.0:0d829e31a582",
+        "codex-tools@0.146.0:0d829e31a582",
+        "codex-utils-image@0.146.0:0d829e31a582",
+        "codex-utils-output-truncation@0.146.0:0d829e31a582",
+        "codex-utils-pty@0.146.0:0d829e31a582",
+        "codex-websocket-client@0.146.0:0d829e31a582",
         "http@1.4.0:c19b7c6f923b",
         "openssl-sys@0.9.117:c19b7c6f923b",
         "pi-codex-bridge-protocol@0.0.0:244210e48437",
@@ -754,14 +755,14 @@
       ]
     },
     {
-      "ref": "codex-client@0.144.3:6d58b2fafd4e",
+      "ref": "codex-client@0.146.0:0d829e31a582",
       "name": "codex-client",
-      "version": "0.144.3",
-      "source": "official:78ad6e6bfd1d3b6a209acd3ef82172a96b25179c",
+      "version": "0.146.0",
+      "source": "official:e363b08c9175ac1cbe5893615dd2cb9ddf95043b",
       "license": "Apache-2.0",
       "checksum": null,
       "dependencies": [
-        "codex-http-client@0.144.3:6d58b2fafd4e",
+        "codex-http-client@0.146.0:0d829e31a582",
         "eventsource-stream@0.2.3:c19b7c6f923b",
         "futures@0.3.31:c19b7c6f923b",
         "http@1.4.0:c19b7c6f923b",
@@ -770,48 +771,51 @@
       ]
     },
     {
-      "ref": "codex-execpolicy@0.144.3:6d58b2fafd4e",
+      "ref": "codex-execpolicy@0.146.0:0d829e31a582",
       "name": "codex-execpolicy",
-      "version": "0.144.3",
-      "source": "official:78ad6e6bfd1d3b6a209acd3ef82172a96b25179c",
+      "version": "0.146.0",
+      "source": "official:e363b08c9175ac1cbe5893615dd2cb9ddf95043b",
       "license": "Apache-2.0",
       "checksum": null,
       "dependencies": [
         "anyhow@1.0.102:c19b7c6f923b",
         "clap@4.5.58:c19b7c6f923b",
-        "codex-utils-absolute-path@0.144.3:6d58b2fafd4e",
+        "codex-utils-absolute-path@0.146.0:0d829e31a582",
         "multimap@0.10.1:c19b7c6f923b",
         "serde@1.0.228:c19b7c6f923b",
         "serde_json@1.0.149:c19b7c6f923b",
         "shlex@1.3.0:c19b7c6f923b",
         "starlark@0.14.2:c19b7c6f923b",
-        "thiserror@2.0.18:c19b7c6f923b"
+        "tempfile@3.23.0:c19b7c6f923b",
+        "thiserror@2.0.18:c19b7c6f923b",
+        "tokio@1.52.3:c19b7c6f923b"
       ]
     },
     {
-      "ref": "codex-extension-items@0.144.3:6d58b2fafd4e",
+      "ref": "codex-extension-items@0.146.0:0d829e31a582",
       "name": "codex-extension-items",
-      "version": "0.144.3",
-      "source": "official:78ad6e6bfd1d3b6a209acd3ef82172a96b25179c",
+      "version": "0.146.0",
+      "source": "official:e363b08c9175ac1cbe5893615dd2cb9ddf95043b",
       "license": "Apache-2.0",
       "checksum": null,
       "dependencies": [
-        "codex-utils-absolute-path@0.144.3:6d58b2fafd4e",
+        "codex-utils-absolute-path@0.146.0:0d829e31a582",
         "schemars@0.8.22:c19b7c6f923b",
         "serde@1.0.228:c19b7c6f923b",
+        "serde_json@1.0.149:c19b7c6f923b",
         "ts-rs@11.1.0:c19b7c6f923b"
       ]
     },
     {
-      "ref": "codex-http-client@0.144.3:6d58b2fafd4e",
+      "ref": "codex-http-client@0.146.0:0d829e31a582",
       "name": "codex-http-client",
-      "version": "0.144.3",
-      "source": "official:78ad6e6bfd1d3b6a209acd3ef82172a96b25179c",
+      "version": "0.146.0",
+      "source": "official:e363b08c9175ac1cbe5893615dd2cb9ddf95043b",
       "license": "Apache-2.0",
       "checksum": null,
       "dependencies": [
         "bytes@1.11.1:c19b7c6f923b",
-        "codex-utils-rustls-provider@0.144.3:6d58b2fafd4e",
+        "codex-utils-rustls-provider@0.146.0:0d829e31a582",
         "futures@0.3.31:c19b7c6f923b",
         "http@1.4.0:c19b7c6f923b",
         "opentelemetry@0.31.0:c19b7c6f923b",
@@ -832,10 +836,10 @@
       ]
     },
     {
-      "ref": "codex-network-proxy@0.144.3:6d58b2fafd4e",
+      "ref": "codex-network-proxy@0.146.0:0d829e31a582",
       "name": "codex-network-proxy",
-      "version": "0.144.3",
-      "source": "official:78ad6e6bfd1d3b6a209acd3ef82172a96b25179c",
+      "version": "0.146.0",
+      "source": "official:e363b08c9175ac1cbe5893615dd2cb9ddf95043b",
       "license": "Apache-2.0",
       "checksum": null,
       "dependencies": [
@@ -843,9 +847,9 @@
         "base64@0.22.1:c19b7c6f923b",
         "chrono@0.4.43:c19b7c6f923b",
         "clap@4.5.58:c19b7c6f923b",
-        "codex-utils-absolute-path@0.144.3:6d58b2fafd4e",
-        "codex-utils-home-dir@0.144.3:6d58b2fafd4e",
-        "codex-utils-rustls-provider@0.144.3:6d58b2fafd4e",
+        "codex-utils-absolute-path@0.146.0:0d829e31a582",
+        "codex-utils-home-dir@0.146.0:0d829e31a582",
+        "codex-utils-rustls-provider@0.146.0:0d829e31a582",
         "globset@0.4.18:c19b7c6f923b",
         "rama-core@0.3.0-alpha.4:c19b7c6f923b",
         "rama-http-backend@0.3.0-alpha.4:c19b7c6f923b",
@@ -866,27 +870,28 @@
         "time@0.3.47:c19b7c6f923b",
         "tokio@1.52.3:c19b7c6f923b",
         "tracing@0.1.44:c19b7c6f923b",
-        "url@2.5.8:c19b7c6f923b"
+        "url@2.5.8:c19b7c6f923b",
+        "windows-sys@0.52.0:c19b7c6f923b"
       ]
     },
     {
-      "ref": "codex-protocol@0.144.3:6d58b2fafd4e",
+      "ref": "codex-protocol@0.146.0:0d829e31a582",
       "name": "codex-protocol",
-      "version": "0.144.3",
-      "source": "official:78ad6e6bfd1d3b6a209acd3ef82172a96b25179c",
+      "version": "0.146.0",
+      "source": "official:e363b08c9175ac1cbe5893615dd2cb9ddf95043b",
       "license": "Apache-2.0",
       "checksum": null,
       "dependencies": [
         "chardetng@0.1.17:c19b7c6f923b",
         "chrono@0.4.43:c19b7c6f923b",
-        "codex-async-utils@0.144.3:6d58b2fafd4e",
-        "codex-execpolicy@0.144.3:6d58b2fafd4e",
-        "codex-extension-items@0.144.3:6d58b2fafd4e",
-        "codex-network-proxy@0.144.3:6d58b2fafd4e",
-        "codex-utils-absolute-path@0.144.3:6d58b2fafd4e",
-        "codex-utils-image@0.144.3:6d58b2fafd4e",
-        "codex-utils-path-uri@0.144.3:6d58b2fafd4e",
-        "codex-utils-string@0.144.3:6d58b2fafd4e",
+        "codex-async-utils@0.146.0:0d829e31a582",
+        "codex-execpolicy@0.146.0:0d829e31a582",
+        "codex-extension-items@0.146.0:0d829e31a582",
+        "codex-network-proxy@0.146.0:0d829e31a582",
+        "codex-utils-absolute-path@0.146.0:0d829e31a582",
+        "codex-utils-image@0.146.0:0d829e31a582",
+        "codex-utils-path-uri@0.146.0:0d829e31a582",
+        "codex-utils-string@0.146.0:0d829e31a582",
         "encoding_rs@0.8.35:c19b7c6f923b",
         "globset@0.4.18:c19b7c6f923b",
         "icu_decimal@2.2.0:c19b7c6f923b",
@@ -912,16 +917,16 @@
       ]
     },
     {
-      "ref": "codex-tools@0.144.3:6d58b2fafd4e",
+      "ref": "codex-tools@0.146.0:0d829e31a582",
       "name": "codex-tools",
-      "version": "0.144.3",
-      "source": "official:78ad6e6bfd1d3b6a209acd3ef82172a96b25179c",
+      "version": "0.146.0",
+      "source": "official:e363b08c9175ac1cbe5893615dd2cb9ddf95043b",
       "license": "Apache-2.0",
       "checksum": null,
       "dependencies": [
-        "codex-api@0.144.3:6d58b2fafd4e",
-        "codex-protocol@0.144.3:6d58b2fafd4e",
-        "codex-utils-output-truncation@0.144.3:6d58b2fafd4e",
+        "codex-api@0.146.0:0d829e31a582",
+        "codex-protocol@0.146.0:0d829e31a582",
+        "codex-utils-output-truncation@0.146.0:0d829e31a582",
         "jsonptr@0.7.1:c19b7c6f923b",
         "rmcp@1.8.0:c19b7c6f923b",
         "schemars@0.8.22:c19b7c6f923b",
@@ -931,10 +936,10 @@
       ]
     },
     {
-      "ref": "codex-utils-absolute-path@0.144.3:6d58b2fafd4e",
+      "ref": "codex-utils-absolute-path@0.146.0:0d829e31a582",
       "name": "codex-utils-absolute-path",
-      "version": "0.144.3",
-      "source": "official:78ad6e6bfd1d3b6a209acd3ef82172a96b25179c",
+      "version": "0.146.0",
+      "source": "official:e363b08c9175ac1cbe5893615dd2cb9ddf95043b",
       "license": "Apache-2.0",
       "checksum": null,
       "dependencies": [
@@ -946,10 +951,10 @@
       ]
     },
     {
-      "ref": "codex-utils-cache@0.144.3:6d58b2fafd4e",
+      "ref": "codex-utils-cache@0.146.0:0d829e31a582",
       "name": "codex-utils-cache",
-      "version": "0.144.3",
-      "source": "official:78ad6e6bfd1d3b6a209acd3ef82172a96b25179c",
+      "version": "0.146.0",
+      "source": "official:e363b08c9175ac1cbe5893615dd2cb9ddf95043b",
       "license": "Apache-2.0",
       "checksum": null,
       "dependencies": [
@@ -959,27 +964,27 @@
       ]
     },
     {
-      "ref": "codex-utils-home-dir@0.144.3:6d58b2fafd4e",
+      "ref": "codex-utils-home-dir@0.146.0:0d829e31a582",
       "name": "codex-utils-home-dir",
-      "version": "0.144.3",
-      "source": "official:78ad6e6bfd1d3b6a209acd3ef82172a96b25179c",
+      "version": "0.146.0",
+      "source": "official:e363b08c9175ac1cbe5893615dd2cb9ddf95043b",
       "license": "Apache-2.0",
       "checksum": null,
       "dependencies": [
-        "codex-utils-absolute-path@0.144.3:6d58b2fafd4e",
+        "codex-utils-absolute-path@0.146.0:0d829e31a582",
         "dirs@6.0.0:c19b7c6f923b"
       ]
     },
     {
-      "ref": "codex-utils-image@0.144.3:6d58b2fafd4e",
+      "ref": "codex-utils-image@0.146.0:0d829e31a582",
       "name": "codex-utils-image",
-      "version": "0.144.3",
-      "source": "official:78ad6e6bfd1d3b6a209acd3ef82172a96b25179c",
+      "version": "0.146.0",
+      "source": "official:e363b08c9175ac1cbe5893615dd2cb9ddf95043b",
       "license": "Apache-2.0",
       "checksum": null,
       "dependencies": [
         "base64@0.22.1:c19b7c6f923b",
-        "codex-utils-cache@0.144.3:6d58b2fafd4e",
+        "codex-utils-cache@0.146.0:0d829e31a582",
         "image@0.25.9:c19b7c6f923b",
         "mime_guess@2.0.5:c19b7c6f923b",
         "thiserror@2.0.18:c19b7c6f923b",
@@ -987,27 +992,27 @@
       ]
     },
     {
-      "ref": "codex-utils-output-truncation@0.144.3:6d58b2fafd4e",
+      "ref": "codex-utils-output-truncation@0.146.0:0d829e31a582",
       "name": "codex-utils-output-truncation",
-      "version": "0.144.3",
-      "source": "official:78ad6e6bfd1d3b6a209acd3ef82172a96b25179c",
+      "version": "0.146.0",
+      "source": "official:e363b08c9175ac1cbe5893615dd2cb9ddf95043b",
       "license": "Apache-2.0",
       "checksum": null,
       "dependencies": [
-        "codex-protocol@0.144.3:6d58b2fafd4e",
-        "codex-utils-string@0.144.3:6d58b2fafd4e"
+        "codex-protocol@0.146.0:0d829e31a582",
+        "codex-utils-string@0.146.0:0d829e31a582"
       ]
     },
     {
-      "ref": "codex-utils-path-uri@0.144.3:6d58b2fafd4e",
+      "ref": "codex-utils-path-uri@0.146.0:0d829e31a582",
       "name": "codex-utils-path-uri",
-      "version": "0.144.3",
-      "source": "official:78ad6e6bfd1d3b6a209acd3ef82172a96b25179c",
+      "version": "0.146.0",
+      "source": "official:e363b08c9175ac1cbe5893615dd2cb9ddf95043b",
       "license": "Apache-2.0",
       "checksum": null,
       "dependencies": [
         "base64@0.22.1:c19b7c6f923b",
-        "codex-utils-absolute-path@0.144.3:6d58b2fafd4e",
+        "codex-utils-absolute-path@0.146.0:0d829e31a582",
         "schemars@0.8.22:c19b7c6f923b",
         "serde@1.0.228:c19b7c6f923b",
         "thiserror@2.0.18:c19b7c6f923b",
@@ -1017,10 +1022,10 @@
       ]
     },
     {
-      "ref": "codex-utils-pty@0.144.3:6d58b2fafd4e",
+      "ref": "codex-utils-pty@0.146.0:0d829e31a582",
       "name": "codex-utils-pty",
-      "version": "0.144.3",
-      "source": "official:78ad6e6bfd1d3b6a209acd3ef82172a96b25179c",
+      "version": "0.146.0",
+      "source": "official:e363b08c9175ac1cbe5893615dd2cb9ddf95043b",
       "license": "Apache-2.0",
       "checksum": null,
       "dependencies": [
@@ -1036,10 +1041,10 @@
       ]
     },
     {
-      "ref": "codex-utils-rustls-provider@0.144.3:6d58b2fafd4e",
+      "ref": "codex-utils-rustls-provider@0.146.0:0d829e31a582",
       "name": "codex-utils-rustls-provider",
-      "version": "0.144.3",
-      "source": "official:78ad6e6bfd1d3b6a209acd3ef82172a96b25179c",
+      "version": "0.146.0",
+      "source": "official:e363b08c9175ac1cbe5893615dd2cb9ddf95043b",
       "license": "Apache-2.0",
       "checksum": null,
       "dependencies": [
@@ -1047,10 +1052,10 @@
       ]
     },
     {
-      "ref": "codex-utils-string@0.144.3:6d58b2fafd4e",
+      "ref": "codex-utils-string@0.146.0:0d829e31a582",
       "name": "codex-utils-string",
-      "version": "0.144.3",
-      "source": "official:78ad6e6bfd1d3b6a209acd3ef82172a96b25179c",
+      "version": "0.146.0",
+      "source": "official:e363b08c9175ac1cbe5893615dd2cb9ddf95043b",
       "license": "Apache-2.0",
       "checksum": null,
       "dependencies": [
@@ -1060,14 +1065,14 @@
       ]
     },
     {
-      "ref": "codex-websocket-client@0.144.3:6d58b2fafd4e",
+      "ref": "codex-websocket-client@0.146.0:0d829e31a582",
       "name": "codex-websocket-client",
-      "version": "0.144.3",
-      "source": "official:78ad6e6bfd1d3b6a209acd3ef82172a96b25179c",
+      "version": "0.146.0",
+      "source": "official:e363b08c9175ac1cbe5893615dd2cb9ddf95043b",
       "license": "Apache-2.0",
       "checksum": null,
       "dependencies": [
-        "codex-http-client@0.144.3:6d58b2fafd4e",
+        "codex-http-client@0.146.0:0d829e31a582",
         "futures@0.3.31:c19b7c6f923b",
         "rustls@0.23.36:c19b7c6f923b",
         "tokio-rustls@0.26.4:c19b7c6f923b",

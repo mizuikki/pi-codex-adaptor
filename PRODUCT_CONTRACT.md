@@ -2,8 +2,8 @@
 
 ## Baseline
 
-The native implementation is pinned to OpenAI Codex `0.144.3`, tag `rust-v0.144.3`, peeled source
-commit `78ad6e6bfd1d3b6a209acd3ef82172a96b25179c`, and Rust `1.95.0`. The TypeScript/native JSONL
+The native implementation is pinned to OpenAI Codex `0.146.0`, tag `rust-v0.146.0`, peeled source
+commit `e363b08c9175ac1cbe5893615dd2cb9ddf95043b`, and Rust `1.95.0`. The TypeScript/native JSONL
 bridge is protocol version `6`. A handshake mismatch is fatal before provider registration.
 
 The paired Pi fork remains session format version `3`, common extension ABI version `1`, and

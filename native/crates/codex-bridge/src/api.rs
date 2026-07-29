@@ -527,6 +527,7 @@ mod tests {
             individual_limit: None,
             plan_type: None,
             rate_limit_reached_type: None,
+            spend_control_reached: None,
         };
         assert!(map_response_event(ResponseEvent::RateLimits(snapshot)).is_none());
     }

@@ -1,6 +1,6 @@
 [package]
 name = "codex-execpolicy"
-version = "0.144.3"
+version = "0.146.0"
 edition = "2024"
 license = "Apache-2.0"
 publish = false
@@ -37,5 +37,12 @@ workspace = true
 [dependencies.starlark]
 workspace = true
 
+[dependencies.tempfile]
+workspace = true
+
 [dependencies.thiserror]
 workspace = true
+
+[dependencies.tokio]
+workspace = true
+features = [ "fs", "io-util", "macros", "rt" ]

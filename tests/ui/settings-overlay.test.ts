@@ -169,7 +169,7 @@ function createOverlayForDialog(
 	const service = createService();
 	const ctx = createCtx(options);
 	const model = new SettingsModel(createDefaultConfig(), {
-		baseline: "0.144.3",
+		baseline: "0.146.0",
 		provider: "openai-codex",
 		model: "test-model",
 		bridge: "protocol v6",
@@ -198,7 +198,7 @@ describe("settings overlay disposal", () => {
 		const service = createService();
 		const ctx = createCtx();
 		const model = new SettingsModel(createDefaultConfig(), {
-			baseline: "0.144.3",
+			baseline: "0.146.0",
 			provider: "openai-codex",
 			model: "test-model",
 			bridge: "protocol v6",
@@ -228,7 +228,7 @@ describe("settings overlay disposal", () => {
 		const ctx = createCtx();
 		let done = false;
 		const model = new SettingsModel(createDefaultConfig(), {
-			baseline: "0.144.3",
+			baseline: "0.146.0",
 			provider: "openai-codex",
 			model: "test-model",
 			bridge: "protocol v6",
@@ -263,7 +263,7 @@ describe("settings overlay disposal", () => {
 		});
 		const ctx = createCtx();
 		const model = new SettingsModel(await service.load(), {
-			baseline: "0.144.3",
+			baseline: "0.146.0",
 			provider: "openai-codex",
 			model: "test-model",
 			bridge: "protocol v6",
@@ -285,7 +285,7 @@ describe("settings overlay disposal", () => {
 		const service = createService();
 		const ctx = createCtx();
 		const model = new SettingsModel(createDefaultConfig(), {
-			baseline: "0.144.3",
+			baseline: "0.146.0",
 			provider: "openai-codex",
 			model: "test-model",
 			bridge: "protocol v6",
@@ -304,7 +304,7 @@ describe("settings overlay disposal", () => {
 		const service = createService();
 		const ctx = createCtx();
 		const model = new SettingsModel(createDefaultConfig(), {
-			baseline: "0.144.3",
+			baseline: "0.146.0",
 			provider: "openai-codex",
 			model: "test-model",
 			bridge: "protocol v6",
@@ -334,7 +334,7 @@ describe("settings overlay disposal", () => {
 		expect(coordinator.begin("session-fixture")).toBe(true);
 		const ctx = createCtx({ confirm: true });
 		const model = new SettingsModel(createDefaultConfig(), {
-			baseline: "0.144.3",
+			baseline: "0.146.0",
 			provider: "openai-codex",
 			model: "test-model",
 			bridge: "protocol v6",
@@ -366,7 +366,7 @@ describe("settings overlay disposal", () => {
 		const coordinator = new CodexCompactionCoordinator();
 		const ctx = createCtx({ confirm: true });
 		const model = new SettingsModel(createDefaultConfig(), {
-			baseline: "0.144.3",
+			baseline: "0.146.0",
 			provider: "openai-codex",
 			model: "test-model",
 			bridge: "protocol v6",
@@ -398,7 +398,7 @@ describe("settings overlay disposal", () => {
 		const service = createService();
 		const ctx = createCtx({ provider: "custom-codex", api: "openai-responses" });
 		const model = new SettingsModel(createDefaultConfig(), {
-			baseline: "0.144.3",
+			baseline: "0.146.0",
 			provider: "custom-codex",
 			model: "test-model",
 			bridge: "protocol v6",
@@ -441,7 +441,7 @@ describe("settings overlay disposal", () => {
 		};
 		const ctx = createCtx({ provider: "custom-codex", api: "openai-responses" });
 		const model = new SettingsModel(createDefaultConfig(), {
-			baseline: "0.144.3",
+			baseline: "0.146.0",
 			provider: "custom-codex",
 			model: "test-model",
 			bridge: "protocol v6",
