@@ -118,19 +118,15 @@
 
     "@earendil-works/pi-agent-core": ["@earendil-works/pi-agent-core@file:../pi/packages/agent", { "dependencies": { "@earendil-works/pi-ai": "0.81.1-local.1", "ignore": "7.0.5", "typebox": "1.1.38", "yaml": "2.9.0" }, "devDependencies": { "@types/node": "24.12.4", "@vitest/coverage-v8": "4.1.9", "typescript": "5.9.3", "vitest": "4.1.9" } }],
 
-    "@earendil-works/pi-agent-core": ["@earendil-works/pi-agent-core@file:../pi/packages/agent", { "dependencies": { "@earendil-works/pi-ai": "0.81.1-local.1", "ignore": "7.0.5", "typebox": "1.1.38", "yaml": "2.9.0" }, "devDependencies": { "@types/node": "24.12.4", "@vitest/coverage-v8": "4.1.9", "typescript": "5.9.3", "vitest": "4.1.9" } }],
 
     "@earendil-works/pi-ai": ["@earendil-works/pi-ai@file:../pi/packages/ai", { "dependencies": { "@anthropic-ai/sdk": "0.91.1", "@aws-sdk/client-bedrock-runtime": "3.1048.0", "@google/genai": "1.52.0", "@mistralai/mistralai": "2.2.6", "@opentelemetry/api": "1.9.0", "@smithy/node-http-handler": "4.7.3", "http-proxy-agent": "7.0.2", "https-proxy-agent": "7.0.6", "openai": "6.26.0", "partial-json": "0.1.7", "typebox": "1.1.38" }, "devDependencies": { "@types/node": "24.12.4", "canvas": "3.2.3", "vitest": "4.1.9" }, "bin": { "pi-ai": "dist/cli.js" } }],
 
-    "@earendil-works/pi-ai": ["@earendil-works/pi-ai@file:../pi/packages/ai", { "dependencies": { "@anthropic-ai/sdk": "0.91.1", "@aws-sdk/client-bedrock-runtime": "3.1048.0", "@google/genai": "1.52.0", "@mistralai/mistralai": "2.2.6", "@opentelemetry/api": "1.9.0", "@smithy/node-http-handler": "4.7.3", "http-proxy-agent": "7.0.2", "https-proxy-agent": "7.0.6", "openai": "6.26.0", "partial-json": "0.1.7", "typebox": "1.1.38" }, "devDependencies": { "@types/node": "24.12.4", "canvas": "3.2.3", "vitest": "4.1.9" }, "bin": { "pi-ai": "dist/cli.js" } }],
 
     "@earendil-works/pi-coding-agent": ["@earendil-works/pi-coding-agent@file:../pi/packages/coding-agent", { "dependencies": { "@earendil-works/pi-agent-core": "0.81.1-local.1", "@earendil-works/pi-ai": "0.81.1-local.1", "@earendil-works/pi-tui": "0.81.1-local.1", "@silvia-odwyer/photon-node": "0.3.4", "chalk": "5.6.2", "cross-spawn": "7.0.6", "diff": "8.0.4", "glob": "13.0.6", "highlight.js": "10.7.3", "hosted-git-info": "9.0.3", "ignore": "7.0.5", "jiti": "2.7.0", "minimatch": "10.2.5", "proper-lockfile": "4.1.2", "semver": "7.8.0", "typebox": "1.1.38", "undici": "8.5.0", "yaml": "2.9.0" }, "devDependencies": { "@types/cross-spawn": "6.0.6", "@types/diff": "7.0.2", "@types/hosted-git-info": "3.0.5", "@types/ms": "2.1.0", "@types/node": "24.12.4", "@types/proper-lockfile": "4.1.4", "@types/semver": "7.7.1", "shx": "0.4.0", "typescript": "5.9.3", "vitest": "4.1.9" }, "optionalDependencies": { "@mariozechner/clipboard": "0.3.9" }, "bin": { "pi": "dist/cli.js" } }],
 
-    "@earendil-works/pi-coding-agent": ["@earendil-works/pi-coding-agent@file:../pi/packages/coding-agent", { "dependencies": { "@earendil-works/pi-agent-core": "0.81.1-local.1", "@earendil-works/pi-ai": "0.81.1-local.1", "@earendil-works/pi-tui": "0.81.1-local.1", "@silvia-odwyer/photon-node": "0.3.4", "chalk": "5.6.2", "cross-spawn": "7.0.6", "diff": "8.0.4", "glob": "13.0.6", "highlight.js": "10.7.3", "hosted-git-info": "9.0.3", "ignore": "7.0.5", "jiti": "2.7.0", "minimatch": "10.2.5", "proper-lockfile": "4.1.2", "semver": "7.8.0", "typebox": "1.1.38", "undici": "8.5.0", "yaml": "2.9.0" }, "devDependencies": { "@types/cross-spawn": "6.0.6", "@types/diff": "7.0.2", "@types/hosted-git-info": "3.0.5", "@types/ms": "2.1.0", "@types/node": "24.12.4", "@types/proper-lockfile": "4.1.4", "@types/semver": "7.7.1", "shx": "0.4.0", "typescript": "5.9.3", "vitest": "4.1.9" }, "optionalDependencies": { "@mariozechner/clipboard": "0.3.9" }, "bin": { "pi": "dist/cli.js" } }],
 
     "@earendil-works/pi-tui": ["@earendil-works/pi-tui@file:../pi/packages/tui", { "dependencies": { "get-east-asian-width": "1.6.0", "marked": "18.0.5" }, "devDependencies": { "@xterm/headless": "5.5.0", "chalk": "5.6.2" } }],
 
-    "@earendil-works/pi-tui": ["@earendil-works/pi-tui@file:../pi/packages/tui", { "dependencies": { "get-east-asian-width": "1.6.0", "marked": "18.0.5" }, "devDependencies": { "@xterm/headless": "5.5.0", "chalk": "5.6.2" } }],
 
     "@emnapi/core": ["@emnapi/core@1.11.1", "", { "dependencies": { "@emnapi/wasi-threads": "1.2.2", "tslib": "^2.4.0" } }, "sha512-RSvbQmHzdKzNsLYa/wHrbc3KN4sYLKAdPZxqiM2HATqv/SBk2/ENSHpvXGaLOMcsAyz0poEGqkmmKYG3OWiJEQ=="],
 
@@ -736,15 +732,11 @@
 
     "@earendil-works/pi-agent-core/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
 
-    "@earendil-works/pi-agent-core/@earendil-works/pi-ai": ["@earendil-works/pi-ai@file:../pi/packages/ai", { "dependencies": { "@anthropic-ai/sdk": "0.91.1", "@aws-sdk/client-bedrock-runtime": "3.1048.0", "@google/genai": "1.52.0", "@mistralai/mistralai": "2.2.6", "@opentelemetry/api": "1.9.0", "@smithy/node-http-handler": "4.7.3", "http-proxy-agent": "7.0.2", "https-proxy-agent": "7.0.6", "openai": "6.26.0", "partial-json": "0.1.7", "typebox": "1.1.38" }, "devDependencies": { "@types/node": "24.12.4", "canvas": "3.2.3", "vitest": "4.1.9" }, "bin": { "pi-ai": "dist/cli.js" } }],
 
-    "@earendil-works/pi-agent-core/typebox": ["typebox@1.1.38", "", {}, "sha512-pZ0aQPmMmXoUvSbeuWf/Hzsc+avNw/Zd6VeE8CFgkVGWyuHPJvqeJJDeJqLve+K70LvjYIoleGcoJHPT17cWoA=="],
 
-    "@earendil-works/pi-agent-core/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
 
     "@earendil-works/pi-ai/typebox": ["typebox@1.1.38", "", {}, "sha512-pZ0aQPmMmXoUvSbeuWf/Hzsc+avNw/Zd6VeE8CFgkVGWyuHPJvqeJJDeJqLve+K70LvjYIoleGcoJHPT17cWoA=="],
 
-    "@earendil-works/pi-ai/typebox": ["typebox@1.1.38", "", {}, "sha512-pZ0aQPmMmXoUvSbeuWf/Hzsc+avNw/Zd6VeE8CFgkVGWyuHPJvqeJJDeJqLve+K70LvjYIoleGcoJHPT17cWoA=="],
 
     "@earendil-works/pi-coding-agent/@earendil-works/pi-agent-core": ["@earendil-works/pi-agent-core@file:../pi/packages/agent", { "dependencies": { "@earendil-works/pi-ai": "0.81.1-local.1", "ignore": "7.0.5", "typebox": "1.1.38", "yaml": "2.9.0" }, "devDependencies": { "@types/node": "24.12.4", "@vitest/coverage-v8": "4.1.9", "typescript": "5.9.3", "vitest": "4.1.9" } }],
 
@@ -756,15 +748,10 @@
 
     "@earendil-works/pi-coding-agent/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
 
-    "@earendil-works/pi-coding-agent/@earendil-works/pi-agent-core": ["@earendil-works/pi-agent-core@file:../pi/packages/agent", { "dependencies": { "@earendil-works/pi-ai": "0.81.1-local.1", "ignore": "7.0.5", "typebox": "1.1.38", "yaml": "2.9.0" }, "devDependencies": { "@types/node": "24.12.4", "@vitest/coverage-v8": "4.1.9", "typescript": "5.9.3", "vitest": "4.1.9" } }],
 
-    "@earendil-works/pi-coding-agent/@earendil-works/pi-ai": ["@earendil-works/pi-ai@file:../pi/packages/ai", { "dependencies": { "@anthropic-ai/sdk": "0.91.1", "@aws-sdk/client-bedrock-runtime": "3.1048.0", "@google/genai": "1.52.0", "@mistralai/mistralai": "2.2.6", "@opentelemetry/api": "1.9.0", "@smithy/node-http-handler": "4.7.3", "http-proxy-agent": "7.0.2", "https-proxy-agent": "7.0.6", "openai": "6.26.0", "partial-json": "0.1.7", "typebox": "1.1.38" }, "devDependencies": { "@types/node": "24.12.4", "canvas": "3.2.3", "vitest": "4.1.9" }, "bin": { "pi-ai": "dist/cli.js" } }],
 
-    "@earendil-works/pi-coding-agent/@earendil-works/pi-tui": ["@earendil-works/pi-tui@file:../pi/packages/tui", { "dependencies": { "get-east-asian-width": "1.6.0", "marked": "18.0.5" }, "devDependencies": { "@xterm/headless": "5.5.0", "chalk": "5.6.2" } }],
 
-    "@earendil-works/pi-coding-agent/typebox": ["typebox@1.1.38", "", {}, "sha512-pZ0aQPmMmXoUvSbeuWf/Hzsc+avNw/Zd6VeE8CFgkVGWyuHPJvqeJJDeJqLve+K70LvjYIoleGcoJHPT17cWoA=="],
 
-    "@earendil-works/pi-coding-agent/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
 
     "execa/cross-spawn": ["cross-spawn@6.0.6", "", { "dependencies": { "nice-try": "^1.0.4", "path-key": "^2.0.1", "semver": "^5.5.0", "shebang-command": "^1.2.0", "which": "^1.2.9" } }, "sha512-VqCUuhcd1iB+dsv8gxPttb5iZh/D0iubSP21g36KXdEuf6I5JiioesUVjpCdHV9MZRUfVFlvwtIUyPfxo5trtw=="],
 
@@ -778,7 +765,6 @@
 
     "@earendil-works/pi-coding-agent/@earendil-works/pi-agent-core/@earendil-works/pi-ai": ["@earendil-works/pi-ai@file:../pi/packages/ai", { "dependencies": { "@anthropic-ai/sdk": "0.91.1", "@aws-sdk/client-bedrock-runtime": "3.1048.0", "@google/genai": "1.52.0", "@mistralai/mistralai": "2.2.6", "@opentelemetry/api": "1.9.0", "@smithy/node-http-handler": "4.7.3", "http-proxy-agent": "7.0.2", "https-proxy-agent": "7.0.6", "openai": "6.26.0", "partial-json": "0.1.7", "typebox": "1.1.38" }, "devDependencies": { "@types/node": "24.12.4", "canvas": "3.2.3", "vitest": "4.1.9" }, "bin": { "pi-ai": "dist/cli.js" } }],
 
-    "@earendil-works/pi-coding-agent/@earendil-works/pi-agent-core/@earendil-works/pi-ai": ["@earendil-works/pi-ai@file:../pi/packages/ai", { "dependencies": { "@anthropic-ai/sdk": "0.91.1", "@aws-sdk/client-bedrock-runtime": "3.1048.0", "@google/genai": "1.52.0", "@mistralai/mistralai": "2.2.6", "@opentelemetry/api": "1.9.0", "@smithy/node-http-handler": "4.7.3", "http-proxy-agent": "7.0.2", "https-proxy-agent": "7.0.6", "openai": "6.26.0", "partial-json": "0.1.7", "typebox": "1.1.38" }, "devDependencies": { "@types/node": "24.12.4", "canvas": "3.2.3", "vitest": "4.1.9" }, "bin": { "pi-ai": "dist/cli.js" } }],
 
     "execa/cross-spawn/path-key": ["path-key@2.0.1", "", {}, "sha512-fEHGKCSmUSDPv4uoj8AlD+joPlq3peND+HRYyxFz4KPw4z926S/b8rIuFs2FYJg3BwsxJf6A9/3eIdLaYC+9Dw=="],
 
