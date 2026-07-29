@@ -649,6 +649,7 @@ describe("Pi core tool activation", () => {
 			workspaceRoots: ["/workspace"],
 			authorization: "require_approval",
 			argumentsValue: {
+				model: "fixture-model",
 				cmd: "fixture command",
 				allow_background_sessions: true,
 			},
@@ -685,7 +686,11 @@ describe("Pi core tool activation", () => {
 		});
 		expect(runtime.execution).toMatchObject({
 			tool: "view_image",
-			argumentsValue: { path: "/workspace/fixture.png", detail: "original" },
+			argumentsValue: {
+				model: "fixture-model",
+				path: "/workspace/fixture.png",
+				detail: "original",
+			},
 		});
 		expect(image?.content).toEqual([
 			{ type: "image", mimeType: "image/png", data: "ZmFrZS1pbWFnZQ==" },
@@ -995,12 +1000,14 @@ describe("Pi core tool activation", () => {
 				},
 				env: { AUTHORIZATION: "Bearer model-injected" },
 				authorization: "Bearer model-injected",
+				model: "model-injected",
 			} as never,
 			undefined,
 			undefined,
 			ctx,
 		);
 		expect(runtime.execution?.argumentsValue).toEqual({
+			model: "fixture-model",
 			cmd: "printf fixture",
 			shell: "/bin/bash",
 			allow_background_sessions: true,

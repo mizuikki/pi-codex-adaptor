@@ -1604,7 +1604,7 @@ async fn tools_execute(
     approvals: &Arc<Mutex<HashMap<String, oneshot::Sender<ApprovalDecision>>>>,
     sessions: &Arc<NativeSessions>,
 ) -> Result<RequestSuccess, RequestFailure> {
-    let params = serde_json::from_value::<ToolExecuteParams>(params)
+    let mut params = serde_json::from_value::<ToolExecuteParams>(params)
         .map_err(|_| invalid_params("tools.execute parameters are invalid"))?;
     if params.authorization == NativeAuthorization::Preauthorized
         && !PREAUTHORIZED_TOOLS.contains(&params.tool.as_str())
@@ -1616,6 +1616,13 @@ async fn tools_execute(
             retryable: false,
         }
         .into());
+    }
+    if matches!(
+        params.tool.as_str(),
+        "exec_command" | "write_stdin" | "shell_command"
+    ) {
+        params.max_output_tokens =
+            clamp_command_output_tokens(params.max_output_tokens, params.model.as_deref());
     }
     if params.tool == "write_stdin" {
         return write_stdin(
@@ -2342,6 +2349,7 @@ async fn standalone_web_search(
         .model
         .filter(|model| !model.is_empty() && model.len() <= 256)
         .ok_or_else(|| invalid_params("web.run model is invalid"))?;
+    let model_info = crate::models::resolve_model(&model);
     let session_id = params
         .request_session_id
         .filter(|id| !id.is_empty() && id.len() <= 256)
@@ -2380,11 +2388,13 @@ async fn standalone_web_search(
     )
     .await?;
     ensure_not_cancelled(cancellation)?;
+    let mut conversation_items = params.conversation_items;
+    crate::model_output_bounds::bound_model_output_items(&mut conversation_items, &model_info);
     let request = SearchRequest {
         id: session_id,
         model,
         reasoning: None,
-        input: recent_search_input(params.conversation_items),
+        input: recent_search_input(conversation_items),
         commands: Some(commands),
         settings: Some(SearchSettings {
             allowed_callers: Some(vec![AllowedCaller::Direct]),
@@ -3416,6 +3426,17 @@ fn resolve_max_output_tokens(max_output_tokens: Option<u64>) -> usize {
         .unwrap_or(DEFAULT_MAX_OUTPUT_TOKENS)
 }
 
+fn clamp_command_output_tokens(requested: Option<u64>, model_id: Option<&str>) -> Option<u64> {
+    let Some(model_id) = model_id.filter(|model_id| !model_id.is_empty() && model_id.len() <= 256)
+    else {
+        return requested;
+    };
+    let model = crate::models::resolve_model(model_id);
+    let limit = crate::model_output_bounds::model_output_token_limit(&model);
+    let effective = resolve_max_output_tokens(requested).min(limit);
+    Some(u64::try_from(effective).unwrap_or(u64::MAX))
+}
+
 fn approx_tokens_from_bytes(bytes: usize) -> u64 {
     u64::try_from(bytes.div_ceil(4)).unwrap_or(u64::MAX)
 }
@@ -3754,6 +3775,8 @@ async fn responses_create(
     let mut parsed = serde_json::from_value::<ResponsesCreateParams>(params)
         .map_err(|_| invalid_params("responses.create parameters are invalid"))?;
     parsed.request.stream = true;
+    let model = crate::models::resolve_model(&parsed.request.model);
+    crate::model_output_bounds::bound_model_output_items(&mut parsed.request.input, &model);
     let remote_v2_context = parsed
         .remote_compaction_v2_context
         .take()
@@ -3985,6 +4008,7 @@ async fn responses_compact(
     }
     ensure_not_cancelled(cancellation)?;
     let model = crate::models::resolve_model(&parsed.request.model);
+    crate::model_output_bounds::bound_model_output_items(&mut parsed.request.input, &model);
     crate::compaction_context_fit::fit_compaction_input(&mut parsed.request, &model)?;
     ensure_not_cancelled(cancellation)?;
     let connection = api::connect(&parsed.connection)?;
@@ -4793,6 +4817,71 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::large_futures)]
+    async fn responses_create_bounds_parallel_tool_output_before_dispatch() {
+        let (base_url, request, server) = spawn_capturing_fixture_http_server(
+            concat!(
+                "event: response.completed\n",
+                "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"fixture-response\"}}\n\n",
+            )
+            .to_owned(),
+        )
+        .await;
+        let (output, _messages) = mpsc::channel(8);
+        let flow = FlowController::new("request-bounded-output".to_owned(), output);
+        responses_create(
+            json!({
+                "request": {
+                    "model": "gpt-5.6-sol",
+                    "instructions": "",
+                    "input": [
+                        {
+                            "type": "function_call_output",
+                            "call_id": "call-1",
+                            "output": "x".repeat(80_000)
+                        },
+                        {
+                            "type": "custom_tool_call_output",
+                            "call_id": "call-2",
+                            "name": "fixture-tool",
+                            "output": "y".repeat(80_000)
+                        }
+                    ],
+                    "tools": null,
+                    "tool_choice": "auto",
+                    "parallel_tool_calls": true,
+                    "reasoning": null,
+                    "store": false,
+                    "stream": true,
+                    "include": []
+                },
+                "transportMode": "sse",
+                "providerSupportsWebsockets": false,
+                "connection": fixture_connection(base_url),
+            }),
+            &flow,
+            &CancellationToken::new(),
+        )
+        .await
+        .expect("bounded Responses request should complete");
+
+        let request = request.await.expect("fixture request should be captured");
+        let body = fixture_request_body(&request);
+        let input = body["input"]
+            .as_array()
+            .expect("request input should remain an array");
+        assert_eq!(input.len(), 2);
+        assert_eq!(input[0]["call_id"], "call-1");
+        assert_eq!(input[1]["call_id"], "call-2");
+        let output_bytes = input
+            .iter()
+            .map(|item| item["output"].as_str().map_or(0, str::len))
+            .sum::<usize>();
+        assert!(output_bytes <= 48_000);
+        server.await.expect("fixture server should join");
+    }
+
+    #[tokio::test]
     async fn responses_preserve_bounded_upstream_error_detail() {
         let (base_url, server) = spawn_error_fixture_http_server(
             "400 Bad Request",
@@ -4977,7 +5066,65 @@ mod tests {
 
     #[tokio::test]
     #[allow(clippy::large_futures)]
-    async fn compact_endpoint_fits_oversized_trailing_tool_output_before_dispatch() {
+    async fn compact_endpoint_bounds_parallel_tool_output_before_dispatch() {
+        let (base_url, request, server) = spawn_capturing_fixture_http_server(
+            "{\"output\":[{\"type\":\"compaction\",\"encrypted_content\":\"fixture-compaction\"}]}"
+                .to_owned(),
+        )
+        .await;
+        let result = responses_compact(
+            json!({
+                "request": {
+                    "model": "gpt-5.6-sol",
+                    "input": [
+                        {
+                            "type": "function_call_output",
+                            "call_id": "call-1",
+                            "output": "x".repeat(80_000)
+                        },
+                        {
+                            "type": "custom_tool_call_output",
+                            "call_id": "call-2",
+                            "name": "fixture-tool",
+                            "output": "y".repeat(80_000)
+                        }
+                    ],
+                    "instructions": "",
+                    "tools": null,
+                    "parallel_tool_calls": true,
+                    "reasoning": null,
+                    "service_tier": null,
+                    "prompt_cache_key": null,
+                    "text": null
+                },
+                "requestTimeoutMs": 1_000,
+                "connection": fixture_connection(base_url),
+            }),
+            &CancellationToken::new(),
+        )
+        .await
+        .expect("bounded compaction request should complete");
+        assert_eq!(result.status, TerminalStatus::Completed);
+
+        let request = request.await.expect("fixture request should be captured");
+        let body = fixture_request_body(&request);
+        let input = body["input"]
+            .as_array()
+            .expect("compaction input should remain an array");
+        assert_eq!(input.len(), 2);
+        assert_eq!(input[0]["call_id"], "call-1");
+        assert_eq!(input[1]["call_id"], "call-2");
+        let output_bytes = input
+            .iter()
+            .map(|item| item["output"].as_str().map_or(0, str::len))
+            .sum::<usize>();
+        assert!(output_bytes <= 48_000);
+        server.await.expect("fixture server should join");
+    }
+
+    #[tokio::test]
+    #[allow(clippy::large_futures)]
+    async fn compact_endpoint_fits_oversized_trailing_tool_search_output_before_dispatch() {
         let (base_url, request, server) = spawn_capturing_fixture_http_server(
             "{\"output\":[{\"type\":\"compaction\",\"encrypted_content\":\"fixture-compaction\"}]}"
                 .to_owned(),
@@ -4988,10 +5135,12 @@ mod tests {
                 "request": {
                     "model": "gpt-5.6-sol",
                     "input": [{
-                        "type": "function_call_output",
-                        "id": "fco_fixture",
+                        "type": "tool_search_output",
+                        "id": "tso_fixture",
                         "call_id": "call_fixture",
-                        "output": "x".repeat(1_100_000),
+                        "status": "completed",
+                        "execution": "server",
+                        "tools": [{ "name": "fixture", "description": "x".repeat(1_100_000) }],
                         "internal_chat_message_metadata_passthrough": { "turn_id": "turn_fixture" }
                     }],
                     "instructions": "fixture instructions",
@@ -5014,16 +5163,15 @@ mod tests {
         let request = request.await.expect("fixture request should be captured");
         let body = fixture_request_body(&request);
         let item = &body["input"][0];
-        assert_eq!(item["id"], "fco_fixture");
+        assert_eq!(item["id"], "tso_fixture");
         assert_eq!(item["call_id"], "call_fixture");
         assert_eq!(
             item["internal_chat_message_metadata_passthrough"]["turn_id"],
             "turn_fixture"
         );
-        assert_eq!(
-            item["output"],
-            "Output exceeded the available model context and was truncated"
-        );
+        assert_eq!(item["status"], "completed");
+        assert_eq!(item["execution"], "server");
+        assert_eq!(item["tools"], json!([]));
         assert!(
             body["instructions"]
                 .as_str()
@@ -5120,7 +5268,7 @@ mod tests {
 
     #[tokio::test]
     #[allow(clippy::large_futures)]
-    async fn remote_v2_fits_the_same_oversized_tool_output_and_keeps_one_trigger() {
+    async fn remote_v2_fits_the_same_oversized_tool_search_output_and_keeps_one_trigger() {
         let (base_url, request, server) = spawn_capturing_fixture_http_server(
             concat!(
                 "event: response.output_item.done\n",
@@ -5139,10 +5287,12 @@ mod tests {
                 "request": {
                     "model": "gpt-5.6-sol",
                     "input": [{
-                        "type": "function_call_output",
-                        "id": "fco_fixture",
+                        "type": "tool_search_output",
+                        "id": "tso_fixture",
                         "call_id": "call_fixture",
-                        "output": "x".repeat(1_100_000),
+                        "status": "completed",
+                        "execution": "server",
+                        "tools": [{ "name": "fixture", "description": "x".repeat(1_100_000) }],
                         "internal_chat_message_metadata_passthrough": { "turn_id": "turn_fixture" }
                     }],
                     "instructions": "fixture instructions",
@@ -5168,11 +5318,8 @@ mod tests {
             .as_array()
             .expect("remote input should be an array");
         assert_eq!(input.len(), 2);
-        assert_eq!(
-            input[0]["output"],
-            "Output exceeded the available model context and was truncated"
-        );
-        assert_eq!(input[0]["id"], "fco_fixture");
+        assert_eq!(input[0]["tools"], json!([]));
+        assert_eq!(input[0]["id"], "tso_fixture");
         assert_eq!(
             input[0]["internal_chat_message_metadata_passthrough"]["turn_id"],
             "turn_fixture"
@@ -7420,6 +7567,23 @@ mod tests {
         let (kept, none) = truncate_command_output("short", 1_000);
         assert_eq!(kept, "short");
         assert_eq!(none, None);
+    }
+
+    #[test]
+    fn max_output_tokens_are_clamped_to_model_policy() {
+        assert_eq!(
+            clamp_command_output_tokens(Some(100_000), Some("gpt-5.6-sol")),
+            Some(10_000)
+        );
+        assert_eq!(
+            clamp_command_output_tokens(Some(8), Some("gpt-5.6-sol")),
+            Some(8)
+        );
+        assert_eq!(
+            clamp_command_output_tokens(Some(100_000), Some("unknown-model")),
+            Some(2_500)
+        );
+        assert_eq!(clamp_command_output_tokens(Some(8), None), Some(8));
     }
 
     #[tokio::test]
