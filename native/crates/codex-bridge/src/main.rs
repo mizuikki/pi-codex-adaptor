@@ -6,7 +6,8 @@ use bridge_protocol::OFFICIAL_CODEX_VERSION;
 use bridge_protocol::OFFICIAL_SOURCE_COMMIT;
 
 mod api;
-mod models;
+pub(crate) mod compaction_context_fit;
+pub(crate) mod models;
 mod official;
 mod remote_compaction_v2;
 mod runtime;

@@ -1,0 +1,358 @@
+use bridge_protocol::BridgeError;
+use bridge_protocol::ErrorCategory;
+use codex_api::Reasoning;
+use codex_api::ResponsesApiTools;
+use codex_api::TextControls;
+use codex_protocol::models::FunctionCallOutputBody;
+use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::ResponseItem;
+use codex_protocol::openai_models::ModelInfo;
+use codex_utils_output_truncation::approx_tokens_from_byte_count;
+use serde::Deserialize;
+use serde::Serialize;
+
+const CONTEXT_WINDOW_TRUNCATED_OUTPUT_MESSAGE: &str =
+    "Output exceeded the available model context and was truncated";
+const COMPACTION_REQUEST_OVERHEAD_TOKENS: u64 = 128;
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct OwnedCompactionInput {
+    pub(crate) model: String,
+    pub(crate) input: Vec<ResponseItem>,
+    #[serde(default)]
+    pub(crate) instructions: String,
+    pub(crate) tools: Option<ResponsesApiTools>,
+    pub(crate) parallel_tool_calls: bool,
+    pub(crate) reasoning: Option<Reasoning>,
+    pub(crate) service_tier: Option<String>,
+    pub(crate) prompt_cache_key: Option<String>,
+    pub(crate) text: Option<TextControls>,
+}
+
+#[derive(Serialize)]
+struct CompactionRequestEstimate<'a> {
+    model: &'a str,
+    #[serde(skip_serializing_if = "str::is_empty")]
+    instructions: &'a str,
+    input: &'a [ResponseItem],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tools: Option<&'a ResponsesApiTools>,
+    tool_choice: &'static str,
+    parallel_tool_calls: bool,
+    reasoning: Option<&'a Reasoning>,
+    store: bool,
+    stream: bool,
+    include: [&'static str; 1],
+    service_tier: Option<&'a str>,
+    prompt_cache_key: Option<&'a str>,
+    text: Option<&'a TextControls>,
+}
+
+pub(crate) fn effective_context_window_limit(model: &ModelInfo) -> Option<u64> {
+    let context_window = model.resolved_context_window()?;
+    if context_window <= 0 {
+        return None;
+    }
+    let effective = i128::from(context_window)
+        .saturating_mul(i128::from(model.effective_context_window_percent))
+        / 100;
+    u64::try_from(effective).ok()
+}
+
+pub(crate) fn fit_compaction_input(
+    request: &mut OwnedCompactionInput,
+    model: &ModelInfo,
+) -> Result<(), BridgeError> {
+    let Some(limit) = effective_context_window_limit(model) else {
+        return Ok(());
+    };
+    let mut estimated_tokens = estimate_compaction_request_tokens(request);
+    if estimated_tokens <= limit {
+        return Ok(());
+    }
+
+    for index in (0..request.input.len()).rev() {
+        if estimated_tokens <= limit {
+            break;
+        }
+        let Some(rewritten) = rewritten_output_for_context_window(&request.input[index]) else {
+            break;
+        };
+        request.input[index] = rewritten;
+        estimated_tokens = estimate_compaction_request_tokens(request);
+    }
+
+    if estimated_tokens > limit {
+        return Err(context_window_exceeded());
+    }
+    Ok(())
+}
+
+fn estimate_compaction_request_tokens(request: &OwnedCompactionInput) -> u64 {
+    let mut input = request.input.clone();
+    input.push(ResponseItem::CompactionTrigger {});
+    let estimate = CompactionRequestEstimate {
+        model: &request.model,
+        instructions: &request.instructions,
+        input: &input,
+        tools: request.tools.as_ref(),
+        tool_choice: "auto",
+        parallel_tool_calls: request.parallel_tool_calls,
+        reasoning: request.reasoning.as_ref(),
+        store: false,
+        stream: true,
+        include: ["reasoning.encrypted_content"],
+        service_tier: request.service_tier.as_deref(),
+        prompt_cache_key: request.prompt_cache_key.as_deref(),
+        text: request.text.as_ref(),
+    };
+    serde_json::to_vec(&estimate).map_or(u64::MAX, |bytes| {
+        approx_tokens_from_byte_count(bytes.len())
+            .saturating_add(COMPACTION_REQUEST_OVERHEAD_TOKENS)
+    })
+}
+
+fn rewritten_output_for_context_window(item: &ResponseItem) -> Option<ResponseItem> {
+    Some(match item {
+        ResponseItem::FunctionCallOutput {
+            id,
+            call_id,
+            output,
+            internal_chat_message_metadata_passthrough: metadata,
+        } => ResponseItem::FunctionCallOutput {
+            id: id.clone(),
+            call_id: call_id.clone(),
+            output: truncated_output_payload(output),
+            internal_chat_message_metadata_passthrough: metadata.clone(),
+        },
+        ResponseItem::CustomToolCallOutput {
+            id,
+            call_id,
+            name,
+            output,
+            internal_chat_message_metadata_passthrough: metadata,
+        } => ResponseItem::CustomToolCallOutput {
+            id: id.clone(),
+            call_id: call_id.clone(),
+            name: name.clone(),
+            output: truncated_output_payload(output),
+            internal_chat_message_metadata_passthrough: metadata.clone(),
+        },
+        ResponseItem::ToolSearchOutput {
+            id,
+            call_id,
+            status,
+            execution,
+            internal_chat_message_metadata_passthrough: metadata,
+            ..
+        } => ResponseItem::ToolSearchOutput {
+            id: id.clone(),
+            call_id: call_id.clone(),
+            status: status.clone(),
+            execution: execution.clone(),
+            tools: Vec::new(),
+            internal_chat_message_metadata_passthrough: metadata.clone(),
+        },
+        _ => return None,
+    })
+}
+
+fn truncated_output_payload(output: &FunctionCallOutputPayload) -> FunctionCallOutputPayload {
+    FunctionCallOutputPayload {
+        body: FunctionCallOutputBody::Text(CONTEXT_WINDOW_TRUNCATED_OUTPUT_MESSAGE.to_owned()),
+        success: output.success,
+    }
+}
+
+fn context_window_exceeded() -> BridgeError {
+    BridgeError {
+        category: ErrorCategory::CapabilityError,
+        code: "context_window_exceeded".to_owned(),
+        message: "the request exceeded the model context window".to_owned(),
+        retryable: false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_protocol::ResponseItemId;
+    use codex_protocol::models::InternalChatMessageMetadataPassthrough;
+
+    fn fixture_model(context_window: i64, effective_percent: i64) -> ModelInfo {
+        let mut model = crate::models::resolve_model("gpt-5.6-sol");
+        model.context_window = Some(context_window);
+        model.max_context_window = Some(context_window);
+        model.effective_context_window_percent = effective_percent;
+        model
+    }
+
+    fn request(input: Vec<ResponseItem>) -> OwnedCompactionInput {
+        OwnedCompactionInput {
+            model: "gpt-5.6-sol".to_owned(),
+            input,
+            instructions: String::new(),
+            tools: None,
+            parallel_tool_calls: true,
+            reasoning: None,
+            service_tier: None,
+            prompt_cache_key: None,
+            text: None,
+        }
+    }
+
+    fn function_output(text: String) -> ResponseItem {
+        ResponseItem::FunctionCallOutput {
+            id: Some(ResponseItemId::from_server("output-id".to_owned())),
+            call_id: "call-id".to_owned(),
+            output: FunctionCallOutputPayload {
+                body: FunctionCallOutputBody::Text(text),
+                success: Some(false),
+            },
+            internal_chat_message_metadata_passthrough: Some(
+                InternalChatMessageMetadataPassthrough {
+                    turn_id: Some("turn-id".to_owned()),
+                },
+            ),
+        }
+    }
+
+    #[test]
+    fn derives_effective_limit_and_automatic_threshold_from_model_metadata() {
+        let model = fixture_model(272_000, 95);
+
+        assert_eq!(effective_context_window_limit(&model), Some(258_400));
+        assert_eq!(model.auto_compact_token_limit(), Some(244_800));
+    }
+
+    #[test]
+    fn leaves_an_already_fitting_request_unchanged() {
+        let model = fixture_model(1_000, 95);
+        let mut request = request(vec![ResponseItem::Message {
+            id: None,
+            role: "user".to_owned(),
+            content: vec![codex_protocol::models::ContentItem::InputText {
+                text: "small".to_owned(),
+            }],
+            phase: None,
+            internal_chat_message_metadata_passthrough: None,
+        }]);
+        let original = serde_json::to_value(&request.input).expect("fixture input should encode");
+
+        fit_compaction_input(&mut request, &model).expect("fitting input should succeed");
+
+        assert_eq!(
+            serde_json::to_value(request.input).expect("input should encode"),
+            original
+        );
+    }
+
+    #[test]
+    fn rewrites_eligible_trailing_outputs_and_preserves_metadata() {
+        let model = fixture_model(1_000, 50);
+        let mut request = request(vec![function_output("x".repeat(2_000))]);
+
+        fit_compaction_input(&mut request, &model).expect("eligible output should be rewritten");
+
+        let ResponseItem::FunctionCallOutput {
+            id,
+            call_id,
+            output,
+            internal_chat_message_metadata_passthrough,
+        } = &request.input[0]
+        else {
+            panic!("expected function output");
+        };
+        assert_eq!(id.as_deref(), Some("output-id"));
+        assert_eq!(call_id, "call-id");
+        assert_eq!(output.success, Some(false));
+        assert_eq!(
+            output.body,
+            FunctionCallOutputBody::Text(CONTEXT_WINDOW_TRUNCATED_OUTPUT_MESSAGE.to_owned())
+        );
+        assert_eq!(
+            internal_chat_message_metadata_passthrough
+                .as_ref()
+                .and_then(|metadata| metadata.turn_id.as_deref()),
+            Some("turn-id")
+        );
+        assert!(estimate_compaction_request_tokens(&request) <= 500);
+    }
+
+    #[test]
+    fn rewrites_custom_and_tool_search_outputs_with_their_contract_fields() {
+        let model = fixture_model(1_000, 50);
+        let mut request = request(vec![
+            ResponseItem::CustomToolCallOutput {
+                id: Some(ResponseItemId::from_server("custom-output-id".to_owned())),
+                call_id: "custom-call-id".to_owned(),
+                name: Some("fixture-tool".to_owned()),
+                output: FunctionCallOutputPayload::from_text("x".repeat(2_000)),
+                internal_chat_message_metadata_passthrough: None,
+            },
+            ResponseItem::ToolSearchOutput {
+                id: Some(ResponseItemId::from_server("search-output-id".to_owned())),
+                call_id: Some("search-call-id".to_owned()),
+                status: "completed".to_owned(),
+                execution: "server".to_owned(),
+                tools: vec![serde_json::json!({"name": "fixture-tool"})],
+                internal_chat_message_metadata_passthrough: None,
+            },
+        ]);
+
+        fit_compaction_input(&mut request, &model).expect("eligible outputs should be rewritten");
+
+        let ResponseItem::CustomToolCallOutput { output, .. } = &request.input[0] else {
+            panic!("expected custom output");
+        };
+        assert_eq!(
+            output.body,
+            FunctionCallOutputBody::Text(CONTEXT_WINDOW_TRUNCATED_OUTPUT_MESSAGE.to_owned())
+        );
+        let ResponseItem::ToolSearchOutput {
+            id,
+            call_id,
+            status,
+            execution,
+            tools,
+            ..
+        } = &request.input[1]
+        else {
+            panic!("expected tool search output");
+        };
+        assert_eq!(id.as_deref(), Some("search-output-id"));
+        assert_eq!(call_id.as_deref(), Some("search-call-id"));
+        assert_eq!(status, "completed");
+        assert_eq!(execution, "server");
+        assert!(tools.is_empty());
+    }
+
+    #[test]
+    fn stops_at_non_eligible_history_and_returns_a_bounded_error() {
+        let model = fixture_model(200, 50);
+        let original = function_output("x".repeat(2_000));
+        let mut request = request(vec![
+            original.clone(),
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_owned(),
+                content: vec![codex_protocol::models::ContentItem::InputText {
+                    text: "boundary".to_owned(),
+                }],
+                phase: None,
+                internal_chat_message_metadata_passthrough: None,
+            },
+        ]);
+
+        let error = fit_compaction_input(&mut request, &model).expect_err("history should not fit");
+
+        assert_eq!(error.code, "context_window_exceeded");
+        assert!(!error.retryable);
+        assert_eq!(
+            error.message,
+            "the request exceeded the model context window"
+        );
+        assert_eq!(request.input[0], original);
+    }
+}
