@@ -14,3 +14,9 @@ Thumbs.db
 *.log
 *.tmp
 tmp/
+
+# Test
+.agents/
+.codex/
+.pi/
+.trellis/
