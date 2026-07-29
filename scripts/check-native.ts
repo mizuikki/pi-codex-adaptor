@@ -70,6 +70,9 @@ await cp(resolve(root, "native", "artifacts", target), installedArtifact, { recu
 
 async function run(command: string[]): Promise<void> {
 	const child = Bun.spawn(command, { cwd: root, stderr: "pipe", stdout: "inherit" });
-	const [code] = await Promise.all([child.exited, new Response(child.stderr).arrayBuffer()]);
-	if (code !== 0) throw new Error(`${command[0]} exited with status ${code}`);
+	const [code, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
+	if (code !== 0) {
+		process.stderr.write(stderr);
+		throw new Error(`${command.join(" ")} exited with status ${code}`);
+	}
 }
