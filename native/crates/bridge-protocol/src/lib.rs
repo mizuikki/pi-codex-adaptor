@@ -22,17 +22,17 @@ pub const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
 pub const MAX_PENDING_EVENTS: u32 = 256;
 
 /// Official Codex release used by the native implementation.
-pub const OFFICIAL_CODEX_VERSION: &str = "0.144.3";
+pub const OFFICIAL_CODEX_VERSION: &str = "0.146.0";
 
 /// Human-readable tag for the official Codex release.
-pub const OFFICIAL_CODEX_TAG: &str = "rust-v0.144.3";
+pub const OFFICIAL_CODEX_TAG: &str = "rust-v0.146.0";
 
 /// Immutable `OpenAI` Codex source commit used by the native implementation.
-pub const OFFICIAL_SOURCE_COMMIT: &str = "78ad6e6bfd1d3b6a209acd3ef82172a96b25179c";
+pub const OFFICIAL_SOURCE_COMMIT: &str = "e363b08c9175ac1cbe5893615dd2cb9ddf95043b";
 
 /// Recorded hash of the currently selected vendor tree.
 pub const VENDOR_TREE_SHA256: &str =
-    "4e73a4c8efdc818b085b4abea1660b3a6d84b0fdbb6d687bda5c55dc0f07caad";
+    "4480020e4ec987e750247807b040a0402f391baa7c268242c0019eaac6da6574";
 
 /// A frame sent from the TypeScript host to the native bridge.
 ///

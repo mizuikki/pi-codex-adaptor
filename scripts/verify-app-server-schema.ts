@@ -89,8 +89,8 @@ console.log(
 function validateManifest(value: SchemaManifest): void {
 	if (
 		value.schemaVersion !== 1 ||
-		value.officialCodexVersion !== "0.144.3" ||
-		value.officialSourceCommit !== "78ad6e6bfd1d3b6a209acd3ef82172a96b25179c" ||
+		value.officialCodexVersion !== "0.146.0" ||
+		value.officialSourceCommit !== "e363b08c9175ac1cbe5893615dd2cb9ddf95043b" ||
 		value.generation.stable !== true
 	) {
 		throw new Error("App-server schema manifest does not match the pinned stable baseline");

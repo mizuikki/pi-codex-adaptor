@@ -1,63 +1,233 @@
-diff --git a/codex-rs/http-client/src/default_client.rs b/codex-rs/http-client/src/default_client.rs
-index b4465e7f8c..219cb9c46d 100644
---- a/codex-rs/http-client/src/default_client.rs
-+++ b/codex-rs/http-client/src/default_client.rs
-@@ -41,8 +41,7 @@ impl HttpClient {
+--- a/codex-rs/http-client/src/client.rs
++++ b/codex-rs/http-client/src/client.rs
+@@ -79,11 +79,9 @@
      where
          U: IntoUrl,
      {
 -        let url_str = url.as_str().to_string();
--        RequestBuilder::new(self.inner.request(method.clone(), url), method, url_str)
-+        RequestBuilder::new(self.inner.request(method.clone(), url), method)
+         RequestBuilder::new(
+             self.inner.request(method.clone(), url),
+             method,
+-            url_str,
+             self.request_logging,
+         )
      }
- }
+@@ -115,38 +113,37 @@
+         self.inner.execute(request).await
+     }
  
-@@ -51,23 +50,17 @@ impl HttpClient {
+-    pub(crate) fn log_response(&self, method: &Method, url: &str, response: &reqwest::Response) {
++    pub(crate) fn log_response(&self, method: &Method, _url: &str, response: &reqwest::Response) {
+         if self.request_logging == RequestLogging::Enabled {
+             tracing::debug!(
+                 method = %method,
+-                url = %url,
+                 status = %response.status(),
+-                headers = ?response.headers(),
+                 version = ?response.version(),
+                 "Request completed"
+             );
+         }
+     }
+ 
+-    pub(crate) fn log_error(&self, method: &Method, url: &str, error: &reqwest::Error) {
++    pub(crate) fn log_error(&self, method: &Method, _url: &str, error: &reqwest::Error) {
+         if self.request_logging == RequestLogging::Enabled {
+             tracing::debug!(
+                 method = %method,
+-                url = %url,
+                 status = error.status().map(|status| status.as_u16()),
+-                error = %error,
++                is_timeout = error.is_timeout(),
++                is_connect = error.is_connect(),
++                is_request = error.is_request(),
+                 "Request failed"
+             );
+         }
+     }
+-    pub(crate) fn log_error_summary(&self, method: &Method, url: &str, error: &reqwest::Error) {
++    pub(crate) fn log_error_summary(&self, method: &Method, _url: &str, error: &reqwest::Error) {
+         if self.request_logging == RequestLogging::Enabled {
+             tracing::debug!(
+                 method = %method,
+-                url = %url,
+                 status = error.status().map(|status| status.as_u16()),
+                 is_timeout = error.is_timeout(),
+                 is_connect = error.is_connect(),
++                is_request = error.is_request(),
+                 "Request failed"
+             );
+         }
+@@ -169,7 +166,6 @@
  pub struct RequestBuilder {
      builder: reqwest::RequestBuilder,
      method: Method,
 -    url: String,
+     request_logging: RequestLogging,
  }
  
- impl RequestBuilder {
--    fn new(builder: reqwest::RequestBuilder, method: Method, url: String) -> Self {
--        Self {
--            builder,
--            method,
+@@ -177,13 +173,11 @@
+     fn new(
+         builder: reqwest::RequestBuilder,
+         method: Method,
+-        url: String,
+         request_logging: RequestLogging,
+     ) -> Self {
+         Self {
+             builder,
+             method,
 -            url,
--        }
-+    fn new(builder: reqwest::RequestBuilder, method: Method) -> Self {
-+        Self { builder, method }
+             request_logging,
+         }
      }
- 
-     fn map(self, f: impl FnOnce(reqwest::RequestBuilder) -> reqwest::RequestBuilder) -> Self {
+@@ -192,7 +186,6 @@
          Self {
              builder: f(self.builder),
              method: self.method,
 -            url: self.url,
+             request_logging: self.request_logging,
          }
      }
+@@ -251,9 +244,7 @@
+                 if self.request_logging == RequestLogging::Enabled {
+                     tracing::debug!(
+                         method = %self.method,
+-                        url = %self.url,
+                         status = %response.status(),
+-                        headers = ?response.headers(),
+                         version = ?response.version(),
+                         "Request completed"
+                     );
+@@ -266,9 +257,10 @@
+                     let status = error.status();
+                     tracing::debug!(
+                         method = %self.method,
+-                        url = %self.url,
+                         status = status.map(|s| s.as_u16()),
+-                        error = %error,
++                        is_timeout = error.is_timeout(),
++                        is_connect = error.is_connect(),
++                        is_request = error.is_request(),
+                         "Request failed"
+                     );
+                 }
+--- a/codex-rs/http-client/src/request.rs
++++ b/codex-rs/http-client/src/request.rs
+@@ -9,12 +9,10 @@
+ /// A JSON request body serialized once into reference-counted bytes.
+ ///
+ /// Clones share the encoded allocation. Internally, the body can also hold the
+-/// final compressed wire bytes while retaining the original JSON only when
+-/// request-body trace logging is enabled.
++/// final compressed wire bytes.
+ #[derive(Debug, Clone, PartialEq, Eq)]
+ pub struct EncodedJsonBody {
+     bytes: Bytes,
+-    trace_bytes: Option<Bytes>,
+     prepared: bool,
+ }
  
-@@ -117,9 +110,7 @@ impl RequestBuilder {
-             Ok(response) => {
-                 tracing::debug!(
-                     method = %self.method,
--                    url = %self.url,
-                     status = %response.status(),
--                    headers = ?response.headers(),
-                     version = ?response.version(),
-                     "Request completed"
-                 );
-@@ -130,9 +121,10 @@ impl RequestBuilder {
-                 let status = error.status();
-                 tracing::debug!(
-                     method = %self.method,
--                    url = %self.url,
-                     status = status.map(|s| s.as_u16()),
--                    error = %error,
-+                    is_timeout = error.is_timeout(),
-+                    is_connect = error.is_connect(),
-+                    is_request = error.is_request(),
-                     "Request failed"
-                 );
-                 Err(error)
+@@ -23,7 +21,6 @@
+     pub fn encode<T: Serialize + ?Sized>(value: &T) -> Result<Self, serde_json::Error> {
+         serde_json::to_vec(value).map(|bytes| Self {
+             bytes: Bytes::from(bytes),
+-            trace_bytes: None,
+             prepared: false,
+         })
+     }
+@@ -32,10 +29,6 @@
+     pub fn as_bytes(&self) -> &[u8] {
+         &self.bytes
+     }
+-
+-    pub(crate) fn trace_bytes(&self) -> &[u8] {
+-        self.trace_bytes.as_ref().unwrap_or(&self.bytes)
+-    }
+ }
+ 
+ #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+@@ -120,25 +113,11 @@
+             self.body,
+             Some(RequestBody::Json(_) | RequestBody::EncodedJson(_))
+         );
+-        let trace_bytes = if self.compression != RequestCompression::None
+-            && tracing::enabled!(target: "codex_http_client::transport", tracing::Level::TRACE)
+-        {
+-            match self.body.as_ref() {
+-                Some(RequestBody::Json(body)) => Some(Bytes::from(
+-                    serde_json::to_vec(body).map_err(|err| err.to_string())?,
+-                )),
+-                Some(RequestBody::EncodedJson(body)) => Some(body.bytes.clone()),
+-                Some(RequestBody::Raw(_)) | None => None,
+-            }
+-        } else {
+-            None
+-        };
+         let prepared = self.prepare_body_for_send()?;
+         self.headers = prepared.headers;
+         self.body = match (is_json, prepared.body) {
+             (true, Some(bytes)) => Some(RequestBody::EncodedJson(EncodedJsonBody {
+                 bytes,
+-                trace_bytes,
+                 prepared: true,
+             })),
+             (false, Some(body)) => Some(RequestBody::Raw(body)),
+--- a/codex-rs/http-client/src/transport.rs
++++ b/codex-rs/http-client/src/transport.rs
+@@ -2,7 +2,6 @@
+ use crate::client::RequestBuilder;
+ use crate::error::TransportError;
+ use crate::request::Request;
+-use crate::request::RequestBody;
+ use crate::request::Response;
+ use bytes::Bytes;
+ use futures::StreamExt;
+@@ -87,27 +86,11 @@
+ 
+     fn trace_request(&self, req: &Request) {
+         if self.client.request_logging_enabled() && enabled!(Level::TRACE) {
+-            trace!(
+-                "{} to {}: {}",
+-                req.method,
+-                req.url,
+-                request_body_for_trace(req)
+-            );
++            trace!(method = %req.method, "HTTP request started");
+         }
+     }
+ }
+ 
+-fn request_body_for_trace(req: &Request) -> String {
+-    match req.body.as_ref() {
+-        Some(RequestBody::Json(body)) => body.to_string(),
+-        Some(RequestBody::EncodedJson(body)) => {
+-            String::from_utf8_lossy(body.trace_bytes()).into_owned()
+-        }
+-        Some(RequestBody::Raw(body)) => format!("<raw body: {} bytes>", body.len()),
+-        None => String::new(),
+-    }
+-}
+-
+ impl HttpTransport for ReqwestTransport {
+     async fn execute(&self, req: Request) -> Result<Response, TransportError> {
+         self.trace_request(&req);
+--- a/codex-rs/http-client/src/transport_tests.rs
++++ b/codex-rs/http-client/src/transport_tests.rs
+@@ -8,12 +8,13 @@
+ use tracing_subscriber::layer::SubscriberExt;
+ 
+ #[tokio::test]
+-async fn enabled_request_logging_emits_transport_url_and_body() {
++async fn enabled_request_logging_omits_sensitive_transport_fields() {
+     let logs = capture_transport_logs(HttpClient::new(test_reqwest_client())).await;
+ 
+     assert!(logs.contains("log capture sentinel"));
+-    assert!(logs.contains("url-secret"));
+-    assert!(logs.contains("body-secret"));
++    assert!(logs.contains("HTTP request started"));
++    assert!(!logs.contains("url-secret"));
++    assert!(!logs.contains("body-secret"));
+ }
+ 
+ #[tokio::test]
+

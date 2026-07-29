@@ -10,11 +10,11 @@ requires an immutable source identity and a controlled dependency closure.
 
 ## Decision
 
-Use OpenAI Codex `0.144.3`, tag `rust-v0.144.3`, peeled commit
-`78ad6e6bfd1d3b6a209acd3ef82172a96b25179c`, and Rust `1.95.0`. Vendor only an allowlisted minimal
+Use OpenAI Codex `0.146.0`, tag `rust-v0.146.0`, peeled commit
+`e363b08c9175ac1cbe5893615dd2cb9ddf95043b`, and Rust `1.95.0`. Vendor only an allowlisted minimal
 closure. Record source paths, hashes, licenses, tree hash, and replayable patches.
 
-Use `@openai/codex@0.144.3`, `@openai/codex-sdk@0.144.3`, and Codex app-server only in isolated schema
+Use `@openai/codex@0.146.0`, `@openai/codex-sdk@0.146.0`, and Codex app-server only in isolated schema
 generation and conformance jobs. They are not production dependencies and never run as an agent inside
 Pi.
 

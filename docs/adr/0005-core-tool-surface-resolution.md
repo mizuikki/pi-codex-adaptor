@@ -5,7 +5,7 @@
 
 ## Context
 
-Codex `0.144.3` exposes model- and provider-dependent tool surfaces. Static registration would send
+Codex `0.146.0` exposes model- and provider-dependent tool surfaces. Static registration would send
 unsupported tools or lose official namespace and freeform behavior.
 
 ## Decision

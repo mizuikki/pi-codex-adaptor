@@ -32,8 +32,8 @@ interface CargoLock {
 	}>;
 }
 
-const officialSourceCommit = "78ad6e6bfd1d3b6a209acd3ef82172a96b25179c";
-const officialVersion = "0.144.3";
+const officialSourceCommit = "e363b08c9175ac1cbe5893615dd2cb9ddf95043b";
+const officialVersion = "0.146.0";
 const officialPackages = new Set([
 	"codex-api",
 	"codex-async-utils",

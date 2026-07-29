@@ -3,7 +3,7 @@ members = ["crates/*"]
 resolver = "2"
 
 [workspace.package]
-version = "0.144.3"
+version = "0.146.0"
 edition = "2024"
 license = "Apache-2.0"
 rust-version = "1.95"
@@ -76,6 +76,7 @@ strum = "0.27.2"
 strum_macros = "0.28.0"
 sys-locale = "0.3.2"
 system-configuration = "0.7"
+tempfile = "3.23.0"
 thiserror = "2.0.17"
 time = "0.3.47"
 tokio = "1"

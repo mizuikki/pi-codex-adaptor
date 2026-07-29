@@ -71,11 +71,11 @@ export interface NativeSbom {
 }
 
 const expectedBaseline = {
-	annotatedTagObject: "13307a9036baccd2c51b685d1457a4b89b5b2f3b",
+	annotatedTagObject: "be449751a978f02e5bbba886999662956c7f38f5",
 	rustToolchain: "1.95.0",
-	sourceCommit: "78ad6e6bfd1d3b6a209acd3ef82172a96b25179c",
-	tag: "rust-v0.144.3",
-	version: "0.144.3",
+	sourceCommit: "e363b08c9175ac1cbe5893615dd2cb9ddf95043b",
+	tag: "rust-v0.146.0",
+	version: "0.146.0",
 } as const;
 
 const selectedCrates = [

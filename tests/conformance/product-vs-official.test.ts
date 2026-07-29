@@ -62,8 +62,8 @@ describe("product vs pinned official conformance", () => {
 			assertCredentialFree(text, label);
 		}
 
-		expect(allowlist.officialCodexVersion).toBe("0.144.3");
-		expect(allowlist.officialSourceCommit).toBe("78ad6e6bfd1d3b6a209acd3ef82172a96b25179c");
+		expect(allowlist.officialCodexVersion).toBe("0.146.0");
+		expect(allowlist.officialSourceCommit).toBe("e363b08c9175ac1cbe5893615dd2cb9ddf95043b");
 		expect(allowlist.requestBodyComparable.length).toBeGreaterThan(0);
 		expect(normalizeRequestBody(request, allowlist)).toEqual(
 			normalizeRequestBody(
@@ -241,7 +241,7 @@ describe("product vs pinned official conformance", () => {
 							reasoning: null,
 							store: false,
 							stream: true,
-							include: [],
+							include: ["reasoning.encrypted_content"],
 						},
 						transportMode: "sse",
 						providerSupportsWebsockets: false,
@@ -299,7 +299,7 @@ describe("product vs pinned official conformance", () => {
 				parallel_tool_calls: false,
 				store: false,
 				stream: true,
-				include: [],
+				include: ["reasoning.encrypted_content"],
 			});
 
 			// Auth is redacted; both clients send bearer credentials and JSON bodies.

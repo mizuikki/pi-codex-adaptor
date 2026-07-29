@@ -50,6 +50,7 @@ use codex_api::ImageUrl;
 use codex_api::ImagesClient;
 use codex_api::Reasoning;
 use codex_api::ResponsesApiRequest;
+use codex_api::ResponsesApiTools;
 use codex_api::ResponsesClient;
 use codex_api::ResponsesOptions;
 use codex_api::ResponsesWebsocketClient;
@@ -670,7 +671,7 @@ struct OwnedCompactionInput {
     input: Vec<ResponseItem>,
     #[serde(default)]
     instructions: String,
-    tools: Option<Vec<Value>>,
+    tools: Option<ResponsesApiTools>,
     parallel_tool_calls: bool,
     reasoning: Option<Reasoning>,
     service_tier: Option<String>,
@@ -3416,10 +3417,11 @@ async fn spawn_command_process(
             &environment,
             &None,
             codex_utils_pty::TerminalSize { rows: 24, cols: 80 },
+            &[],
         )
         .await
     } else {
-        codex_utils_pty::spawn_pipe_process(program, args, workdir, &environment, &None).await
+        codex_utils_pty::spawn_pipe_process(program, args, workdir, &environment, &None, &[]).await
     };
     spawned.map_err(|_| process_spawn_error())
 }

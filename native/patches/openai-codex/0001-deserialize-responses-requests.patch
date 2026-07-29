@@ -1,7 +1,6 @@
-diff --git a/codex-rs/codex-api/src/common.rs b/codex-rs/codex-api/src/common.rs
 --- a/codex-rs/codex-api/src/common.rs
 +++ b/codex-rs/codex-api/src/common.rs
-@@ -135,7 +135,7 @@ pub struct SafetyBuffering {
+@@ -137,7 +137,7 @@
      pub faster_model: Option<String>,
  }
  
@@ -10,7 +9,7 @@ diff --git a/codex-rs/codex-api/src/common.rs b/codex-rs/codex-api/src/common.rs
  #[serde(rename_all = "snake_case")]
  pub enum ReasoningContext {
      Auto,
-@@ -143,7 +143,7 @@ pub enum ReasoningContext {
+@@ -145,7 +145,7 @@
      AllTurns,
  }
  
@@ -19,7 +18,7 @@ diff --git a/codex-rs/codex-api/src/common.rs b/codex-rs/codex-api/src/common.rs
  pub struct Reasoning {
      #[serde(skip_serializing_if = "Option::is_none")]
      pub effort: Option<ReasoningEffortConfig>,
-@@ -153,25 +153,25 @@ pub struct Reasoning {
+@@ -155,25 +155,25 @@
      pub context: Option<ReasoningContext>,
  }
  
@@ -49,7 +48,7 @@ diff --git a/codex-rs/codex-api/src/common.rs b/codex-rs/codex-api/src/common.rs
  pub struct TextFormat {
      /// Format type used by the OpenAI text controls.
      pub r#type: TextFormatType,
-@@ -185,7 +185,7 @@ pub struct TextFormat {
+@@ -187,7 +187,7 @@
  
  /// Controls the `text` field for the Responses API, combining verbosity and
  /// optional JSON schema output formatting.
@@ -58,7 +57,7 @@ diff --git a/codex-rs/codex-api/src/common.rs b/codex-rs/codex-api/src/common.rs
  pub struct TextControls {
      #[serde(skip_serializing_if = "Option::is_none")]
      pub verbosity: Option<OpenAiVerbosity>,
-@@ -193,7 +193,7 @@ pub struct TextControls {
+@@ -195,7 +195,7 @@
      pub format: Option<TextFormat>,
  }
  
@@ -67,30 +66,22 @@ diff --git a/codex-rs/codex-api/src/common.rs b/codex-rs/codex-api/src/common.rs
  #[serde(rename_all = "lowercase")]
  pub enum OpenAiVerbosity {
      Low,
-@@ -212,7 +212,7 @@ impl From<VerbosityConfig> for OpenAiVerbosity {
+@@ -248,7 +248,17 @@
      }
  }
  
 -#[derive(Debug, Serialize, Clone, PartialEq)]
++impl<'de> Deserialize<'de> for ResponsesApiTools {
++    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
++    where
++        D: serde::Deserializer<'de>,
++    {
++        let value = Box::<RawValue>::deserialize(deserializer)?;
++        Ok(Self(Arc::from(value)))
++    }
++}
++
 +#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
  pub struct ResponsesApiRequest {
      pub model: String,
      #[serde(skip_serializing_if = "String::is_empty")]
-@@ -262,7 +262,7 @@ impl From<&ResponsesApiRequest> for ResponseCreateWsRequest {
-     }
- }
- 
--#[derive(Debug, Serialize)]
-+#[derive(Debug, Serialize, Deserialize)]
- pub struct ResponseCreateWsRequest {
-     pub model: String,
-     #[serde(skip_serializing_if = "String::is_empty")]
-@@ -314,7 +314,7 @@ pub fn response_create_client_metadata(
-     (!client_metadata.is_empty()).then_some(client_metadata)
- }
- 
--#[derive(Debug, Serialize)]
-+#[derive(Debug, Serialize, Deserialize)]
- #[serde(tag = "type")]
- #[allow(clippy::large_enum_variant)]
- pub enum ResponsesWsRequest {

@@ -9,6 +9,8 @@
       "!!native/official/target",
       "!!native/upstream",
       "!!native/vendor/openai-codex",
+      "!!.pi",
+      "!!.trellis",
       "!!fixtures/app-server-schema",
       "!!fixtures/official-conformance",
       "!!src/integration/pi/generated"

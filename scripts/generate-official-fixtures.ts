@@ -110,12 +110,45 @@ function platformStableContracts(contracts: Record<string, unknown>): Record<str
 			stable[name] = {
 				...contract,
 				description: "<official platform-specific shell description>",
+				...(name === "exec_command"
+					? { parameters: platformStableExecCommandParameters(contract.parameters) }
+					: {}),
 			};
 			continue;
 		}
 		stable[name] = value;
 	}
 	return stable;
+}
+
+function platformStableExecCommandParameters(parameters: unknown): unknown {
+	if (typeof parameters !== "object" || parameters === null || Array.isArray(parameters)) {
+		throw new Error("Official exec_command parameters must be an object");
+	}
+	const parameterRecord = parameters as Record<string, unknown>;
+	const properties = parameterRecord.properties;
+	if (typeof properties !== "object" || properties === null || Array.isArray(properties)) {
+		throw new Error("Official exec_command properties must be an object");
+	}
+	const propertyRecord = properties as Record<string, unknown>;
+	const yieldTime = propertyRecord.yield_time_ms;
+	if (typeof yieldTime !== "object" || yieldTime === null || Array.isArray(yieldTime)) {
+		throw new Error("Official exec_command yield-time_ms must be an object");
+	}
+	const yieldTimeRecord = yieldTime as Record<string, unknown>;
+	if (typeof yieldTimeRecord.description !== "string" || yieldTimeRecord.description.length === 0) {
+		throw new Error("Official exec_command yield-time_ms description must be non-empty");
+	}
+	return {
+		...parameterRecord,
+		properties: {
+			...propertyRecord,
+			yield_time_ms: {
+				...yieldTimeRecord,
+				description: "<official platform-specific exec yield description>",
+			},
+		},
+	};
 }
 
 async function resolveTools(

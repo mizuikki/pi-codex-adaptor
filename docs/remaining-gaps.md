@@ -1,6 +1,6 @@
 # Remaining Official Capability Gaps
 
-This list tracks Codex `0.144.3` capabilities outside the first stable release. A checked item means
+This list tracks Codex `0.146.0` capabilities outside the first stable release. A checked item means
 implementation and conformance are both complete. A similar Pi feature is not automatically
 equivalent to the official contract.
 

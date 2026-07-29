@@ -1,8 +1,7 @@
-use crate::default_client::HttpClient;
-use crate::default_client::RequestBuilder;
+use crate::client::HttpClient;
+use crate::client::RequestBuilder;
 use crate::error::TransportError;
 use crate::request::Request;
-use crate::request::RequestBody;
 use crate::request::Response;
 use bytes::Bytes;
 use futures::StreamExt;
@@ -45,6 +44,10 @@ impl ReqwestTransport {
         }
     }
 
+    pub fn from_http_client(client: HttpClient) -> Self {
+        Self { client }
+    }
+
     fn build(&self, req: Request) -> Result<RequestBuilder, TransportError> {
         let prepared = req.prepare_body_for_send().map_err(TransportError::Build)?;
 
@@ -80,29 +83,17 @@ impl ReqwestTransport {
             TransportError::Network(err.to_string())
         }
     }
-}
 
-fn request_body_for_trace(req: &Request) -> String {
-    match req.body.as_ref() {
-        Some(RequestBody::Json(body)) => body.to_string(),
-        Some(RequestBody::EncodedJson(body)) => {
-            String::from_utf8_lossy(body.trace_bytes()).into_owned()
+    fn trace_request(&self, req: &Request) {
+        if self.client.request_logging_enabled() && enabled!(Level::TRACE) {
+            trace!(method = %req.method, "HTTP request started");
         }
-        Some(RequestBody::Raw(body)) => format!("<raw body: {} bytes>", body.len()),
-        None => String::new(),
     }
 }
 
 impl HttpTransport for ReqwestTransport {
     async fn execute(&self, req: Request) -> Result<Response, TransportError> {
-        if enabled!(Level::TRACE) {
-            trace!(
-                "{} to {}: {}",
-                req.method,
-                req.url,
-                request_body_for_trace(&req)
-            );
-        }
+        self.trace_request(&req);
 
         let url = req.url.clone();
         let builder = self.build(req)?;
@@ -127,14 +118,7 @@ impl HttpTransport for ReqwestTransport {
     }
 
     async fn stream(&self, req: Request) -> Result<StreamResponse, TransportError> {
-        if enabled!(Level::TRACE) {
-            trace!(
-                "{} to {}: {}",
-                req.method,
-                req.url,
-                request_body_for_trace(&req)
-            );
-        }
+        self.trace_request(&req);
 
         let url = req.url.clone();
         let builder = self.build(req)?;
@@ -160,3 +144,7 @@ impl HttpTransport for ReqwestTransport {
         })
     }
 }
+
+#[cfg(test)]
+#[path = "transport_tests.rs"]
+mod tests;

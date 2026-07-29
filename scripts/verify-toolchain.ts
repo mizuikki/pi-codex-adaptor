@@ -45,8 +45,8 @@ if (fixture.schemaVersion !== 1) {
 
 const expectedPackageVersions: Record<string, string> = {
 	"@biomejs/biome": fixture.runtime.biome,
-	"@openai/codex": "0.144.3",
-	"@openai/codex-sdk": "0.144.3",
+	"@openai/codex": "0.146.0",
+	"@openai/codex-sdk": "0.146.0",
 	"@earendil-works/pi-agent-core": "file:../pi/packages/agent",
 	"@earendil-works/pi-ai": "file:../pi/packages/ai",
 	"@earendil-works/pi-coding-agent": "file:../pi/packages/coding-agent",

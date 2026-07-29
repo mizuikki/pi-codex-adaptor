@@ -1,6 +1,6 @@
 # pi-codex-adaptor
 
-`pi-codex-adaptor` is a private Pi extension for the pinned OpenAI Codex `0.144.3` runtime. Pi
+`pi-codex-adaptor` is a private Pi extension for the pinned OpenAI Codex `0.146.0` runtime. Pi
 remains the agent and session owner; the Rust bridge owns Responses transport, native retries, tools,
 and Remote Compaction.
 

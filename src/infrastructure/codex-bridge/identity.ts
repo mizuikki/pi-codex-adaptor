@@ -1,9 +1,9 @@
 export const BRIDGE_PROTOCOL_VERSION = 6;
-export const OFFICIAL_CODEX_VERSION = "0.144.3";
-export const OFFICIAL_CODEX_TAG = "rust-v0.144.3";
-export const OFFICIAL_SOURCE_COMMIT = "78ad6e6bfd1d3b6a209acd3ef82172a96b25179c";
+export const OFFICIAL_CODEX_VERSION = "0.146.0";
+export const OFFICIAL_CODEX_TAG = "rust-v0.146.0";
+export const OFFICIAL_SOURCE_COMMIT = "e363b08c9175ac1cbe5893615dd2cb9ddf95043b";
 export const VENDOR_TREE_SHA256 =
-	"4e73a4c8efdc818b085b4abea1660b3a6d84b0fdbb6d687bda5c55dc0f07caad";
+	"4480020e4ec987e750247807b040a0402f391baa7c268242c0019eaac6da6574";
 
 export const SUPPORTED_NATIVE_TARGETS = [
 	"x86_64-unknown-linux-musl",

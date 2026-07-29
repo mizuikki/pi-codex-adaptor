@@ -1,6 +1,6 @@
 [package]
 name = "codex-http-client"
-version = "0.144.3"
+version = "0.146.0"
 edition = "2024"
 license = "Apache-2.0"
 publish = false
@@ -45,6 +45,9 @@ features = [ "derive" ]
 [dependencies.serde_json]
 workspace = true
 
+[dependencies.sha2]
+workspace = true
+
 [dependencies.thiserror]
 workspace = true
 
@@ -59,9 +62,6 @@ workspace = true
 workspace = true
 
 [dependencies.zstd]
-workspace = true
-
-[target."cfg(any(target_os = \"windows\", target_os = \"macos\"))".dependencies.sha2]
 workspace = true
 
 [target."cfg(target_os = \"macos\")".dependencies.system-configuration]

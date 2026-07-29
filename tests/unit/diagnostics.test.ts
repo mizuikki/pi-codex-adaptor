@@ -16,7 +16,7 @@ describe("redacted diagnostics", () => {
 	test("exports only the allowlisted bridge identity fields by default", () => {
 		const snapshot = createDiagnosticsSnapshot(createDefaultConfig(), {
 			bridgeProtocolVersion: 5,
-			officialCodexVersion: "0.144.3",
+			officialCodexVersion: "0.146.0",
 			capabilities: ["responses_sse"],
 			prompt: "private prompt",
 			token: "private token",
@@ -33,7 +33,7 @@ describe("redacted diagnostics", () => {
 			},
 			bridge: {
 				bridgeProtocolVersion: 5,
-				officialCodexVersion: "0.144.3",
+				officialCodexVersion: "0.146.0",
 				capabilities: ["responses_sse"],
 			},
 			recentErrors: [],
@@ -43,7 +43,7 @@ describe("redacted diagnostics", () => {
 	test("drops opaque compaction payloads from bridge diagnostics", () => {
 		const snapshot = createDiagnosticsSnapshot(createDefaultConfig(), {
 			bridgeProtocolVersion: 5,
-			officialCodexVersion: "0.144.3",
+			officialCodexVersion: "0.146.0",
 			capabilities: ["responses_sse", "remote_compaction_v2"],
 			compaction: {
 				summary: "secret summary",
@@ -56,7 +56,7 @@ describe("redacted diagnostics", () => {
 		expect(serialized).not.toContain("opaque fixture");
 		expect(snapshot.bridge).toEqual({
 			bridgeProtocolVersion: 5,
-			officialCodexVersion: "0.144.3",
+			officialCodexVersion: "0.146.0",
 			capabilities: ["responses_sse", "remote_compaction_v2"],
 		});
 	});
@@ -66,8 +66,8 @@ describe("redacted diagnostics", () => {
 			createDefaultConfig(),
 			{
 				bridgeProtocolVersion: 5,
-				officialCodexTag: "rust-v0.144.3",
-				officialSourceCommit: "78ad6e6bfd1d3b6a209acd3ef82172a96b25179c",
+				officialCodexTag: "rust-v0.146.0",
+				officialSourceCommit: "e363b08c9175ac1cbe5893615dd2cb9ddf95043b",
 				buildTarget: "x86_64-unknown-linux-musl",
 				buildSourceCommit: "development",
 				vendorTreeSha256: CHECKSUM,
@@ -115,8 +115,8 @@ describe("redacted diagnostics", () => {
 			runtime: { os: "linux", arch: "x64" },
 			bridge: {
 				bridgeProtocolVersion: 5,
-				officialCodexTag: "rust-v0.144.3",
-				officialSourceCommit: "78ad6e6bfd1d3b6a209acd3ef82172a96b25179c",
+				officialCodexTag: "rust-v0.146.0",
+				officialSourceCommit: "e363b08c9175ac1cbe5893615dd2cb9ddf95043b",
 				buildTarget: "x86_64-unknown-linux-musl",
 				buildSourceCommit: "development",
 				vendorTreeSha256: CHECKSUM,

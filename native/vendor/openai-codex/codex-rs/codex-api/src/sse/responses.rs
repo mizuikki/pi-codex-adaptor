@@ -130,12 +130,11 @@ struct ResponseCompletedUsage {
 
 impl From<ResponseCompletedUsage> for TokenUsage {
     fn from(val: ResponseCompletedUsage) -> Self {
+        let input_tokens_details = val.input_tokens_details.unwrap_or_default();
         TokenUsage {
             input_tokens: val.input_tokens,
-            cached_input_tokens: val
-                .input_tokens_details
-                .map(|d| d.cached_tokens)
-                .unwrap_or(0),
+            cached_input_tokens: input_tokens_details.cached_tokens,
+            cache_write_input_tokens: input_tokens_details.cache_write_tokens,
             output_tokens: val.output_tokens,
             reasoning_output_tokens: val
                 .output_tokens_details
@@ -146,9 +145,11 @@ impl From<ResponseCompletedUsage> for TokenUsage {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 struct ResponseCompletedInputTokensDetails {
     cached_tokens: i64,
+    #[serde(default)]
+    cache_write_tokens: i64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -506,6 +507,7 @@ async fn process_sse_with_treatment(
     safety_buffering_treatment: SafetyBufferingTreatment,
 ) {
     let mut stream = stream.eventsource();
+    let mut response_error: Option<ApiError> = None;
     let mut last_server_model: Option<String> = None;
 
     loop {
@@ -522,11 +524,10 @@ async fn process_sse_with_treatment(
                 return;
             }
             Ok(None) => {
-                let _ = tx_event
-                    .send(Err(ApiError::Stream(
-                        "stream closed before response.completed".into(),
-                    )))
-                    .await;
+                let error = response_error.unwrap_or(ApiError::Stream(
+                    "stream closed before response.completed".into(),
+                ));
+                let _ = tx_event.send(Err(error)).await;
                 return;
             }
             Err(_) => {
@@ -608,8 +609,7 @@ async fn process_sse_with_treatment(
             }
             Ok(None) => {}
             Err(error) => {
-                let _ = tx_event.send(Err(error.into_api_error())).await;
-                return;
+                response_error = Some(error.into_api_error());
             }
         };
     }
@@ -826,57 +826,30 @@ mod tests {
     }
 
     #[test]
-    fn malformed_or_missing_output_items_are_errors() {
-        for kind in ["response.output_item.done", "response.output_item.added"] {
-            for value in [json!({ "type": kind }), json!({ "type": kind, "item": 7 })] {
-                let event = serde_json::from_value(value).expect("event should deserialize");
-                let error = process_responses_event(event).expect_err("item should be rejected");
-                assert_matches!(error.into_api_error(), ApiError::Stream(_));
+    fn parses_cache_write_token_usage() {
+        let usage: ResponseCompletedUsage = serde_json::from_value(json!({
+            "input_tokens": 100,
+            "input_tokens_details": {
+                "cached_tokens": 40,
+                "cache_write_tokens": 60
+            },
+            "output_tokens": 10,
+            "output_tokens_details": { "reasoning_tokens": 5 },
+            "total_tokens": 110
+        }))
+        .expect("valid response usage");
+
+        assert_eq!(
+            TokenUsage::from(usage),
+            TokenUsage {
+                input_tokens: 100,
+                cached_input_tokens: 40,
+                cache_write_input_tokens: 60,
+                output_tokens: 10,
+                reasoning_output_tokens: 5,
+                total_tokens: 110,
             }
-        }
-    }
-
-    #[tokio::test]
-    async fn terminal_error_is_emitted_without_waiting_for_stream_end() {
-        let incomplete = json!({
-            "type": "response.incomplete",
-            "response": { "incomplete_details": { "reason": "max_output_tokens" } }
-        });
-        let sse = format!("event: response.incomplete\ndata: {incomplete}\n\n");
-        let stream = stream::iter(vec![Ok(Bytes::from(sse))]).chain(stream::pending());
-        let (tx, mut rx) = mpsc::channel::<Result<ResponseEvent, ApiError>>(8);
-        tokio::spawn(process_sse(
-            Box::pin(stream),
-            tx,
-            idle_timeout(),
-            /*telemetry*/ None,
-        ));
-
-        let event = tokio::time::timeout(Duration::from_millis(100), rx.recv())
-            .await
-            .expect("terminal error should not wait for idle timeout")
-            .expect("terminal error event should be sent");
-        assert_matches!(event, Err(ApiError::Stream(message)) if message.contains("max_output_tokens"));
-        assert!(rx.recv().await.is_none());
-    }
-
-    #[tokio::test]
-    async fn completed_event_cannot_replace_an_earlier_terminal_error() {
-        let incomplete = json!({
-            "type": "response.incomplete",
-            "response": { "incomplete_details": { "reason": "content_filter" } }
-        });
-        let completed = json!({
-            "type": "response.completed",
-            "response": { "id": "must-not-complete" }
-        });
-        let first = format!("event: response.incomplete\ndata: {incomplete}\n\n");
-        let second = format!("event: response.completed\ndata: {completed}\n\n");
-
-        let events = collect_events(&[first.as_bytes(), second.as_bytes()]).await;
-
-        assert_eq!(events.len(), 1);
-        assert_matches!(&events[0], Err(ApiError::Stream(message)) if message.contains("content_filter"));
+        );
     }
 
     #[tokio::test]

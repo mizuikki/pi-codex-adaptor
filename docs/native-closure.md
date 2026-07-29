@@ -2,7 +2,7 @@
 
 ## Selected source
 
-The production wire boundary is built from 18 official package surfaces at OpenAI Codex `0.144.3`:
+The production wire boundary is built from 18 official package surfaces at OpenAI Codex `0.146.0`:
 
 | Package | Role |
 | --- | --- |
@@ -34,10 +34,11 @@ they have no bridge envelope or TypeScript domain type.
 ## Reproducibility
 
 `UPSTREAM_CODEX.toml` records the annotated tag object, peeled commit, vendor tree hash, allowlist
-manifest hash, license inventory hash, SBOM hash, and patch list. Every one of the 257 allowlisted
-files records both its upstream and vendored SHA-256. The single replayable adapter patch adds
-`Deserialize` to official Responses request types so the bridge can validate the same typed request
-for SSE and WebSocket transports; it changes no field or serialization behavior.
+manifest hash, license inventory hash, SBOM hash, and patch list. Every one of the 287 allowlisted
+files records both its upstream and vendored SHA-256. The replayable adapter patches add
+`Deserialize` to official Responses request types, harden SSE terminal-event handling, redact HTTP
+diagnostics, and retain the two platform/tool compatibility fixes required by the adaptor. They do
+not change the selected wire field definitions.
 
 `scripts/sync-codex-upstream.ts --sync` fetches only the pinned annotated tag into an isolated
 temporary repository and reconstructs the vendor tree without reading a developer checkout.

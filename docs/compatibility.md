@@ -21,7 +21,7 @@ The repository skeleton is developed with:
 
 | Component | Pinned or tested version |
 | --- | --- |
-| OpenAI Codex source | `0.144.3` / `78ad6e6bfd1d3b6a209acd3ef82172a96b25179c` |
+| OpenAI Codex source | `0.146.0` / `e363b08c9175ac1cbe5893615dd2cb9ddf95043b` |
 | Bun | `1.3.14` |
 | TypeScript | `7.0.2` |
 | Node.js development runtime | `24.18.0` |

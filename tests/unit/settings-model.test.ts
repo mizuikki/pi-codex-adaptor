@@ -5,7 +5,7 @@ import { SETTINGS_CATEGORIES, SettingsModel } from "../../src/ui/terminal/settin
 
 function model(): SettingsModel {
 	return new SettingsModel(createDefaultConfig(), {
-		baseline: "0.144.3",
+		baseline: "0.146.0",
 		provider: "openai",
 		model: "unresolved",
 		bridge: "pending",
@@ -30,7 +30,7 @@ describe("settings view model", () => {
 		const config = createDefaultConfig();
 		config.tools.backgroundSessions = false;
 		const view = new SettingsModel(config, {
-			baseline: "0.144.3",
+			baseline: "0.146.0",
 			provider: "openai-codex",
 			model: "fixture-model",
 			bridge: "protocol v6",
@@ -95,7 +95,7 @@ describe("settings view model", () => {
 		const config = createDefaultConfig();
 		config.codex.compaction = { mode: "off" };
 		const view = new SettingsModel(config, {
-			baseline: "0.144.3",
+			baseline: "0.146.0",
 			provider: "openai-codex",
 			model: "fixture-model",
 			bridge: "pending",
@@ -112,7 +112,7 @@ describe("settings view model", () => {
 
 	test.each([120, 80, 40])("renders bounded monochrome lines at width %d", (width) => {
 		const view = new SettingsModel(createDefaultConfig(), {
-			baseline: "0.144.3",
+			baseline: "0.146.0",
 			provider: "openai-provider-with-a-deliberately-long-display-identifier",
 			model: "model-with-a-deliberately-long-display-identifier",
 			bridge: "pending",
@@ -146,7 +146,7 @@ describe("settings view model", () => {
 	test("recomputes the activation route after successful save and restore", () => {
 		const config = createDefaultConfig();
 		const view = new SettingsModel(config, {
-			baseline: "0.144.3",
+			baseline: "0.146.0",
 			provider: "custom-codex",
 			model: "fixture-model",
 			bridge: "pending",
@@ -180,7 +180,7 @@ describe("settings view model", () => {
 	test("keeps the last persisted activation route when save fails", () => {
 		const config = createDefaultConfig();
 		const view = new SettingsModel(config, {
-			baseline: "0.144.3",
+			baseline: "0.146.0",
 			provider: "custom-codex",
 			model: "fixture-model",
 			bridge: "pending",
@@ -199,7 +199,7 @@ describe("settings view model", () => {
 
 	test("disables compact now when the current route is inactive", () => {
 		const view = new SettingsModel(createDefaultConfig(), {
-			baseline: "0.144.3",
+			baseline: "0.146.0",
 			provider: "custom-codex",
 			model: "fixture-model",
 			bridge: "pending",

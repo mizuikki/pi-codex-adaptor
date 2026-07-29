@@ -69,7 +69,9 @@ await mkdir(resolve(root, "native", "bin"), { recursive: true });
 await cp(resolve(root, "native", "artifacts", target), installedArtifact, { recursive: true });
 
 async function run(command: string[]): Promise<void> {
-	const child = Bun.spawn(command, { cwd: root, stderr: "pipe", stdout: "inherit" });
-	const [code] = await Promise.all([child.exited, new Response(child.stderr).arrayBuffer()]);
-	if (code !== 0) throw new Error(`${command[0]} exited with status ${code}`);
+	const child = Bun.spawn(command, { cwd: root, stderr: "inherit", stdout: "inherit" });
+	const code = await child.exited;
+	if (code !== 0) {
+		throw new Error(`${command.join(" ")} exited with status ${code}`);
+	}
 }

@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "officialCodexVersion": "0.144.3",
-  "officialSourceCommit": "78ad6e6bfd1d3b6a209acd3ef82172a96b25179c",
+  "officialCodexVersion": "0.146.0",
+  "officialSourceCommit": "e363b08c9175ac1cbe5893615dd2cb9ddf95043b",
   "requestBody": [
     "model",
     "tools",

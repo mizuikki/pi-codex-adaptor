@@ -5,14 +5,14 @@ The native bridge is derived from the official OpenAI Codex source pinned in
 
 | Field | Value |
 | --- | --- |
-| Version | `0.144.3` |
-| Tag | `rust-v0.144.3` |
-| Peeled commit | `78ad6e6bfd1d3b6a209acd3ef82172a96b25179c` |
+| Version | `0.146.0` |
+| Tag | `rust-v0.146.0` |
+| Peeled commit | `e363b08c9175ac1cbe5893615dd2cb9ddf95043b` |
 | Repository | `https://github.com/openai/codex` |
 | Rust toolchain | `1.95.0` |
 
 The authoritative upstream contracts are the typed Compact client at
-[`codex-api/src/endpoint/compact.rs`](https://github.com/openai/codex/blob/78ad6e6bfd1d3b6a209acd3ef82172a96b25179c/codex-rs/codex-api/src/endpoint/compact.rs),
+[`codex-api/src/endpoint/compact.rs`](https://github.com/openai/codex/blob/e363b08c9175ac1cbe5893615dd2cb9ddf95043b/codex-rs/codex-api/src/endpoint/compact.rs),
 the Responses stream parser and retry error model in the same source tree, and the official Remote
 Compaction V2 implementation at the pinned commit. The implementation record is
 [`docs/evidence/remote-compaction-conformance-2026-07-27.md`](./evidence/remote-compaction-conformance-2026-07-27.md).

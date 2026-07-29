@@ -1,6 +1,6 @@
 [package]
 name = "codex-extension-items"
-version = "0.144.3"
+version = "0.146.0"
 edition = "2024"
 license = "Apache-2.0"
 publish = false
@@ -20,6 +20,9 @@ workspace = true
 [dependencies.serde]
 workspace = true
 features = [ "derive" ]
+
+[dependencies.serde_json]
+workspace = true
 
 [dependencies.ts-rs]
 workspace = true

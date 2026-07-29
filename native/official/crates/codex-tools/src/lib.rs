@@ -70,6 +70,7 @@ pub use tool_spec::ResponsesApiWebSearchFilters;
 pub use tool_spec::ResponsesApiWebSearchUserLocation;
 pub use tool_spec::ToolSpec;
 pub use tool_spec::create_tools_json_for_responses_api;
+pub use tool_spec::create_tools_raw_json_for_responses_api;
 pub use view_image_spec::ViewImageToolOptions;
 pub use view_image_spec::create_view_image_tool;
 

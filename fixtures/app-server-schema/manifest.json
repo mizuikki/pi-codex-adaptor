@@ -1,12 +1,12 @@
 {
   "schemaVersion": 1,
-  "officialCodexVersion": "0.144.3",
-  "officialSourceCommit": "78ad6e6bfd1d3b6a209acd3ef82172a96b25179c",
+  "officialCodexVersion": "0.146.0",
+  "officialSourceCommit": "e363b08c9175ac1cbe5893615dd2cb9ddf95043b",
   "generation": {
     "stable": true,
-    "jsonBundleCanonicalSha256": "ee43110fdd690609d1de85b2a41a26b745f7ff4287271fb8b379835c3ece22ef",
-    "jsonV2BundleCanonicalSha256": "f76d741a299026cf4a1c75847b41562078d54c6f0aab9faae8781831e73d97d4",
-    "typescriptTreeSha256": "2d45f217312bfe9fa64e74289cd02ec95de947fba8a1059c4a361072d9efcb7f"
+    "jsonBundleCanonicalSha256": "048a75c51358e0ea8de994f7d5265ce685476fe5badaf52daa67f0af6e0f1061",
+    "jsonV2BundleCanonicalSha256": "b767c1161c2c56341f3d0e313b4f93810b4b53bdaabeff95c06e1242cfc4df03",
+    "typescriptTreeSha256": "91c8af9658342fc4a6f6d279abeb2d582cd3071f00b0514263595a0341da5d72"
   },
   "typescriptSubset": [
     { "source": "InitializeParams.ts", "file": "InitializeParams.ts" },
