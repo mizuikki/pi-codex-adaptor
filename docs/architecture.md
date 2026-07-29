@@ -26,6 +26,13 @@ TypeScript communicates with Rust only through the bounded protocol version 6. T
 endpoint calls, retry classification, backoff, cancellation, PTY/session handling, and patch
 execution. TypeScript validates only adaptor-owned envelopes and checkpoint data.
 
+Before any Responses or compact request leaves the bridge, and before standalone `web.run` prepares
+its search input, native code applies the selected model's truncation policy to every function/custom
+tool result and shares one content budget across the latest contiguous result batch. Managed command
+execution also clamps caller-requested output to the same model policy. Canonical Pi history remains
+unchanged; the existing compaction fitter handles `tool_search_output` and remains the final
+whole-request context-window guard.
+
 The native bridge is built from the pinned official Codex source closure. The official version, tag,
 peeled commit, vendor tree hash, target, and source commit are immutable handshake fields. Vendor
 changes require the allowlist, source hashes, tree hash, license inventory, SBOM, and replayable patch

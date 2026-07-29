@@ -52,6 +52,7 @@ describe("tools.execute param allowlist", () => {
 		const params = buildToolsExecuteParams({
 			tool: "exec_command",
 			argumentsValue: {
+				model: "fixture-model",
 				cmd: "printf fixture",
 				shell: "/bin/bash",
 				login: false,
@@ -70,6 +71,7 @@ describe("tools.execute param allowlist", () => {
 			workdir: "/workspace",
 			workspaceRoots: ["/workspace"],
 			authorization: "require_approval",
+			model: "fixture-model",
 			cmd: "printf fixture",
 			shell: "/bin/bash",
 			login: false,

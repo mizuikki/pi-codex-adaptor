@@ -394,10 +394,17 @@ function registerNativeTool(
 			);
 			notifyToolRunning(onUpdate);
 			const config = await configuration.load();
+			const modelId = ctx.model?.id;
+			if (modelId === undefined) throw new Error("Codex tool model is unavailable");
 			let streamedOutput = "";
 			const result = await runtime.executeTool({
 				tool: name,
-				argumentsValue: buildNativeToolArguments(name, params, config.tools.backgroundSessions),
+				argumentsValue: buildNativeToolArguments(
+					name,
+					params,
+					config.tools.backgroundSessions,
+					modelId,
+				),
 				workdir: workdirFrom(params, ctx.cwd),
 				workspaceRoots: [ctx.cwd],
 				authorization: nativeAuthorizationFor(config.security.approvalPolicy),
@@ -588,11 +595,13 @@ function buildNativeToolArguments(
 	name: NativeManagedTool,
 	params: unknown,
 	allowBackgroundSessions: boolean,
+	modelId: string,
 ): Record<string, unknown> {
 	const source = record(params) ?? {};
 	switch (name) {
 		case "exec_command":
 			return {
+				model: modelId,
 				...pickString(source, "cmd"),
 				...pickString(source, "shell"),
 				...pickBoolean(source, "login"),
@@ -603,6 +612,7 @@ function buildNativeToolArguments(
 			};
 		case "shell_command":
 			return {
+				model: modelId,
 				...pickString(source, "command"),
 				...pickBoolean(source, "login"),
 				...pickNumber(source, "timeout_ms"),
@@ -610,6 +620,7 @@ function buildNativeToolArguments(
 			};
 		case "write_stdin":
 			return {
+				model: modelId,
 				...pickNumber(source, "session_id"),
 				...pickString(source, "chars"),
 				...pickNumber(source, "yield_time_ms"),
@@ -617,10 +628,12 @@ function buildNativeToolArguments(
 			};
 		case "apply_patch":
 			return {
+				model: modelId,
 				...pickString(source, "input"),
 			};
 		case "view_image":
 			return {
+				model: modelId,
 				...pickString(source, "path"),
 				...pickString(source, "detail"),
 			};
