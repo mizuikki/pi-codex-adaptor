@@ -48,9 +48,7 @@ use codex_api::ImageGenerationRequest;
 use codex_api::ImageQuality;
 use codex_api::ImageUrl;
 use codex_api::ImagesClient;
-use codex_api::Reasoning;
 use codex_api::ResponsesApiRequest;
-use codex_api::ResponsesApiTools;
 use codex_api::ResponsesClient;
 use codex_api::ResponsesOptions;
 use codex_api::ResponsesWebsocketClient;
@@ -60,7 +58,6 @@ use codex_api::SearchCommands;
 use codex_api::SearchInput;
 use codex_api::SearchRequest;
 use codex_api::SearchSettings;
-use codex_api::TextControls;
 use codex_http_client::HttpClientFactory;
 use codex_http_client::OutboundProxyPolicy;
 use codex_protocol::config_types::WebSearchMode;
@@ -94,6 +91,7 @@ use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
 use crate::api;
+use crate::compaction_context_fit::OwnedCompactionInput;
 use crate::official;
 
 const INPUT_CHANNEL_CAPACITY: usize = 32;
@@ -662,21 +660,6 @@ fn insert_remote_v2_header(
         .map_err(|_| invalid_params("remote compaction v2 session context is invalid"))?;
     headers.insert(name, value);
     Ok(())
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct OwnedCompactionInput {
-    model: String,
-    input: Vec<ResponseItem>,
-    #[serde(default)]
-    instructions: String,
-    tools: Option<ResponsesApiTools>,
-    parallel_tool_calls: bool,
-    reasoning: Option<Reasoning>,
-    service_tier: Option<String>,
-    prompt_cache_key: Option<String>,
-    text: Option<TextControls>,
 }
 
 #[derive(Deserialize)]
@@ -3997,8 +3980,14 @@ async fn responses_compact(
         .map(RemoteCompactionV2Context::validate)
         .transpose()?;
     let implementation = parsed.implementation;
-    let connection = api::connect(&parsed.connection)?;
+    if parsed.request.model.is_empty() || parsed.request.model.len() > 256 {
+        return Err(invalid_params("responses.compact model is invalid").into());
+    }
     ensure_not_cancelled(cancellation)?;
+    let model = crate::models::resolve_model(&parsed.request.model);
+    crate::compaction_context_fit::fit_compaction_input(&mut parsed.request, &model)?;
+    ensure_not_cancelled(cancellation)?;
+    let connection = api::connect(&parsed.connection)?;
     if matches!(implementation, CompactionImplementation::RemoteV2) {
         let timeout = Duration::from_millis(parsed.request_timeout_ms);
         return match await_with_cancellation(
@@ -4027,9 +4016,6 @@ async fn responses_compact(
         connection.authentication,
     );
     let request = parsed.request;
-    if request.model.is_empty() || request.model.len() > 256 {
-        return Err(invalid_params("responses.compact model is invalid").into());
-    }
     let input = CompactionInput {
         model: &request.model,
         input: &request.input,
@@ -4991,6 +4977,100 @@ mod tests {
 
     #[tokio::test]
     #[allow(clippy::large_futures)]
+    async fn compact_endpoint_fits_oversized_trailing_tool_output_before_dispatch() {
+        let (base_url, request, server) = spawn_capturing_fixture_http_server(
+            "{\"output\":[{\"type\":\"compaction\",\"encrypted_content\":\"fixture-compaction\"}]}"
+                .to_owned(),
+        )
+        .await;
+        let result = responses_compact(
+            json!({
+                "request": {
+                    "model": "gpt-5.6-sol",
+                    "input": [{
+                        "type": "function_call_output",
+                        "id": "fco_fixture",
+                        "call_id": "call_fixture",
+                        "output": "x".repeat(1_100_000),
+                        "internal_chat_message_metadata_passthrough": { "turn_id": "turn_fixture" }
+                    }],
+                    "instructions": "fixture instructions",
+                    "tools": [{ "type": "function", "name": "fixture_tool" }],
+                    "parallel_tool_calls": true,
+                    "reasoning": null,
+                    "service_tier": null,
+                    "prompt_cache_key": null,
+                    "text": null
+                },
+                "requestTimeoutMs": 10_000,
+                "connection": fixture_connection(base_url),
+            }),
+            &CancellationToken::new(),
+        )
+        .await
+        .expect("compact endpoint should receive a fitted request");
+
+        assert_eq!(result.status, TerminalStatus::Completed);
+        let request = request.await.expect("fixture request should be captured");
+        let body = fixture_request_body(&request);
+        let item = &body["input"][0];
+        assert_eq!(item["id"], "fco_fixture");
+        assert_eq!(item["call_id"], "call_fixture");
+        assert_eq!(
+            item["internal_chat_message_metadata_passthrough"]["turn_id"],
+            "turn_fixture"
+        );
+        assert_eq!(
+            item["output"],
+            "Output exceeded the available model context and was truncated"
+        );
+        assert!(
+            body["instructions"]
+                .as_str()
+                .is_some_and(|value| value == "fixture instructions")
+        );
+        assert!(body["tools"].is_array());
+        server.await.expect("fixture server should join");
+    }
+
+    #[tokio::test]
+    async fn compact_preflight_rejects_unfit_non_eligible_history_without_dispatch() {
+        let error = responses_compact(
+            json!({
+                "request": {
+                    "model": "gpt-5.6-sol",
+                    "input": [{
+                        "type": "message",
+                        "role": "user",
+                        "content": [{ "type": "input_text", "text": "x".repeat(1_100_000) }]
+                    }],
+                    "instructions": "",
+                    "tools": null,
+                    "parallel_tool_calls": true,
+                    "reasoning": null,
+                    "service_tier": null,
+                    "prompt_cache_key": null,
+                    "text": null
+                },
+                "requestTimeoutMs": 10_000,
+                "connection": fixture_connection("http://127.0.0.1:9/v1".to_owned()),
+            }),
+            &CancellationToken::new(),
+        )
+        .await
+        .expect_err("unfit non-eligible history should fail before dispatch");
+
+        assert!(matches!(
+            error,
+            RequestFailure::Bridge(error)
+                if error.code == "context_window_exceeded"
+                    && !error.retryable
+                    && error.message == "the request exceeded the model context window"
+        ));
+    }
+
+    #[tokio::test]
+    #[allow(clippy::large_futures)]
     async fn preserves_remote_v2_compaction_items_without_rebuilding_them() {
         let (base_url, server) = spawn_fixture_http_server(
             concat!(
@@ -5035,6 +5115,84 @@ mod tests {
         assert_eq!(result["output"][0]["role"], "user");
         assert_eq!(result["output"][1]["type"], "compaction");
         assert_eq!(result["output"][1]["encrypted_content"], "opaque");
+        server.await.expect("fixture server should join");
+    }
+
+    #[tokio::test]
+    #[allow(clippy::large_futures)]
+    async fn remote_v2_fits_the_same_oversized_tool_output_and_keeps_one_trigger() {
+        let (base_url, request, server) = spawn_capturing_fixture_http_server(
+            concat!(
+                "event: response.output_item.done\n",
+                "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"compaction\",\"encrypted_content\":\"opaque\"}}\n\n",
+                "event: response.completed\n",
+                "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"remote-compaction\"}}\n\n",
+            )
+            .to_owned(),
+        )
+        .await;
+        let result = responses_compact(
+            json!({
+                "implementation": "remote_v2",
+                "transportMode": "sse",
+                "providerSupportsWebsockets": false,
+                "request": {
+                    "model": "gpt-5.6-sol",
+                    "input": [{
+                        "type": "function_call_output",
+                        "id": "fco_fixture",
+                        "call_id": "call_fixture",
+                        "output": "x".repeat(1_100_000),
+                        "internal_chat_message_metadata_passthrough": { "turn_id": "turn_fixture" }
+                    }],
+                    "instructions": "fixture instructions",
+                    "tools": [{ "type": "function", "name": "fixture_tool" }],
+                    "parallel_tool_calls": true,
+                    "reasoning": null,
+                    "service_tier": null,
+                    "prompt_cache_key": null,
+                    "text": null
+                },
+                "requestTimeoutMs": 10_000,
+                "connection": fixture_connection(base_url),
+            }),
+            &CancellationToken::new(),
+        )
+        .await
+        .expect("remote v2 should receive a fitted request");
+
+        assert_eq!(result.status, TerminalStatus::Completed);
+        let request = request.await.expect("fixture request should be captured");
+        let body = fixture_request_body(&request);
+        let input = body["input"]
+            .as_array()
+            .expect("remote input should be an array");
+        assert_eq!(input.len(), 2);
+        assert_eq!(
+            input[0]["output"],
+            "Output exceeded the available model context and was truncated"
+        );
+        assert_eq!(input[0]["id"], "fco_fixture");
+        assert_eq!(
+            input[0]["internal_chat_message_metadata_passthrough"]["turn_id"],
+            "turn_fixture"
+        );
+        assert_eq!(
+            input
+                .iter()
+                .filter(|item| item["type"] == "compaction_trigger")
+                .count(),
+            1
+        );
+        assert_eq!(
+            result.result["output"]
+                .as_array()
+                .expect("remote output should be an array")
+                .iter()
+                .filter(|item| item["type"] == "compaction")
+                .count(),
+            1
+        );
         server.await.expect("fixture server should join");
     }
 
@@ -9216,12 +9374,7 @@ mod tests {
                 .accept()
                 .await
                 .expect("fixture request should connect");
-            let mut request = vec![0_u8; 16 * 1024];
-            let length = stream
-                .read(&mut request)
-                .await
-                .expect("fixture request should be readable");
-            let request = String::from_utf8_lossy(&request[..length]);
+            let request = Box::pin(read_fixture_request(&mut stream)).await;
             assert!(request.starts_with("POST /v1/") || request.starts_with("GET /v1/"));
             let response = format!(
                 "HTTP/1.1 200 OK\r\ncontent-type: {content_type}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
@@ -9255,12 +9408,7 @@ mod tests {
                 .accept()
                 .await
                 .expect("fixture request should connect");
-            let mut request = vec![0_u8; 16 * 1024];
-            let length = stream
-                .read(&mut request)
-                .await
-                .expect("fixture request should be readable");
-            let request = String::from_utf8_lossy(&request[..length]);
+            let request = Box::pin(read_fixture_request(&mut stream)).await;
             assert!(request.starts_with("POST /v1/"));
             let response = format!(
                 "HTTP/1.1 {status}\r\ncontent-type: text/plain\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
@@ -9302,13 +9450,7 @@ mod tests {
                 .accept()
                 .await
                 .expect("fixture request should connect");
-            let mut request = vec![0_u8; 16 * 1024];
-            let length = stream
-                .read(&mut request)
-                .await
-                .expect("fixture request should be readable");
-            let request = String::from_utf8(request[..length].to_vec())
-                .expect("fixture request should be UTF-8");
+            let request = Box::pin(read_fixture_request(&mut stream)).await;
             sender
                 .send(request)
                 .expect("fixture request should be captured");
@@ -9326,6 +9468,46 @@ mod tests {
                 .expect("fixture response should close");
         });
         (format!("http://{address}/v1"), receiver, server)
+    }
+
+    async fn read_fixture_request(stream: &mut tokio::net::TcpStream) -> String {
+        let mut request = Vec::new();
+        let mut chunk = [0_u8; 16 * 1024];
+        let body_start;
+        let content_length;
+        loop {
+            let length = stream
+                .read(&mut chunk)
+                .await
+                .expect("fixture request should be readable");
+            assert!(length > 0, "fixture request should include headers");
+            request.extend_from_slice(&chunk[..length]);
+            let Some(header_end) = request.windows(4).position(|window| window == b"\r\n\r\n")
+            else {
+                continue;
+            };
+            body_start = header_end + 4;
+            let headers = String::from_utf8_lossy(&request[..header_end]);
+            content_length = headers
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().ok())
+                        .flatten()
+                })
+                .unwrap_or(0);
+            break;
+        }
+        while request.len() < body_start.saturating_add(content_length) {
+            let length = stream
+                .read(&mut chunk)
+                .await
+                .expect("fixture request body should be readable");
+            assert!(length > 0, "fixture request body should not end early");
+            request.extend_from_slice(&chunk[..length]);
+        }
+        String::from_utf8(request).expect("fixture request should be UTF-8")
     }
 
     fn fixture_header<'a>(request: &'a str, expected_name: &str) -> Option<&'a str> {
