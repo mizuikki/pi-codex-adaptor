@@ -1336,7 +1336,7 @@
     {
       "path": "codex-rs/utils/pty/src/win/procthreadattr.rs",
       "source_sha256": "f143dff9ff9ce080e617e6bae2e1864e7f59b6f83569eae18fd7f02e997a1956",
-      "vendor_sha256": "f143dff9ff9ce080e617e6bae2e1864e7f59b6f83569eae18fd7f02e997a1956"
+      "vendor_sha256": "23c851de36312183259a5447605cc597bb8ba51b58697918fb78a6200d6fb7b8"
     },
     {
       "path": "codex-rs/utils/pty/src/win/psuedocon.rs",

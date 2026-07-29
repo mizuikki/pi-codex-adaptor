@@ -32,7 +32,7 @@ pub const OFFICIAL_SOURCE_COMMIT: &str = "e363b08c9175ac1cbe5893615dd2cb9ddf9504
 
 /// Recorded hash of the currently selected vendor tree.
 pub const VENDOR_TREE_SHA256: &str =
-    "f61c3b46698213bba6b025f12debd46cd5e2608433dd7903fa7b79fecdb4c9bb";
+    "4480020e4ec987e750247807b040a0402f391baa7c268242c0019eaac6da6574";
 
 /// A frame sent from the TypeScript host to the native bridge.
 ///

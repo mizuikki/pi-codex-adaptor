@@ -10,3 +10,18 @@ diff --git a/codex-rs/utils/pty/src/win/conpty.rs b/codex-rs/utils/pty/src/win/c
      }
  
      pub fn into_handles(self) -> (PsuedoCon, FileDescriptor, FileDescriptor) {
+diff --git a/codex-rs/utils/pty/src/win/procthreadattr.rs b/codex-rs/utils/pty/src/win/procthreadattr.rs
+--- a/codex-rs/utils/pty/src/win/procthreadattr.rs
++++ b/codex-rs/utils/pty/src/win/procthreadattr.rs
+@@ -21,10 +21,10 @@
+ use super::psuedocon::HPCON;
+ use anyhow::Error;
+ use anyhow::ensure;
+-use std::ffi::c_void;
+ use std::io::Error as IoError;
+ use std::mem;
+ use std::ptr;
++use winapi::ctypes::c_void;
+ use winapi::shared::minwindef::DWORD;
+ use winapi::um::processthreadsapi::*;
+ use winapi::um::winnt::HANDLE;
