@@ -175,7 +175,40 @@ export function normalizeToolContract(
 		}
 		normalized.description = "<official platform-specific shell description>";
 	}
+	if (contract.name === "exec_command") {
+		normalized.parameters = normalizeExecCommandParameters(normalized.parameters);
+	}
 	return normalized;
+}
+
+function normalizeExecCommandParameters(parameters: unknown): unknown {
+	if (typeof parameters !== "object" || parameters === null || Array.isArray(parameters)) {
+		return parameters;
+	}
+	const parameterRecord = parameters as Record<string, unknown>;
+	const properties = parameterRecord.properties;
+	if (typeof properties !== "object" || properties === null || Array.isArray(properties)) {
+		return parameters;
+	}
+	const propertyRecord = properties as Record<string, unknown>;
+	const yieldTime = propertyRecord.yield_time_ms;
+	if (typeof yieldTime !== "object" || yieldTime === null || Array.isArray(yieldTime)) {
+		return parameters;
+	}
+	const yieldTimeRecord = yieldTime as Record<string, unknown>;
+	if (typeof yieldTimeRecord.description !== "string" || yieldTimeRecord.description.length === 0) {
+		throw new Error("Official exec_command yield_time_ms description must be non-empty");
+	}
+	return {
+		...parameterRecord,
+		properties: {
+			...propertyRecord,
+			yield_time_ms: {
+				...yieldTimeRecord,
+				description: "<official platform-specific exec yield description>",
+			},
+		},
+	};
 }
 
 export function normalizeToolSurface(
