@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import type { Readable, Writable } from "node:stream";
-import type { NativeAuthorization } from "../../application/codex-runtime.ts";
+import type { NativeApprovalPolicy } from "../../application/codex-runtime.ts";
 import { createBridgeChildEnvironment } from "./environment.ts";
 import {
 	BRIDGE_PROTOCOL_VERSION,
@@ -209,7 +209,7 @@ export class BridgeClient {
 	async writeSession(
 		sessionId: string,
 		data: string,
-		authorization: NativeAuthorization,
+		approvalPolicy: NativeApprovalPolicy,
 		options: BridgeControlRequestOptions = {},
 	): Promise<BridgeResult> {
 		return this.#completedControlRequest(
@@ -217,7 +217,7 @@ export class BridgeClient {
 				type: "session_write",
 				requestId,
 				sessionId,
-				authorization,
+				approvalPolicy,
 				data,
 			}),
 			options,

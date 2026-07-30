@@ -23,7 +23,7 @@ describe("file diagnostics exporter", () => {
 			const result = await new FileDiagnosticsExporter().export(
 				{
 					schemaVersion: 2,
-					configSchemaVersion: 2,
+					configSchemaVersion: 3,
 					activation: {
 						providerCount: 1,
 						supportedApis: ["openai-responses", "openai-codex-responses"],
@@ -62,7 +62,7 @@ describe("file diagnostics exporter", () => {
 						{
 							category: "ProtocolError",
 							code: "invalid_frame",
-							message: "Bridge frame does not match protocol v6",
+							message: "Bridge frame does not match protocol v7",
 						},
 					],
 				},
@@ -98,7 +98,7 @@ describe("file diagnostics exporter", () => {
 				new FileDiagnosticsExporter().export(
 					{
 						schemaVersion: 2,
-						configSchemaVersion: 2,
+						configSchemaVersion: 3,
 						activation: {
 							providerCount: 1,
 							supportedApis: ["openai-responses", "openai-codex-responses"],

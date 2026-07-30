@@ -77,39 +77,38 @@ describe("settings keyboard state machine", () => {
 		expect(view.handleKey("\r")).toEqual({ type: "reset-defaults" });
 	});
 
-	test("approval bypass confirmation defaults to cancel", () => {
+	test("approval never confirmation defaults to cancel", () => {
 		const view = model();
 		view.setCategory("Tools");
 		view.moveFocus(1);
 
 		expect(view.handleKey("\r")).toEqual({ type: "none" });
-		expect(view.dialog).toEqual({ kind: "approval-bypass-confirm", focus: 0 });
-		expect(view.draft.security.approvalPolicy).toBe("prompt");
+		expect(view.dialog).toEqual({ kind: "approval-never-confirm", focus: 0 });
+		expect(view.draft.security.approvalPolicy).toBe("on-request");
 		expect(view.lines(80).join("\n")).toContain("> Cancel");
 		expect(view.lines(80).join("\n")).toContain("user's permissions");
-		expect(view.lines(80).join("\n")).toContain("workspace roots do not sandbox shell");
-		expect(view.lines(80).join("\n")).toContain("behavior.");
+		expect(view.lines(80).join("\n")).toContain("approval prompts");
 
 		// Escape cancels without changing the draft.
 		expect(view.handleKey("\u001b")).toEqual({ type: "none" });
 		expect(view.dialog).toEqual({ kind: "none" });
-		expect(view.draft.security.approvalPolicy).toBe("prompt");
+		expect(view.draft.security.approvalPolicy).toBe("on-request");
 		expect(view.state).toBe("pristine");
 
 		view.handleKey("\r");
 		view.handleKey("j");
-		expect(view.dialog).toEqual({ kind: "approval-bypass-confirm", focus: 1 });
-		expect(view.handleKey("\r")).toEqual({ type: "approval-bypass-enabled" });
+		expect(view.dialog).toEqual({ kind: "approval-never-confirm", focus: 1 });
+		expect(view.handleKey("\r")).toMatchObject({ type: "security-policy-enabled" });
 		expect(view.dialog).toEqual({ kind: "none" });
-		expect(view.draft.security.approvalPolicy).toBe("bypass");
+		expect(view.draft.security.approvalPolicy).toBe("never");
 		expect(view.state).toBe("dirty");
 
-		// Returning to prompt is immediate and remains a draft-only change.
+		// Returning to on-request is immediate and remains a draft-only change.
 		view.handleKey("\r");
-		expect(view.draft.security.approvalPolicy).toBe("prompt");
+		expect(view.draft.security.approvalPolicy).toBe("on-request");
 	});
 
-	test.each([120, 80, 40, 20])("approval bypass confirmation stays within width %d", (width) => {
+	test.each([120, 80, 40, 20])("approval never confirmation stays within width %d", (width) => {
 		const view = model();
 		view.setWidth(width);
 		view.setCategory("Tools");
@@ -117,6 +116,26 @@ describe("settings keyboard state machine", () => {
 		view.handleKey("\r");
 
 		expect(view.lines(width).every((line) => line.length <= width)).toBe(true);
+	});
+
+	test("unrestricted filesystem confirmation defaults to cancel", () => {
+		const view = model();
+		view.setCategory("Tools");
+		view.moveFocus(1);
+		view.moveFocus(1);
+
+		expect(view.handleKey("\r")).toEqual({ type: "none" });
+		expect(view.dialog).toEqual({ kind: "filesystem-unrestricted-confirm", focus: 0 });
+		expect(view.draft.security.filesystemAccessPolicy).toBe("workspace");
+		expect(view.lines(80).join("\n")).toContain("not an OS sandbox");
+
+		view.handleKey("j");
+		expect(view.handleKey("\r")).toMatchObject({ type: "security-policy-enabled" });
+		expect(view.draft.security.filesystemAccessPolicy).toBe("unrestricted");
+		expect(view.state).toBe("dirty");
+
+		view.handleKey("\r");
+		expect(view.draft.security.filesystemAccessPolicy).toBe("workspace");
 	});
 
 	test("ctrl+s save and category shortcuts remain contextual", () => {

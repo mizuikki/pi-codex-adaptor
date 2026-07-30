@@ -1,8 +1,8 @@
 # Security Boundary
 
 The adaptor is a local extension and native sidecar. It does not provide an OS sandbox. Native
-commands run with the user's permissions and workspace roots constrain intended tool targets rather
-than filesystem authority.
+commands run with the user's permissions. Filesystem access policy constrains explicit structured-tool
+paths and working directories rather than OS filesystem authority; shell command text is not parsed.
 
 ## Credentials and transport
 
@@ -13,12 +13,21 @@ than filesystem authority.
   redacted before any user-visible or diagnostic surface.
 - The bridge child receives a narrowed environment and is shut down with active requests cancelled.
 
-## Native authorization
+## Approval and filesystem access
 
-Prompt approval is the default. Command, patch, filesystem, network, image, and non-empty session
-write operations wait for an explicit Pi decision and workspace-policy result. The optional bypass
-setting is explicit Pi-owned preauthorization for the fixed native allowlist; it is not a sandbox.
-Cancellation is checked before side effects and while awaiting approvals or external processes.
+Approval and filesystem scope are independent. `on-request + workspace` is the default. `never`
+means that the bridge never asks for approval: eligible operations execute and rejected operations
+return a bounded failure to the model. It does not grant filesystem access. `unrestricted` makes
+external paths explicitly handled by patch, workdir, image-read, and image-reference code eligible;
+`never + unrestricted` is the explicit dangerous full-access combination.
+
+Under workspace policy, an external structured-tool path requests one external-scope operation
+approval with `on-request`, but returns `workspace_escape` without prompting under `never`. Targets
+are resolved again after approval and must retain the approved canonical identity before mutation.
+Direct patch targets that are symlinks remain unsupported. Exact external paths may appear in the
+transient approval needed for an informed decision, but not in errors, diagnostics, logs, fixtures,
+or snapshots. Cancellation is checked before side effects and while awaiting approvals or external
+processes.
 
 ## Opaque compaction output
 

@@ -1,7 +1,7 @@
-# Bridge Protocol v6
+# Bridge Protocol v7
 
 The TypeScript host and Rust sidecar communicate over one bounded newline-delimited JSON channel.
-Protocol version `6` is a breaking identity: a v5 client or server is rejected during initialization
+Protocol version `7` is a breaking identity: a v6 client or server is rejected during initialization
 before provider registration.
 
 ## Frames
@@ -10,7 +10,7 @@ Every frame is one JSON object followed by a newline and is at most 16 MiB befor
 Request IDs are non-empty and at most 256 bytes. The first client frame is:
 
 ```json
-{"type":"initialize","requestId":"init-1","protocolVersion":6,"client":{"name":"pi-codex-adaptor","version":"0.0.0"}}
+{"type":"initialize","requestId":"init-1","protocolVersion":7,"client":{"name":"pi-codex-adaptor","version":"0.0.0"}}
 ```
 
 The server returns a handshake containing protocol identity, official Codex version/tag/source
@@ -62,22 +62,24 @@ Timeouts are bounded to 1-600,000 ms and return `timed_out` with an empty result
 the existing aborted lifecycle. Malformed output, incomplete terminal streams after native retry
 exhaustion, authentication failures, and capability failures create no checkpoint.
 
-## Errors and authorization
+## Errors, approval, and filesystem scope
 
 Errors contain only a category, bounded code/message, and retryability. Provider diagnostics are
 bounded before they cross the bridge. Request content, credentials, account data, local paths, and
 opaque output are never serialized into diagnostics or protocol errors.
 
-Native command, patch, filesystem, network, and non-empty session-write operations pause for a Pi
-approval request unless the explicit Pi-owned preauthorization policy applies. Approval decisions are
-advertised in the stable order `decline`, `cancel`, `allow_once`; session-scoped authorization is not
-part of the bridge contract.
+`tools.execute` carries host-owned `approvalPolicy` (`on-request | never`) and
+`filesystemAccessPolicy` (`workspace | unrestricted`). Model arguments cannot override either field.
+`session_write` carries only `approvalPolicy`. Native command, patch, filesystem, network, and
+non-empty session-write operations pause under `on-request`; `never` suppresses prompts but does not
+broaden filesystem scope. Approval decisions are advertised in the stable order `decline`, `cancel`,
+`allow_once`; session-scoped authorization is not part of the bridge contract.
 
 ## Fixtures and verification
 
 The canonical active fixtures are
-[`client-v6.jsonl`](../fixtures/bridge-protocol/client-v6.jsonl) and
-[`server-v6.jsonl`](../fixtures/bridge-protocol/server-v6.jsonl). Rust and TypeScript contract tests
-decode them, validate the v6 handshake, approval order, event backpressure, cancellation, and result
-envelopes. The v5 fixtures remain only as negative mixed-version startup cases; they are never active
+[`client-v7.jsonl`](../fixtures/bridge-protocol/client-v7.jsonl) and
+[`server-v7.jsonl`](../fixtures/bridge-protocol/server-v7.jsonl). Rust and TypeScript contract tests
+decode them, validate the v7 handshake, approval order, event backpressure, cancellation, and result
+envelopes. The v6 fixtures remain only as negative mixed-version startup cases; they are never active
 consumer fixtures and contain no removed operation or capability.

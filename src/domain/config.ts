@@ -4,14 +4,15 @@ export type Verbosity = "low" | "medium" | "high";
 export type TransportMode = "auto" | "sse";
 export type WebSearchMode = "disabled" | "cached" | "indexed" | "live";
 export type ShellSurface = "unified-exec" | "shell-command" | "disabled";
-export type ApprovalPolicy = "prompt" | "bypass";
+export type ApprovalPolicy = "on-request" | "never";
+export type FilesystemAccessPolicy = "workspace" | "unrestricted";
 
 export type CompactionConfig =
 	| { mode: "off" }
 	| { mode: "auto"; autoCompactTokenLimit: "model" | number };
 
 export interface CodexConfig {
-	schemaVersion: 2;
+	schemaVersion: 3;
 	activation: { providers: string[] };
 	tools: {
 		backgroundSessions: boolean;
@@ -20,7 +21,10 @@ export interface CodexConfig {
 			imageGeneration: AutoOrOff;
 		};
 	};
-	security: { approvalPolicy: ApprovalPolicy };
+	security: {
+		approvalPolicy: ApprovalPolicy;
+		filesystemAccessPolicy: FilesystemAccessPolicy;
+	};
 	codex: {
 		serviceTier: ServiceTier;
 		verbosity: Verbosity;
@@ -97,13 +101,13 @@ export interface ConfigSettingEvaluation {
 
 export function createDefaultConfig(): CodexConfig {
 	return {
-		schemaVersion: 2,
+		schemaVersion: 3,
 		activation: { providers: ["openai-codex"] },
 		tools: {
 			backgroundSessions: true,
 			optional: { viewImage: "auto", imageGeneration: "auto" },
 		},
-		security: { approvalPolicy: "prompt" },
+		security: { approvalPolicy: "on-request", filesystemAccessPolicy: "workspace" },
 		codex: {
 			serviceTier: "default",
 			verbosity: "low",
@@ -121,7 +125,7 @@ export function parseConfig(value: unknown): CodexConfig {
 	if (root === undefined) throw new ConfigurationError(issues);
 	exactKeys(root, ["schemaVersion", "activation", "tools", "security", "codex", "ui"], "$", issues);
 
-	const schemaVersion = literal(root.schemaVersion, 2, "schemaVersion", issues);
+	const schemaVersion = literal(root.schemaVersion, 3, "schemaVersion", issues);
 	const activation = parseActivation(root.activation, issues);
 	const tools = parseTools(root.tools, issues);
 	const security = parseSecurity(root.security, issues);
@@ -669,14 +673,22 @@ function parseSecurity(
 ): CodexConfig["security"] | undefined {
 	const security = record(value, "security", issues);
 	if (security === undefined) return undefined;
-	exactKeys(security, ["approvalPolicy"], "security", issues);
+	exactKeys(security, ["approvalPolicy", "filesystemAccessPolicy"], "security", issues);
 	const approvalPolicy = enumValue(
 		security.approvalPolicy,
-		["prompt", "bypass"],
+		["on-request", "never"],
 		"security.approvalPolicy",
 		issues,
 	);
-	return approvalPolicy === undefined ? undefined : { approvalPolicy };
+	const filesystemAccessPolicy = enumValue(
+		security.filesystemAccessPolicy,
+		["workspace", "unrestricted"],
+		"security.filesystemAccessPolicy",
+		issues,
+	);
+	return approvalPolicy === undefined || filesystemAccessPolicy === undefined
+		? undefined
+		: { approvalPolicy, filesystemAccessPolicy };
 }
 
 function parseCodex(

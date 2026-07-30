@@ -16,15 +16,27 @@ describe("versioned product configuration", () => {
 			mode: "auto",
 			autoCompactTokenLimit: "model",
 		});
-		expect(config.security).toEqual({ approvalPolicy: "prompt" });
+		expect(config.security).toEqual({
+			approvalPolicy: "on-request",
+			filesystemAccessPolicy: "workspace",
+		});
 	});
 
-	test("accepts the explicit prompt and bypass security policies", () => {
+	test("accepts the explicit approval and filesystem access policies", () => {
 		const config = createDefaultConfig();
-		expect(parseConfig(config).security.approvalPolicy).toBe("prompt");
+		expect(parseConfig(config).security.approvalPolicy).toBe("on-request");
 		expect(
-			parseConfig({ ...config, security: { approvalPolicy: "bypass" } }).security.approvalPolicy,
-		).toBe("bypass");
+			parseConfig({
+				...config,
+				security: { ...config.security, approvalPolicy: "never" },
+			}).security.approvalPolicy,
+		).toBe("never");
+		expect(
+			parseConfig({
+				...config,
+				security: { ...config.security, filesystemAccessPolicy: "unrestricted" },
+			}).security.filesystemAccessPolicy,
+		).toBe("unrestricted");
 	});
 
 	test("rejects missing and unknown security policies", () => {
@@ -36,6 +48,7 @@ describe("versioned product configuration", () => {
 			ConfigurationError,
 		);
 		expect(() => parseConfig({ ...config, security: {} })).toThrow(ConfigurationError);
+		expect(() => parseConfig({ ...config, schemaVersion: 2 })).toThrow(ConfigurationError);
 	});
 
 	test("accepts off compaction without an inactive threshold", () => {

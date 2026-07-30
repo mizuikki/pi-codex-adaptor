@@ -45,7 +45,7 @@ export interface DiagnosticsHostContext {
 
 export interface DiagnosticsSnapshot {
 	schemaVersion: 2;
-	configSchemaVersion: 2;
+	configSchemaVersion: 3;
 	activation: { providerCount: number; supportedApis: readonly string[] };
 	adaptor?: { version: string };
 	pi?: { version: string };
@@ -174,7 +174,7 @@ export function sanitizeSnapshot(snapshot: DiagnosticsSnapshot): DiagnosticsSnap
 
 	const sanitized: DiagnosticsSnapshot = {
 		schemaVersion: 2,
-		configSchemaVersion: 2,
+		configSchemaVersion: 3,
 		activation: {
 			providerCount:
 				Number.isSafeInteger(snapshot.activation?.providerCount) &&

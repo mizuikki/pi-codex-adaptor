@@ -19,6 +19,24 @@ describe("pull request contract", () => {
 				title: "feat(bridge): expose a new capability",
 			}),
 		).not.toThrow();
+
+		expect(() =>
+			verifyPullRequest({
+				authorType: "User",
+				labels: ["release:major"],
+				title: "feat(bridge)!: replace a versioned contract",
+			}),
+		).not.toThrow();
+	});
+
+	test("rejects a nonstandard breaking marker before the scope", () => {
+		expect(() =>
+			verifyPullRequest({
+				authorType: "User",
+				labels: ["release:major"],
+				title: "feat!(bridge): replace a versioned contract",
+			}),
+		).toThrow("Pull request title must follow Conventional Commits");
 	});
 
 	test("rejects human pull requests without exactly one release intent label", () => {

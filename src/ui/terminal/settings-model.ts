@@ -1,5 +1,6 @@
 import { parseKey as parseTuiKey } from "@earendil-works/pi-tui";
 
+import { securityPolicyWarning } from "../../application/security-policy.ts";
 import {
 	type CodexConfig,
 	createDefaultConfig,
@@ -29,7 +30,8 @@ export type SettingsDialog =
 	| { kind: "none" }
 	| { kind: "dirty-close"; focus: number }
 	| { kind: "reset-confirm"; focus: number }
-	| { kind: "approval-bypass-confirm"; focus: number }
+	| { kind: "approval-never-confirm"; focus: number }
+	| { kind: "filesystem-unrestricted-confirm"; focus: number }
 	| { kind: "help" };
 
 export type SettingsEffect =
@@ -42,7 +44,7 @@ export type SettingsEffect =
 	| { type: "edit-providers" }
 	| { type: "edit-auto-compact" }
 	| { type: "reset-defaults" }
-	| { type: "approval-bypass-enabled" };
+	| { type: "security-policy-enabled"; message: string };
 
 export type SettingsRowKind = "readonly" | "toggle" | "enum" | "action" | "number";
 
@@ -71,13 +73,14 @@ export interface SettingsModelOptions {
 
 const DIRTY_CLOSE_OPTIONS = ["Continue editing", "Discard changes", "Save"] as const;
 const RESET_OPTIONS = ["Cancel", "Reset to defaults"] as const;
-const APPROVAL_BYPASS_OPTIONS = ["Cancel", "Enable bypass"] as const;
+const APPROVAL_NEVER_OPTIONS = ["Cancel", "Enable never"] as const;
+const FILESYSTEM_UNRESTRICTED_OPTIONS = ["Cancel", "Enable unrestricted"] as const;
 const NAV_WIDTH = 20;
 
-export const APPROVAL_BYPASS_WARNING =
-	"Codex approval bypass is enabled: native commands run with the user's permissions, and workspace roots do not sandbox shell behavior.";
-const APPROVAL_BYPASS_CONFIRMATION =
-	"Bypass preauthorizes supported native operations per request. Native commands run with the user's permissions, and workspace roots do not sandbox shell behavior.";
+const APPROVAL_NEVER_CONFIRMATION =
+	"Never suppresses approval prompts. Failures return to the model, and native commands still run with the user's permissions.";
+const FILESYSTEM_UNRESTRICTED_CONFIRMATION =
+	"Unrestricted allows structured tools to use paths outside workspace roots. This is a path guardrail setting, not an OS sandbox.";
 
 export class SettingsModel {
 	#saved: CodexConfig;
@@ -267,7 +270,14 @@ export class SettingsModel {
 						"approvalPolicy",
 						"Approval policy",
 						this.#draft.security.approvalPolicy,
-						"Prompt is the safe default. Bypass preauthorizes supported native operations per request without an OS sandbox.",
+						"On-request is the safe default. Never suppresses operation approval prompts.",
+						"enum",
+					),
+					row(
+						"filesystemAccessPolicy",
+						"Filesystem access",
+						this.#draft.security.filesystemAccessPolicy,
+						"Workspace is the safe default. Unrestricted permits explicit structured-tool paths outside workspace roots.",
 						"enum",
 					),
 					row(
@@ -439,11 +449,17 @@ export class SettingsModel {
 		}
 		let changed = true;
 		if (current.id === "approvalPolicy") {
-			if (this.#draft.security.approvalPolicy === "prompt") {
-				this.#dialog = { kind: "approval-bypass-confirm", focus: 0 };
+			if (this.#draft.security.approvalPolicy === "on-request") {
+				this.#dialog = { kind: "approval-never-confirm", focus: 0 };
 				return { type: "none" };
 			}
-			this.#draft.security.approvalPolicy = "prompt";
+			this.#draft.security.approvalPolicy = "on-request";
+		} else if (current.id === "filesystemAccessPolicy") {
+			if (this.#draft.security.filesystemAccessPolicy === "workspace") {
+				this.#dialog = { kind: "filesystem-unrestricted-confirm", focus: 0 };
+				return { type: "none" };
+			}
+			this.#draft.security.filesystemAccessPolicy = "workspace";
 		} else if (current.id === "viewImage") {
 			this.#draft.tools.optional.viewImage = flipAutoOff(this.#draft.tools.optional.viewImage);
 		} else if (current.id === "imageGeneration") {
@@ -794,32 +810,46 @@ export class SettingsModel {
 				return { type: "reset-defaults" };
 			}
 		}
-		if (dialog.kind === "approval-bypass-confirm") {
+		if (
+			dialog.kind === "approval-never-confirm" ||
+			dialog.kind === "filesystem-unrestricted-confirm"
+		) {
+			const options =
+				dialog.kind === "approval-never-confirm"
+					? APPROVAL_NEVER_OPTIONS
+					: FILESYSTEM_UNRESTRICTED_OPTIONS;
 			if (key === "esc") {
 				this.#dialog = { kind: "none" };
 				return { type: "none" };
 			}
 			if (key === "up" || key === "k") {
 				this.#dialog = {
-					kind: "approval-bypass-confirm",
+					kind: dialog.kind,
 					focus: Math.max(0, dialog.focus - 1),
 				};
 				return { type: "none" };
 			}
 			if (key === "down" || key === "j") {
 				this.#dialog = {
-					kind: "approval-bypass-confirm",
-					focus: Math.min(APPROVAL_BYPASS_OPTIONS.length - 1, dialog.focus + 1),
+					kind: dialog.kind,
+					focus: Math.min(options.length - 1, dialog.focus + 1),
 				};
 				return { type: "none" };
 			}
 			if (key === "enter" || key === "space") {
-				const selected = APPROVAL_BYPASS_OPTIONS[dialog.focus] ?? APPROVAL_BYPASS_OPTIONS[0];
-				if (selected === "Enable bypass") {
-					this.#draft.security.approvalPolicy = "bypass";
+				const selected = options[dialog.focus] ?? options[0];
+				if (selected !== "Cancel") {
+					if (dialog.kind === "approval-never-confirm") {
+						this.#draft.security.approvalPolicy = "never";
+					} else {
+						this.#draft.security.filesystemAccessPolicy = "unrestricted";
+					}
 					this.#markDirty();
 					this.#dialog = { kind: "none" };
-					return { type: "approval-bypass-enabled" };
+					return {
+						type: "security-policy-enabled",
+						message: securityPolicyWarning(this.#draft) ?? "Codex security policy changed.",
+					};
 				}
 				this.#dialog = { kind: "none" };
 				return { type: "none" };
@@ -976,14 +1006,25 @@ export class SettingsModel {
 			lines.push("", fitLine("Default: Cancel", width));
 			return lines;
 		}
-		if (this.#dialog.kind === "approval-bypass-confirm") {
+		if (
+			this.#dialog.kind === "approval-never-confirm" ||
+			this.#dialog.kind === "filesystem-unrestricted-confirm"
+		) {
+			const approval = this.#dialog.kind === "approval-never-confirm";
+			const options = approval ? APPROVAL_NEVER_OPTIONS : FILESYSTEM_UNRESTRICTED_OPTIONS;
 			const lines = [
-				fitLine("Enable approval bypass", width),
+				fitLine(
+					approval ? "Enable approval never" : "Enable unrestricted filesystem access",
+					width,
+				),
 				"",
-				...wrapText(APPROVAL_BYPASS_CONFIRMATION, width),
+				...wrapText(
+					approval ? APPROVAL_NEVER_CONFIRMATION : FILESYSTEM_UNRESTRICTED_CONFIRMATION,
+					width,
+				),
 				"",
 			];
-			for (const [index, option] of APPROVAL_BYPASS_OPTIONS.entries()) {
+			for (const [index, option] of options.entries()) {
 				const prefix = index === this.#dialog.focus ? ">" : " ";
 				lines.push(fitLine(`${prefix} ${option}`, width));
 			}

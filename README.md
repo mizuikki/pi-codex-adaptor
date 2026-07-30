@@ -63,9 +63,11 @@ bridge accepts `0.0.0`; packaged launches require a verified `native/bin/<target
 
 ## Configuration and security
 
-The only supported configuration file is `~/.pi/agent/pi-codex-adaptor.json`. Its safe default is
-prompt approval. The explicit bypass setting is Pi-owned per-request preauthorization, not an OS
-sandbox; native commands still run with the user's permissions.
+The only supported configuration file is `~/.pi/agent/pi-codex-adaptor.json` at exact schema version
+3. Its safe default is `on-request + workspace`. Approval policy (`on-request | never`) and explicit
+structured-tool filesystem access (`workspace | unrestricted`) are independent;
+`never + unrestricted` is the dangerous full-access combination. These controls are not an OS
+sandbox, shell text is not path constrained, and native commands run with the user's permissions.
 
 Credentials, prompts, opaque output, account data, and absolute user paths are excluded from logs,
 diagnostics, fixtures, and errors. The package does not implement account usage, rate-limit windows,

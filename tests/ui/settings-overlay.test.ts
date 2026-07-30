@@ -14,12 +14,12 @@ import { openSettingsOverlay, SettingsOverlay } from "../../src/ui/terminal/sett
 function diagnostics(): DiagnosticsSnapshot {
 	return {
 		schemaVersion: 2,
-		configSchemaVersion: 2,
+		configSchemaVersion: 3,
 		activation: {
 			providerCount: 1,
 			supportedApis: ["openai-responses", "openai-codex-responses"],
 		},
-		bridge: { bridgeProtocolVersion: 5, capabilities: ["responses"] },
+		bridge: { bridgeProtocolVersion: 7, capabilities: ["responses"] },
 	};
 }
 
@@ -172,7 +172,7 @@ function createOverlayForDialog(
 		baseline: "0.146.0",
 		provider: "openai-codex",
 		model: "test-model",
-		bridge: "protocol v6",
+		bridge: "protocol v7",
 	});
 	const overlay = new SettingsOverlay(model, service, ctx, diagnostics(), exporter, () => {});
 	return { ctx, model, overlay };
@@ -201,7 +201,7 @@ describe("settings overlay disposal", () => {
 			baseline: "0.146.0",
 			provider: "openai-codex",
 			model: "test-model",
-			bridge: "protocol v6",
+			bridge: "protocol v7",
 		});
 		let done = false;
 		const overlay = new SettingsOverlay(model, service, ctx, diagnostics(), undefined, () => {
@@ -231,7 +231,7 @@ describe("settings overlay disposal", () => {
 			baseline: "0.146.0",
 			provider: "openai-codex",
 			model: "test-model",
-			bridge: "protocol v6",
+			bridge: "protocol v7",
 		});
 		const overlay = new SettingsOverlay(model, service, ctx, diagnostics(), undefined, () => {
 			done = true;
@@ -266,7 +266,7 @@ describe("settings overlay disposal", () => {
 			baseline: "0.146.0",
 			provider: "openai-codex",
 			model: "test-model",
-			bridge: "protocol v6",
+			bridge: "protocol v7",
 		});
 		const overlay = new SettingsOverlay(model, service, ctx, diagnostics(), undefined, () => {});
 
@@ -288,7 +288,7 @@ describe("settings overlay disposal", () => {
 			baseline: "0.146.0",
 			provider: "openai-codex",
 			model: "test-model",
-			bridge: "protocol v6",
+			bridge: "protocol v7",
 		});
 		const overlay = new SettingsOverlay(model, service, ctx, diagnostics(), undefined, () => {});
 		model.moveCategory(1);
@@ -300,14 +300,14 @@ describe("settings overlay disposal", () => {
 		expect(model.state).toBe("saved");
 	});
 
-	test("approval bypass confirmation warns only after explicit enablement", async () => {
+	test("approval never confirmation warns only after explicit enablement", async () => {
 		const service = createService();
 		const ctx = createCtx();
 		const model = new SettingsModel(createDefaultConfig(), {
 			baseline: "0.146.0",
 			provider: "openai-codex",
 			model: "test-model",
-			bridge: "protocol v6",
+			bridge: "protocol v7",
 		});
 		const overlay = new SettingsOverlay(model, service, ctx, diagnostics(), undefined, () => {});
 
@@ -315,17 +315,17 @@ describe("settings overlay disposal", () => {
 		model.moveFocus(1);
 		overlay.handleInput("\r");
 		await Promise.resolve();
-		expect(model.dialog).toEqual({ kind: "approval-bypass-confirm", focus: 0 });
+		expect(model.dialog).toEqual({ kind: "approval-never-confirm", focus: 0 });
 		expect(ctx.notifications).toEqual([]);
 
 		overlay.handleInput("j");
 		overlay.handleInput("\r");
 		await Promise.resolve();
-		expect(model.draft.security.approvalPolicy).toBe("bypass");
+		expect(model.draft.security.approvalPolicy).toBe("never");
 		expect(model.state).toBe("dirty");
 		expect(ctx.notifications).toHaveLength(1);
 		expect(ctx.notifications[0]).toContain("user's permissions");
-		expect(ctx.notifications[0]).toContain("workspace roots do not sandbox shell behavior");
+		expect(ctx.notifications[0]).toContain("approval policy is never");
 	});
 
 	test("blocks manual compact while coordinator is busy", async () => {
@@ -337,7 +337,7 @@ describe("settings overlay disposal", () => {
 			baseline: "0.146.0",
 			provider: "openai-codex",
 			model: "test-model",
-			bridge: "protocol v6",
+			bridge: "protocol v7",
 		});
 		const overlay = new SettingsOverlay(
 			model,
@@ -369,7 +369,7 @@ describe("settings overlay disposal", () => {
 			baseline: "0.146.0",
 			provider: "openai-codex",
 			model: "test-model",
-			bridge: "protocol v6",
+			bridge: "protocol v7",
 		});
 		const overlay = new SettingsOverlay(
 			model,
@@ -401,7 +401,7 @@ describe("settings overlay disposal", () => {
 			baseline: "0.146.0",
 			provider: "custom-codex",
 			model: "test-model",
-			bridge: "protocol v6",
+			bridge: "protocol v7",
 			activationModel: { provider: "custom-codex", api: "openai-responses" },
 		});
 		const overlay = new SettingsOverlay(model, service, ctx, diagnostics(), undefined, () => {});
@@ -444,7 +444,7 @@ describe("settings overlay disposal", () => {
 			baseline: "0.146.0",
 			provider: "custom-codex",
 			model: "test-model",
-			bridge: "protocol v6",
+			bridge: "protocol v7",
 			activationModel: { provider: "custom-codex", api: "openai-responses" },
 		});
 		const overlay = new SettingsOverlay(model, service, ctx, diagnostics(), undefined, () => {});

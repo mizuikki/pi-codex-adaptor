@@ -111,7 +111,7 @@ describe("effective capability application use case", () => {
 			config: {
 				...config,
 				activation: { providers: ["custom-provider"] },
-				security: { approvalPolicy: "bypass" },
+				security: { ...config.security, approvalPolicy: "never" },
 				codex: {
 					...config.codex,
 					serviceTier: "priority",

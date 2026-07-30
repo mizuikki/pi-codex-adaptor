@@ -3,7 +3,7 @@ import type { TSchema } from "typebox";
 import type {
 	CodexApprovalRequest,
 	CodexRuntime,
-	NativeAuthorization,
+	NativeApprovalPolicy,
 } from "../../application/codex-runtime.ts";
 import type { ConfigurationService } from "../../application/configuration.ts";
 import type { ProviderActivationPolicy } from "../../application/provider-activation.ts";
@@ -11,6 +11,7 @@ import {
 	capabilityCacheKey,
 	ResolveEffectiveCapabilities,
 } from "../../application/resolve-effective-capabilities.ts";
+import { securityPolicyWarning } from "../../application/security-policy.ts";
 import { UpdatePlanUseCase } from "../../application/update-plan.ts";
 import type { ManagedToolName } from "../../domain/capability.ts";
 import type { ApprovalPolicy, CodexConfig } from "../../domain/config.ts";
@@ -18,7 +19,6 @@ import type { PlanUpdate } from "../../domain/plan.ts";
 import { resolveProviderActivation } from "../../domain/provider-activation.ts";
 import { requestCodexApproval } from "../../ui/terminal/approval-prompt.ts";
 import { createCodexToolRenderer } from "../../ui/terminal/codex-tool-renderer.ts";
-import { APPROVAL_BYPASS_WARNING } from "../../ui/terminal/settings-model.ts";
 import { responseItemsFromMessages } from "./codex-provider.ts";
 import { formatCodexStatus } from "./codex-status.ts";
 import { codexSkillsPrompt } from "./codex-system-prompt.ts";
@@ -38,7 +38,7 @@ export function registerCodexTools(
 	capabilities = new ResolveEffectiveCapabilities(runtime),
 	profile: CodexToolProfileCoordinator = createCodexToolProfile(pi),
 ): void {
-	let startupBypassWarningShown = false;
+	let startupSecurityWarningShown = false;
 	registerPlanTool(pi, activation);
 	registerNativeTool(pi, runtime, configuration, activation, "exec_command", "Execute command");
 	registerNativeTool(pi, runtime, configuration, activation, "write_stdin", "Write to session");
@@ -108,13 +108,12 @@ export function registerCodexTools(
 		try {
 			const config = configOverride ?? (await configuration.load());
 			if (generation !== activationGeneration) return;
-			if (
-				startupWarning &&
-				!startupBypassWarningShown &&
-				config.security.approvalPolicy === "bypass"
-			) {
-				startupBypassWarningShown = true;
-				ctx.ui.notify(APPROVAL_BYPASS_WARNING, "warning");
+			if (startupWarning && !startupSecurityWarningShown) {
+				const warning = securityPolicyWarning(config);
+				if (warning !== undefined) {
+					startupSecurityWarningShown = true;
+					ctx.ui.notify(warning, "warning");
+				}
 			}
 			if (selected === undefined || !providerActive(selected, config)) {
 				profile.restorePi();
@@ -168,7 +167,13 @@ export function registerCodexTools(
 			lastHealthyModelIdentity = selectedIdentity;
 			setStatus(
 				ctx,
-				config.ui.status ? formatCodexStatus(snapshot, config.security.approvalPolicy) : undefined,
+				config.ui.status
+					? formatCodexStatus(
+							snapshot,
+							config.security.approvalPolicy,
+							config.security.filesystemAccessPolicy,
+						)
+					: undefined,
 			);
 		} catch {
 			if (generation === activationGeneration) {
@@ -213,7 +218,7 @@ export function registerCodexTools(
 		lastHealthyCapabilityKey = undefined;
 		lastHealthyModelIdentity = undefined;
 		activeContext = undefined;
-		startupBypassWarningShown = false;
+		startupSecurityWarningShown = false;
 		unsubscribeConfig();
 	});
 }
@@ -264,7 +269,8 @@ function registerStandaloneWebTool(
 				}),
 				workdir: ctx.cwd,
 				workspaceRoots: [ctx.cwd],
-				authorization: nativeAuthorizationFor(config.security.approvalPolicy),
+				approvalPolicy: nativeApprovalPolicyFor(config.security.approvalPolicy),
+				filesystemAccessPolicy: config.security.filesystemAccessPolicy,
 				...(signal === undefined ? {} : { signal }),
 				onApproval: (approval) => requestApproval(ctx, approval, signal),
 			});
@@ -309,7 +315,8 @@ function registerImageGenerationTool(
 				argumentsValue,
 				workdir: ctx.cwd,
 				workspaceRoots: [ctx.cwd],
-				authorization: nativeAuthorizationFor(config.security.approvalPolicy),
+				approvalPolicy: nativeApprovalPolicyFor(config.security.approvalPolicy),
+				filesystemAccessPolicy: config.security.filesystemAccessPolicy,
 				...(signal === undefined ? {} : { signal }),
 				onApproval: (approval) => requestApproval(ctx, approval, signal),
 			});
@@ -407,7 +414,8 @@ function registerNativeTool(
 				),
 				workdir: workdirFrom(params, ctx.cwd),
 				workspaceRoots: [ctx.cwd],
-				authorization: nativeAuthorizationFor(config.security.approvalPolicy),
+				approvalPolicy: nativeApprovalPolicyFor(config.security.approvalPolicy),
+				filesystemAccessPolicy: config.security.filesystemAccessPolicy,
 				...(signal === undefined ? {} : { signal }),
 				onEvent: (event) => {
 					const delta = toolOutputDelta(event);
@@ -458,12 +466,12 @@ function modelVisibleNativeToolResult(
 	return `${output}${output.endsWith("\n") ? "" : "\n"}${serializedMetadata}`;
 }
 
-export function nativeAuthorizationFor(policy: ApprovalPolicy): NativeAuthorization {
+export function nativeApprovalPolicyFor(policy: ApprovalPolicy): NativeApprovalPolicy {
 	switch (policy) {
-		case "prompt":
-			return "require_approval";
-		case "bypass":
-			return "preauthorized";
+		case "on-request":
+			return "on-request";
+		case "never":
+			return "never";
 	}
 }
 

@@ -117,8 +117,9 @@ export function remoteCompactionV2Context(
 	};
 }
 
-/** Authorization selected by Pi for one native request. */
-export type NativeAuthorization = "require_approval" | "preauthorized";
+/** Approval behavior selected by Pi for one native request. */
+export type NativeApprovalPolicy = "on-request" | "never";
+export type NativeFilesystemAccessPolicy = "workspace" | "unrestricted";
 
 export interface CodexApprovalRequest {
 	approvalId: string;
@@ -136,7 +137,8 @@ export interface ExecuteToolOptions {
 	argumentsValue: Record<string, unknown>;
 	workdir: string;
 	workspaceRoots: readonly string[];
-	authorization: NativeAuthorization;
+	approvalPolicy: NativeApprovalPolicy;
+	filesystemAccessPolicy: NativeFilesystemAccessPolicy;
 	signal?: AbortSignal;
 	onEvent?(event: unknown): void | Promise<void>;
 	onApproval?(

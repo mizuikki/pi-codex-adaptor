@@ -4,7 +4,7 @@
 
 The native implementation is pinned to OpenAI Codex `0.146.0`, tag `rust-v0.146.0`, peeled source
 commit `e363b08c9175ac1cbe5893615dd2cb9ddf95043b`, and Rust `1.95.0`. The TypeScript/native JSONL
-bridge is protocol version `6`. A handshake mismatch is fatal before provider registration.
+bridge is protocol version `7`. A handshake mismatch is fatal before provider registration.
 
 The paired Pi fork remains session format version `3`, common extension ABI version `1`, and
 provider payload compaction API version `1`. Remote checkpoint persistence uses the additive
@@ -124,20 +124,25 @@ provider-specific branches.
 
 ## Protocol and configuration
 
-Protocol v6 is bounded JSONL with request IDs, cancellation, acknowledgement/backpressure, approval,
+Protocol v7 is bounded JSONL with request IDs, cancellation, acknowledgement/backpressure, approval,
 and terminal results. It contains `responses.create`, `responses.compact`, `models.resolve`,
 `tools.resolve`, `tools.execute`, and `diagnostics.read`; the removed context-summary operation is not
 part of the contract. Capabilities include `remote_compaction_v2` and `compact_endpoint`.
 
-The supported configuration is schema version `2` in
-`~/.pi/agent/pi-codex-adaptor.json`. Compaction is `off` or `auto`, with a model-derived or positive
-configured threshold below the model context window. The package is private and is not published.
+The supported configuration is exact schema version `3` in
+`~/.pi/agent/pi-codex-adaptor.json`. `security.approvalPolicy` is `on-request | never`, independently
+from `security.filesystemAccessPolicy` as `workspace | unrestricted`. Defaults are
+`on-request + workspace`; `never + unrestricted` is the explicit dangerous full-access combination.
+Schema v2 is rejected and never migrated automatically. Compaction is `off` or `auto`, with a
+model-derived or positive configured threshold below the model context window. The package is private
+and is not published.
 
 ## Privacy and non-goals
 
 Credentials enter native code only in bounded request-scoped connections. Prompts, messages, headers,
 opaque output, account data, and absolute user paths do not enter diagnostics, fixtures, snapshots, or
-errors. Native commands run with the user's permissions; bypass approval is not an OS sandbox.
+errors. Native commands run with the user's permissions. Filesystem access policy governs only paths
+explicitly handled by structured tools; neither policy axis is an OS sandbox.
 
 The product does not add account usage, rate-limit windows, reset-credit handling, app-server agent
 lifecycle, release publication, or registry installation automation.

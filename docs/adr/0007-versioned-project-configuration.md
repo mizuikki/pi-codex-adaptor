@@ -1,6 +1,6 @@
 # ADR 0007: Versioned Project Configuration
 
-- Status: Accepted
+- Status: Superseded by ADR 0021
 - Date: 2026-07-14
 
 ## Context
@@ -9,6 +9,9 @@ Configuration needs deterministic validation, transactional editing, and a stabl
 domain objects and UI state.
 
 ## Decision
+
+This section records the historical schema-v2 decision. ADR 0021 replaces it with exact schema v3;
+there is intentionally no automatic migration.
 
 Own one exact schema at `~/.pi/agent/pi-codex-adaptor.json`, using `schemaVersion: 2`. The schema
 contains `activation.providers`, the `tools` group, required `security.approvalPolicy` with

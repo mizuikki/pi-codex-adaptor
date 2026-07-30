@@ -33,7 +33,7 @@ describe("settings view model", () => {
 			baseline: "0.146.0",
 			provider: "openai-codex",
 			model: "fixture-model",
-			bridge: "protocol v6",
+			bridge: "protocol v7",
 		});
 
 		view.setCategory("Tools");
@@ -67,13 +67,18 @@ describe("settings view model", () => {
 		expect(view.state).toBe("dirty");
 	});
 
-	test("exposes the approval policy in Tools and keeps prompt as the safe default", () => {
+	test("exposes independent security policies in Tools with safe defaults", () => {
 		const view = model();
 		view.setCategory("Tools");
 		const policy = view.rows().find((row) => row.id === "approvalPolicy");
 		expect(policy).toMatchObject({
 			label: "Approval policy",
-			value: "prompt",
+			value: "on-request",
+			kind: "enum",
+		});
+		expect(view.rows().find((row) => row.id === "filesystemAccessPolicy")).toMatchObject({
+			label: "Filesystem access",
+			value: "workspace",
 			kind: "enum",
 		});
 	});

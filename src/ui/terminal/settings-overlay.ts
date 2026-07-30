@@ -20,7 +20,7 @@ import {
 	type ConfigSettingEvaluation,
 	ConfigurationError,
 } from "../../domain/config.ts";
-import { APPROVAL_BYPASS_WARNING, type SettingsEffect, SettingsModel } from "./settings-model.ts";
+import { type SettingsEffect, SettingsModel } from "./settings-model.ts";
 
 export async function openSettingsOverlay(
 	ctx: ExtensionCommandContext,
@@ -266,8 +266,8 @@ export class SettingsOverlay {
 			case "reset-defaults":
 				await this.#resetDefaults();
 				return;
-			case "approval-bypass-enabled":
-				this.#ctx.ui.notify(APPROVAL_BYPASS_WARNING, "warning");
+			case "security-policy-enabled":
+				this.#ctx.ui.notify(effect.message, "warning");
 				return;
 		}
 	}

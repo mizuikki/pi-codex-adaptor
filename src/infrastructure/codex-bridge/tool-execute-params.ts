@@ -5,7 +5,10 @@
  * connections are attached separately by the runtime for network tools.
  */
 
-import type { NativeAuthorization } from "../../application/codex-runtime.ts";
+import type {
+	NativeApprovalPolicy,
+	NativeFilesystemAccessPolicy,
+} from "../../application/codex-runtime.ts";
 
 const TOOL_EXECUTE_ARGUMENT_KEYS = [
 	"command",
@@ -51,7 +54,8 @@ export interface ToolsExecuteParamsInput {
 	argumentsValue: Record<string, unknown>;
 	workdir: string;
 	workspaceRoots: readonly string[];
-	authorization: NativeAuthorization;
+	approvalPolicy: NativeApprovalPolicy;
+	filesystemAccessPolicy: NativeFilesystemAccessPolicy;
 }
 
 /**
@@ -64,7 +68,8 @@ export function buildToolsExecuteParams(input: ToolsExecuteParamsInput): Record<
 		tool: input.tool,
 		workdir: input.workdir,
 		workspaceRoots: [...input.workspaceRoots],
-		authorization: input.authorization,
+		approvalPolicy: input.approvalPolicy,
+		filesystemAccessPolicy: input.filesystemAccessPolicy,
 	};
 	for (const key of TOOL_EXECUTE_ARGUMENT_KEYS) {
 		if (!Object.hasOwn(input.argumentsValue, key)) {
