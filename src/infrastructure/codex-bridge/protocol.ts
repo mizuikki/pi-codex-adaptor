@@ -62,11 +62,11 @@ const ApprovalDecision = Type.Union([
 	Type.Literal("cancel"),
 ]);
 
-export const NativeAuthorizationSchema = Type.Union([
-	Type.Literal("require_approval"),
-	Type.Literal("preauthorized"),
+export const NativeApprovalPolicySchema = Type.Union([
+	Type.Literal("on-request"),
+	Type.Literal("never"),
 ]);
-export type NativeAuthorization = Type.Static<typeof NativeAuthorizationSchema>;
+export type NativeApprovalPolicy = Type.Static<typeof NativeApprovalPolicySchema>;
 
 const RequestMethod = Type.Union([
 	Type.Literal("responses.create"),
@@ -124,7 +124,7 @@ export const ClientMessageSchema = Type.Union([
 			type: Type.Literal("session_write"),
 			requestId: RequestId,
 			sessionId: RequestId,
-			authorization: NativeAuthorizationSchema,
+			approvalPolicy: NativeApprovalPolicySchema,
 			data: Type.String(),
 		},
 		{ additionalProperties: false },

@@ -3,6 +3,14 @@ import { describe, expect, test } from "bun:test";
 import { ApprovalModel } from "../../src/ui/terminal/approval-model.ts";
 
 describe("approval view model", () => {
+	test("marks external patch approvals unmistakably", () => {
+		const model = new ApprovalModel({
+			operation: "patch",
+			summary: "Modify one file",
+			details: { scope: "external", paths: ["<external-path>"] },
+		});
+		expect(model.title).toBe("Approve external patch");
+	});
 	test("defaults focus to decline and keeps allow last", () => {
 		const view = new ApprovalModel(
 			{

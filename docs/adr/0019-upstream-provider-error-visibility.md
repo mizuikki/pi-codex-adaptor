@@ -26,7 +26,7 @@ cancellation handling. This blocks the default compactor and creates no compacti
 
 ## Consequences
 
-- Bridge protocol v6 retains the same bounded error shape.
+- Bridge protocol v7 retains the same bounded error shape.
 - The common extension SDK remains version 1. Hosts without compaction-failure-result API v1 fail
   closed before adaptor registration; the provider-payload API remains version 1.
 - Pi owns compaction formatting, event delivery, and UI rendering. The adaptor no longer calls

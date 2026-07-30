@@ -169,7 +169,8 @@ try {
 			"tools.execute",
 			{
 				tool: "shell_command",
-				authorization: "require_approval",
+				approvalPolicy: "on-request",
+				filesystemAccessPolicy: "workspace",
 				command: process.platform === "win32" ? "echo fixture" : "printf fixture",
 				workdir: repositoryRoot,
 				workspaceRoots: [repositoryRoot],
@@ -191,13 +192,14 @@ try {
 			throw new Error("Native shell execution did not complete");
 		}
 
-		let bypassApproval = false;
-		const bypass = await client.request(
+		let neverApproval = false;
+		const never = await client.request(
 			"tools.execute",
 			{
 				tool: "shell_command",
-				authorization: "preauthorized",
-				command: process.platform === "win32" ? "echo fixture-bypass" : "printf fixture-bypass",
+				approvalPolicy: "never",
+				filesystemAccessPolicy: "workspace",
+				command: process.platform === "win32" ? "echo fixture-never" : "printf fixture-never",
 				workdir: repositoryRoot,
 				workspaceRoots: [repositoryRoot],
 				timeoutMs: 10_000,
@@ -207,13 +209,13 @@ try {
 			},
 			{
 				onApprovalRequest: (approval) => {
-					bypassApproval = true;
+					neverApproval = true;
 					return client.decideApproval(approval.approvalId, "decline");
 				},
 			},
 		);
-		if (bypass.status !== "completed" || bypassApproval) {
-			throw new Error("Native preauthorized shell execution did not bypass approval");
+		if (never.status !== "completed" || neverApproval) {
+			throw new Error("Native never-policy shell execution unexpectedly requested approval");
 		}
 	} finally {
 		await client.shutdown();

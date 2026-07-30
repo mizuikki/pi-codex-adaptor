@@ -20,11 +20,16 @@ implementations. Pi-specific types stay in `src/integration/pi` and UI code.
 
 ## Native boundary
 
-TypeScript communicates with Rust only through the bounded protocol version 6. The bridge methods are
+TypeScript communicates with Rust only through the bounded protocol version 7. The bridge methods are
 `responses.create`, `responses.compact`, `models.resolve`, `tools.resolve`, `tools.execute`, and
 `diagnostics.read`. Native code owns Responses request construction, SSE/WebSocket parsing, compact
 endpoint calls, retry classification, backoff, cancellation, PTY/session handling, and patch
 execution. TypeScript validates only adaptor-owned envelopes and checkpoint data.
+
+Configuration schema v3 supplies independent approval and filesystem access policies. Pi snapshots
+both values after model-argument allowlisting, Rust resolves and classifies explicit paths, and Pi
+owns any `on-request` decision. Rust re-resolves approved patch and image targets before side effects.
+The path checks are structured-tool guardrails, not an OS sandbox, and do not inspect shell text.
 
 Before any Responses or compact request leaves the bridge, and before standalone `web.run` prepares
 its search input, native code applies the selected model's truncation policy to every function/custom

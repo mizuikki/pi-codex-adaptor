@@ -1,5 +1,5 @@
 import type { EffectiveCapabilitySnapshot } from "../../application/resolve-effective-capabilities.ts";
-import type { ApprovalPolicy } from "../../domain/config.ts";
+import type { ApprovalPolicy, FilesystemAccessPolicy } from "../../domain/config.ts";
 
 type CodexStatusSnapshot = Pick<EffectiveCapabilitySnapshot, "webSurface"> & {
 	shell: Pick<EffectiveCapabilitySnapshot["shell"], "primary" | "sessionSurface">;
@@ -9,13 +9,16 @@ type CodexStatusSnapshot = Pick<EffectiveCapabilitySnapshot, "webSurface"> & {
 export function formatCodexStatus(
 	snapshot: CodexStatusSnapshot,
 	approvalPolicy: ApprovalPolicy,
+	filesystemAccessPolicy: FilesystemAccessPolicy,
 ): string {
 	return [
 		"Codex",
 		shellToken(snapshot.shell.primary),
 		sessionToken(snapshot.shell.sessionSurface),
 		webToken(snapshot),
-		approvalPolicy === "bypass" ? "!bypass" : undefined,
+		approvalPolicy === "never" ? "!never" : undefined,
+		filesystemAccessPolicy === "unrestricted" ? "!fs" : undefined,
+		approvalPolicy === "never" && filesystemAccessPolicy === "unrestricted" ? "!full" : undefined,
 	]
 		.filter((token): token is string => token !== undefined)
 		.join(" ");

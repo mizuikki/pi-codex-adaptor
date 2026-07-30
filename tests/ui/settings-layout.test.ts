@@ -9,7 +9,7 @@ function createView(): SettingsModel {
 		baseline: "0.146.0",
 		provider: "openai-codex-with-a-deliberately-long-provider-identifier",
 		model: "gpt-model-with-a-deliberately-long-model-identifier",
-		bridge: "protocol v6",
+		bridge: "protocol v7",
 		capabilities: ["responses", "compact", "unified-exec"],
 		disabledReasons: {
 			imageGeneration: "Unavailable: provider does not advertise image generation.",
@@ -114,6 +114,7 @@ describe("settings layout snapshots", () => {
 	test("disabled capability rows expose textual reasons", () => {
 		const view = createView();
 		view.setCategory("Tools");
+		view.moveFocus(1);
 		view.moveFocus(1);
 		view.moveFocus(1);
 		view.moveFocus(1);

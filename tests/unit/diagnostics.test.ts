@@ -26,7 +26,7 @@ describe("redacted diagnostics", () => {
 
 		expect(snapshot).toEqual({
 			schemaVersion: 2,
-			configSchemaVersion: 2,
+			configSchemaVersion: 3,
 			activation: {
 				providerCount: 1,
 				supportedApis: ["openai-responses", "openai-codex-responses"],
@@ -105,7 +105,7 @@ describe("redacted diagnostics", () => {
 
 		expect(snapshot).toEqual({
 			schemaVersion: 2,
-			configSchemaVersion: 2,
+			configSchemaVersion: 3,
 			activation: {
 				providerCount: 1,
 				supportedApis: ["openai-responses", "openai-codex-responses"],
@@ -191,7 +191,7 @@ describe("redacted diagnostics", () => {
 		expect(captured).toHaveLength(1);
 		expect(captured[0]).toEqual({
 			schemaVersion: 2,
-			configSchemaVersion: 2,
+			configSchemaVersion: 3,
 			activation: {
 				providerCount: 1,
 				supportedApis: ["openai-responses", "openai-codex-responses"],
@@ -221,7 +221,7 @@ describe("redacted diagnostics", () => {
 	test("sanitizeSnapshot never serializes configuration values", () => {
 		const snapshot = sanitizeSnapshot({
 			schemaVersion: 2,
-			configSchemaVersion: 2,
+			configSchemaVersion: 3,
 			activation: {
 				providerCount: 1,
 				supportedApis: ["openai-responses", "openai-codex-responses"],

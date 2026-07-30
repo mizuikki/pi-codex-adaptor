@@ -13,12 +13,12 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 /// Current bridge protocol version.
-pub const BRIDGE_PROTOCOL_VERSION: u32 = 6;
+pub const BRIDGE_PROTOCOL_VERSION: u32 = 7;
 
 /// Maximum JSON payload size for one JSONL frame, excluding the line terminator.
 pub const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
 
-/// Maximum number of unacknowledged stream events advertised by protocol v6.
+/// Maximum number of unacknowledged stream events advertised by protocol v7.
 pub const MAX_PENDING_EVENTS: u32 = 256;
 
 /// Official Codex release used by the native implementation.
@@ -73,7 +73,7 @@ pub enum ClientMessage {
     SessionWrite {
         request_id: String,
         session_id: String,
-        authorization: NativeAuthorization,
+        approval_policy: NativeApprovalPolicy,
         data: String,
     },
     /// Changes the terminal dimensions of a running native session.
@@ -171,22 +171,30 @@ pub enum ApprovalDecision {
     Cancel,
 }
 
-/// Authorization selected by Pi for one native request.
+/// Approval behavior selected by Pi for one native request.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum NativeApprovalPolicy {
+    OnRequest,
+    Never,
+}
+
+/// Filesystem scope selected by Pi for explicit native paths.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum NativeAuthorization {
-    RequireApproval,
-    Preauthorized,
+pub enum FilesystemAccessPolicy {
+    Workspace,
+    Unrestricted,
 }
 
 impl ApprovalDecision {
-    /// Decisions advertised on every approval request in protocol v6.
+    /// Decisions advertised on every approval request in protocol v7.
     ///
     /// Order is intentional: Decline, Cancel, then `AllowOnce`. Session-scoped allow is never
     /// advertised because Pi has no session approval policy surface.
     pub const ADVERTISED: [Self; 3] = [Self::Decline, Self::Cancel, Self::AllowOnce];
 
-    /// Returns whether this decision is advertised to Pi for protocol v6 approvals.
+    /// Returns whether this decision is advertised to Pi for protocol v7 approvals.
     #[must_use]
     pub const fn is_advertised(self) -> bool {
         matches!(self, Self::Decline | Self::Cancel | Self::AllowOnce)
@@ -384,7 +392,7 @@ impl Error for ProtocolCodecError {
 /// # Errors
 ///
 /// Returns [`ProtocolCodecError`] when the frame is empty, oversized, contains more than one record,
-/// or does not match the protocol v6 client envelope.
+/// or does not match the protocol v7 client envelope.
 pub fn decode_client_frame(frame: &[u8]) -> Result<ClientMessage, ProtocolCodecError> {
     decode_frame(frame)
 }
@@ -394,7 +402,7 @@ pub fn decode_client_frame(frame: &[u8]) -> Result<ClientMessage, ProtocolCodecE
 /// # Errors
 ///
 /// Returns [`ProtocolCodecError`] when the frame is empty, oversized, contains more than one record,
-/// or does not match the protocol v6 server envelope.
+/// or does not match the protocol v7 server envelope.
 pub fn decode_server_frame(frame: &[u8]) -> Result<ServerMessage, ProtocolCodecError> {
     decode_frame(frame)
 }
@@ -473,7 +481,7 @@ mod tests {
 
     #[test]
     fn decodes_every_recorded_client_contract_frame() {
-        let fixture = include_bytes!("../../../../fixtures/bridge-protocol/client-v6.jsonl");
+        let fixture = include_bytes!("../../../../fixtures/bridge-protocol/client-v7.jsonl");
 
         for line in fixture.split_inclusive(|byte| *byte == b'\n') {
             decode_client_frame(line).expect("client fixture frame should decode");
@@ -482,7 +490,7 @@ mod tests {
 
     #[test]
     fn decodes_every_recorded_server_contract_frame() {
-        let fixture = include_bytes!("../../../../fixtures/bridge-protocol/server-v6.jsonl");
+        let fixture = include_bytes!("../../../../fixtures/bridge-protocol/server-v7.jsonl");
 
         for line in fixture.split_inclusive(|byte| *byte == b'\n') {
             decode_server_frame(line).expect("server fixture frame should decode");
@@ -597,7 +605,7 @@ mod tests {
 
     #[test]
     fn previous_protocol_fixture_is_not_the_current_startup_contract() {
-        let fixture = include_bytes!("../../../../fixtures/bridge-protocol/client-v5.jsonl");
+        let fixture = include_bytes!("../../../../fixtures/bridge-protocol/client-v6.jsonl");
         let initialize = fixture
             .split_inclusive(|byte| *byte == b'\n')
             .next()

@@ -35,11 +35,12 @@ export class ApprovalModel {
 	}
 
 	get title(): string {
+		const external = this.#request.details?.scope === "external";
 		switch (this.#request.operation) {
 			case "command":
 				return this.sessionId === undefined ? "Approve native command" : "Approve session write";
 			case "patch":
-				return "Approve workspace patch";
+				return external ? "Approve external patch" : "Approve workspace patch";
 			case "network":
 				return "Approve network access";
 			case "filesystem":

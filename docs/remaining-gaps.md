@@ -54,7 +54,7 @@ host-owned limits remain explicit rather than being treated as product guarantee
 - Pi swallows a later `before_provider_payload` hook exception without exposing whether the callback
   chain had an error. The guard rejects replacement or effective mutation of an approved request, but
   cannot detect a swallowed exception that leaves the same approved object unchanged.
-- Bridge protocol v6 cancellation is cooperative. A local abort after a compact or Responses invocation
+- Bridge protocol v7 cancellation is cooperative. A local abort after a compact or Responses invocation
   does not prove whether the remote server accepted a frame.
 - Bare `AgentSession.dispose()` does not emit `session_shutdown`. In-flight records check their signal
   and clean up in `finally`; a stale weak router lease may remain ambiguous until public release or

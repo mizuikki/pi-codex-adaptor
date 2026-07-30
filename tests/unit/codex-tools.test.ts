@@ -14,7 +14,7 @@ import { INTERRUPTED_TOOL_RESULT_TEXT } from "../../src/integration/pi/codex-mes
 import type { CodexToolProfileCoordinator } from "../../src/integration/pi/codex-tool-profile.ts";
 import { PI_CORE_AGENT_TOOL_NAMES } from "../../src/integration/pi/codex-tool-profile.ts";
 import {
-	nativeAuthorizationFor,
+	nativeApprovalPolicyFor,
 	registerCodexTools,
 } from "../../src/integration/pi/codex-tools.ts";
 
@@ -173,7 +173,7 @@ class FixtureRuntime implements CodexRuntime {
 			};
 		}
 		await options.onEvent?.({ type: "tool.output.delta", text: "fixture output" });
-		if (options.authorization === "require_approval") {
+		if (options.approvalPolicy === "on-request") {
 			this.approvalDecision = await options.onApproval?.({
 				approvalId: "approval-fixture",
 				operation: "command",
@@ -264,9 +264,9 @@ function context(provider = "openai-codex"): {
 }
 
 describe("Pi core tool activation", () => {
-	test("maps each persistent policy to one explicit native authorization", () => {
-		expect(nativeAuthorizationFor("prompt")).toBe("require_approval");
-		expect(nativeAuthorizationFor("bypass")).toBe("preauthorized");
+	test("maps each persistent policy to one explicit native approval policy", () => {
+		expect(nativeApprovalPolicyFor("on-request")).toBe("on-request");
+		expect(nativeApprovalPolicyFor("never")).toBe("never");
 	});
 
 	test("recomputes the managed shell surface without deleting third-party tools", async () => {
@@ -647,7 +647,8 @@ describe("Pi core tool activation", () => {
 			tool: "exec_command",
 			workdir: "/workspace",
 			workspaceRoots: ["/workspace"],
-			authorization: "require_approval",
+			approvalPolicy: "on-request",
+			filesystemAccessPolicy: "workspace",
 			argumentsValue: {
 				model: "fixture-model",
 				cmd: "fixture command",
@@ -817,15 +818,18 @@ describe("Pi core tool activation", () => {
 		expect(blockedRuntime.execution).toBeUndefined();
 	});
 
-	test("snapshots bypass authorization at native tool dispatch", async () => {
+	test("snapshots approval and filesystem policies at native tool dispatch", async () => {
 		const runtime = new FixtureRuntime();
 		const tools = new Map<string, ToolDefinition>();
 		const service = configuration({
 			...createDefaultConfig(),
-			security: { approvalPolicy: "bypass" },
+			security: { approvalPolicy: "never", filesystemAccessPolicy: "unrestricted" },
 		});
 		runtime.onExecute = () =>
-			service.publish({ ...createDefaultConfig(), security: { approvalPolicy: "prompt" } });
+			service.publish({
+				...createDefaultConfig(),
+				security: { approvalPolicy: "on-request", filesystemAccessPolicy: "workspace" },
+			});
 		registerCodexTools(
 			{
 				registerTool: (tool: ToolDefinition) => tools.set(tool.name, tool),
@@ -851,10 +855,11 @@ describe("Pi core tool activation", () => {
 
 		expect(runtime.execution).toMatchObject({
 			tool: "exec_command",
-			authorization: "preauthorized",
+			approvalPolicy: "never",
+			filesystemAccessPolicy: "unrestricted",
 		});
 		expect(runtime.approvalDecision).toBeUndefined();
-		expect(service.config.security.approvalPolicy).toBe("prompt");
+		expect(service.config.security.approvalPolicy).toBe("on-request");
 	});
 
 	test("rejects update_plan while Pi plan-mode is active", async () => {

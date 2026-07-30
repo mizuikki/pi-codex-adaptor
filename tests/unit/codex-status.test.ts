@@ -10,7 +10,8 @@ describe("Codex status formatter", () => {
 			"official",
 			"standalone",
 			"available",
-			"prompt",
+			"on-request",
+			"workspace",
 			"Codex exec bg web",
 		],
 		[
@@ -19,8 +20,9 @@ describe("Codex status formatter", () => {
 			"supplemental",
 			"hosted",
 			"available",
-			"bypass",
-			"Codex sh bg+ web !bypass",
+			"never",
+			"unrestricted",
+			"Codex sh bg+ web !never !fs !full",
 		],
 		[
 			"no active optional surfaces",
@@ -28,11 +30,21 @@ describe("Codex status formatter", () => {
 			"disabled",
 			"disabled",
 			"disabled",
-			"prompt",
+			"on-request",
+			"workspace",
 			"Codex sh",
 		],
-		["disabled shell", "disabled", "unavailable", "unsupported", "unavailable", "prompt", "Codex"],
-	] as const)("renders %s surfaces compactly", (_name, primary, sessionSurface, webSurface, webSearchStatus, approvalPolicy, expected) => {
+		[
+			"disabled shell",
+			"disabled",
+			"unavailable",
+			"unsupported",
+			"unavailable",
+			"on-request",
+			"workspace",
+			"Codex",
+		],
+	] as const)("renders %s surfaces compactly", (_name, primary, sessionSurface, webSurface, webSearchStatus, approvalPolicy, filesystemAccessPolicy, expected) => {
 		expect(
 			formatCodexStatus(
 				{
@@ -41,6 +53,7 @@ describe("Codex status formatter", () => {
 					webSearch: { status: webSearchStatus },
 				},
 				approvalPolicy,
+				filesystemAccessPolicy,
 			),
 		).toBe(expected);
 	});
@@ -56,7 +69,8 @@ describe("Codex status formatter", () => {
 				webSurface,
 				webSearch: { status: webSearchStatus },
 			},
-			"prompt",
+			"on-request",
+			"workspace",
 		);
 		expect(status).toBe("Codex exec bg");
 		expect(status).not.toContain("web");
@@ -72,7 +86,8 @@ describe("Codex status formatter", () => {
 				webSurface: "disabled",
 				webSearch: { status: "disabled" },
 			},
-			"prompt",
+			"on-request",
+			"workspace",
 		);
 		expect(status).toBe("Codex sh");
 		expect(status).not.toContain("bg");
@@ -85,9 +100,10 @@ describe("Codex status formatter", () => {
 				webSurface: "hosted",
 				webSearch: { status: "available" },
 			},
-			"bypass",
+			"never",
+			"unrestricted",
 		);
-		expect(status).toBe("Codex sh bg+ web !bypass");
+		expect(status).toBe("Codex sh bg+ web !never !fs !full");
 		expect(status.length).toBeLessThanOrEqual(35);
 	});
 });
