@@ -37,7 +37,7 @@ export function verifyPullRequest(input: PullRequestContractInput): void {
 function assertConventionalCommitTitle(title: string): RegExpExecArray & {
 	groups: { breaking?: string; type: string };
 } {
-	const match = /^(?<type>[a-z]+)(?<breaking>!)?(?:\([a-z0-9][a-z0-9._/-]*\))?: .+$/u.exec(title);
+	const match = /^(?<type>[a-z]+)(?:\([a-z0-9][a-z0-9._/-]*\))?(?<breaking>!)?: .+$/u.exec(title);
 	if (match?.groups === undefined) {
 		throw new Error("Pull request title must follow Conventional Commits");
 	}
