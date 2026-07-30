@@ -362,6 +362,10 @@ describe("remote compaction checkpoint contract", () => {
 		appendProposal(first);
 		expect(runtime.compactCalls).toBe(1);
 		expect(branch.filter((entry) => entry.type === "custom")).toHaveLength(1);
+		expect(guard.assertApproved(record, first.payload)).toBe(first.payload);
+		expect(() =>
+			guard.assertApproved(record, { ...first.payload, model: "changed-model" }),
+		).toThrow("approval");
 
 		const unchanged = await invoke();
 		expect(unchanged.providerCheckpoint).toBeUndefined();

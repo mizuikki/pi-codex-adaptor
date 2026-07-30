@@ -353,9 +353,9 @@ async function handleBeforeProviderPayload(
 		options.guard.assertLive(record);
 		if (ctx.sessionManager.getLeafId() !== coveredEntryId || record.signal.aborted)
 			throw new Error(REPLAY_ERROR);
-		const approvedPayload = rewritePayload(payload, compacted.rewrittenInput);
+		const rewrittenPayload = rewritePayload(payload, compacted.rewrittenInput);
 		return {
-			payload: deepFreeze(approvedPayload),
+			payload: options.guard.approve(record, rewrittenPayload),
 			providerCheckpoint: compacted.proposal,
 		};
 	} finally {
