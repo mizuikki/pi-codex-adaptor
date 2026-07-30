@@ -1,5 +1,6 @@
 import { parseKey as parseTuiKey } from "@earendil-works/pi-tui";
 
+import { securityPolicyWarning } from "../../application/security-policy.ts";
 import {
 	type CodexConfig,
 	createDefaultConfig,
@@ -80,20 +81,6 @@ const APPROVAL_NEVER_CONFIRMATION =
 	"Never suppresses approval prompts. Failures return to the model, and native commands still run with the user's permissions.";
 const FILESYSTEM_UNRESTRICTED_CONFIRMATION =
 	"Unrestricted allows structured tools to use paths outside workspace roots. This is a path guardrail setting, not an OS sandbox.";
-
-export function securityPolicyWarning(config: CodexConfig): string | undefined {
-	const { approvalPolicy, filesystemAccessPolicy } = config.security;
-	if (approvalPolicy === "never" && filesystemAccessPolicy === "unrestricted") {
-		return "Codex dangerous full access is enabled: operations do not prompt, structured tools may use external paths, and native commands run with the user's permissions.";
-	}
-	if (approvalPolicy === "never") {
-		return "Codex approval policy is never: operations do not prompt, explicit structured-tool paths remain workspace constrained, and native commands run with the user's permissions.";
-	}
-	if (filesystemAccessPolicy === "unrestricted") {
-		return "Codex filesystem access is unrestricted: structured tools may use external paths after operation approval; this is not an OS sandbox.";
-	}
-	return undefined;
-}
 
 export class SettingsModel {
 	#saved: CodexConfig;

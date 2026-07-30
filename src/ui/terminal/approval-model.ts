@@ -44,7 +44,7 @@ export class ApprovalModel {
 			case "network":
 				return "Approve network access";
 			case "filesystem":
-				return "Approve file access";
+				return external ? "Approve external file access" : "Approve file access";
 			default:
 				return "Approve operation";
 		}

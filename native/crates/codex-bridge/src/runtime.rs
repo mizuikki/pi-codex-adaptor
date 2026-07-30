@@ -1991,11 +1991,12 @@ async fn view_image(
     let (candidate, workdir_scope) =
         resolve_view_image_path(&path, &params.workdir, &params.workspace_roots).await?;
     let resolved = resolve_image_file(&candidate, &params.workspace_roots).await?;
-    let scope = if workdir_scope == PathScope::External || resolved.scope == PathScope::External {
-        PathScope::External
-    } else {
-        PathScope::Workspace
-    };
+    let scope =
+        if workdir_scope == Some(PathScope::External) || resolved.scope == PathScope::External {
+            PathScope::External
+        } else {
+            PathScope::Workspace
+        };
     assess_filesystem_scope(
         scope,
         params.filesystem_access_policy,
@@ -2786,10 +2787,10 @@ async fn resolve_view_image_path(
     path: &str,
     workdir: &str,
     workspace_roots: &[String],
-) -> Result<(PathBuf, PathScope), BridgeError> {
+) -> Result<(PathBuf, Option<PathScope>), BridgeError> {
     let requested = PathBuf::from(path);
     if requested.is_absolute() {
-        return Ok((requested, PathScope::Workspace));
+        return Ok((requested, None));
     }
     if workdir.is_empty() {
         return Err(invalid_params(
@@ -2797,7 +2798,7 @@ async fn resolve_view_image_path(
         ));
     }
     let workdir = resolve_workdir(workdir, workspace_roots).await?;
-    Ok((workdir.path.join(requested), workdir.scope))
+    Ok((workdir.path.join(requested), Some(workdir.scope)))
 }
 
 async fn resolve_image_file(

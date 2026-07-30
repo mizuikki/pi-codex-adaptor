@@ -19,7 +19,7 @@ function diagnostics(): DiagnosticsSnapshot {
 			providerCount: 1,
 			supportedApis: ["openai-responses", "openai-codex-responses"],
 		},
-		bridge: { bridgeProtocolVersion: 5, capabilities: ["responses"] },
+		bridge: { bridgeProtocolVersion: 7, capabilities: ["responses"] },
 	};
 }
 

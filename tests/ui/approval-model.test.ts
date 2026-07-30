@@ -11,6 +11,15 @@ describe("approval view model", () => {
 		});
 		expect(model.title).toBe("Approve external patch");
 	});
+
+	test("marks external filesystem approvals unmistakably", () => {
+		const model = new ApprovalModel({
+			operation: "filesystem",
+			summary: "Read image file",
+			details: { scope: "external", path: "<external-path>" },
+		});
+		expect(model.title).toBe("Approve external file access");
+	});
 	test("defaults focus to decline and keeps allow last", () => {
 		const view = new ApprovalModel(
 			{

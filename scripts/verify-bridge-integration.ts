@@ -214,8 +214,11 @@ try {
 				},
 			},
 		);
-		if (never.status !== "completed" || neverApproval) {
+		if (neverApproval) {
 			throw new Error("Native never-policy shell execution unexpectedly requested approval");
+		}
+		if (never.status !== "completed") {
+			throw new Error(`Native never-policy shell execution did not complete: ${never.status}`);
 		}
 	} finally {
 		await client.shutdown();

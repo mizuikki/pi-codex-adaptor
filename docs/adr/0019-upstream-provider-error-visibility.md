@@ -10,7 +10,7 @@ represent a terminal extension compaction failure in the normal `compaction_end`
 ## Decision
 
 Native Rust extracts one bounded diagnostic from known official `ApiError` variants before it builds
-the existing protocol-v6 `BridgeError`. The message contains only a status/body or variant message,
+the existing protocol-v7 `BridgeError`. The message contains only a status/body or variant message,
 is capped to a 4,000-character detail budget, and never serializes headers, credentials, request
 data, opaque values, URLs from transport metadata, or a full debug representation. Error category,
 code, retryability, and provider-contract-mismatch handling remain unchanged.

@@ -11,6 +11,7 @@ import {
 	capabilityCacheKey,
 	ResolveEffectiveCapabilities,
 } from "../../application/resolve-effective-capabilities.ts";
+import { securityPolicyWarning } from "../../application/security-policy.ts";
 import { UpdatePlanUseCase } from "../../application/update-plan.ts";
 import type { ManagedToolName } from "../../domain/capability.ts";
 import type { ApprovalPolicy, CodexConfig } from "../../domain/config.ts";
@@ -18,7 +19,6 @@ import type { PlanUpdate } from "../../domain/plan.ts";
 import { resolveProviderActivation } from "../../domain/provider-activation.ts";
 import { requestCodexApproval } from "../../ui/terminal/approval-prompt.ts";
 import { createCodexToolRenderer } from "../../ui/terminal/codex-tool-renderer.ts";
-import { securityPolicyWarning } from "../../ui/terminal/settings-model.ts";
 import { responseItemsFromMessages } from "./codex-provider.ts";
 import { formatCodexStatus } from "./codex-status.ts";
 import { codexSkillsPrompt } from "./codex-system-prompt.ts";
@@ -108,15 +108,12 @@ export function registerCodexTools(
 		try {
 			const config = configOverride ?? (await configuration.load());
 			if (generation !== activationGeneration) return;
-			if (
-				startupWarning &&
-				!startupSecurityWarningShown &&
-				(config.security.approvalPolicy === "never" ||
-					config.security.filesystemAccessPolicy === "unrestricted")
-			) {
-				startupSecurityWarningShown = true;
+			if (startupWarning && !startupSecurityWarningShown) {
 				const warning = securityPolicyWarning(config);
-				if (warning !== undefined) ctx.ui.notify(warning, "warning");
+				if (warning !== undefined) {
+					startupSecurityWarningShown = true;
+					ctx.ui.notify(warning, "warning");
+				}
 			}
 			if (selected === undefined || !providerActive(selected, config)) {
 				profile.restorePi();
