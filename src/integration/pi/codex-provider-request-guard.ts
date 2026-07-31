@@ -29,7 +29,9 @@ export interface CodexProviderRequestRecordInput {
 
 export type CodexProviderModelSnapshot = Readonly<
 	Pick<Model<string>, "id" | "provider" | "api" | "cost" | "contextWindow">
->;
+> & {
+	readonly input: readonly ("text" | "image")[];
+};
 
 export type CodexProviderRequestRecord = Omit<CodexProviderRequestRecordInput, "model"> & {
 	readonly model: CodexProviderModelSnapshot;
@@ -163,7 +165,9 @@ function snapshotProviderModel(model: Model<string>): CodexProviderModelSnapshot
 		typeof model.provider !== "string" ||
 		typeof model.api !== "string" ||
 		typeof model.contextWindow !== "number" ||
-		!Number.isFinite(model.contextWindow)
+		!Number.isFinite(model.contextWindow) ||
+		!Array.isArray(model.input) ||
+		!model.input.every((modality) => modality === "text" || modality === "image")
 	) {
 		throw new Error(RECORD_UNAVAILABLE);
 	}
@@ -173,6 +177,7 @@ function snapshotProviderModel(model: Model<string>): CodexProviderModelSnapshot
 		api: model.api,
 		cost: cloneFrozenJson(model.cost),
 		contextWindow: model.contextWindow,
+		input: Object.freeze([...model.input]),
 	});
 }
 

@@ -72,6 +72,8 @@ function createCtx(options?: {
 			provider: options?.provider ?? "openai-codex",
 			id: "test-model",
 			api: options?.api ?? "openai-codex-responses",
+			input: ["text", "image"],
+			contextWindow: 100_000,
 		},
 		sessionManager: {
 			getSessionId: () => "session-fixture",

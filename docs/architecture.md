@@ -57,7 +57,10 @@ and diagnostics. Pi's filtered tool registry is included in the snapshot fingerp
 resolution intersects that host policy with the official tool profile so model-visible,
 dispatch-only, and local tools remain coherent, including an empty `--no-tools` profile. Missing
 tools are host-disabled; a visible same-name tool with foreign provenance remains an ownership
-conflict. TypeScript does not reconstruct official model metadata or tool schemas.
+conflict. Pi's selected-model input modalities further narrow the host policy: a model without image
+input cannot receive `view_image` or `image_gen.imagegen`, while an image declaration still cannot
+override official model metadata. TypeScript does not reconstruct official model metadata or tool
+schemas.
 
 ## Pi integration
 

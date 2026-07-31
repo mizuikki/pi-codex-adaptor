@@ -56,6 +56,7 @@ export async function openSettingsOverlay(
 			effective = await resolver.resolve({
 				modelId: ctx.model.id,
 				providerId: ctx.model.provider,
+				modelInputModalities: ctx.model.input,
 				config,
 				contextWindow: ctx.model.contextWindow,
 			});
@@ -283,6 +284,7 @@ export class SettingsOverlay {
 						: await this.#capabilities.resolve({
 								modelId: selected.id,
 								providerId: selected.provider,
+								modelInputModalities: selected.input,
 								config,
 								contextWindow: selected.contextWindow,
 							});

@@ -78,10 +78,14 @@ class FixtureRuntime implements CodexRuntime {
 
 	async resolveTools(params: unknown): Promise<unknown> {
 		const root = params as Record<string, unknown>;
+		const allowed = new Set(root.allowedLocalToolNames as string[]);
 		const provider = root.providerContract as Record<string, unknown>;
 		const standalone = root.standaloneWebSearch as Record<string, unknown>;
 		const sessions = root.sessions as Record<string, unknown>;
 		const optional = root.optional as Record<string, unknown>;
+		const viewImageEnabled = optional.viewImage === true && allowed.has("view_image");
+		const imageGenerationEnabled =
+			optional.imageGeneration === true && allowed.has("image_gen.imagegen");
 		const model = root.model as Record<string, unknown>;
 		const useLite = model.use_responses_lite === true;
 		const standaloneAvailable =
@@ -104,12 +108,10 @@ class FixtureRuntime implements CodexRuntime {
 			"update_plan",
 			"apply_patch",
 			...shellTools,
-			...(optional.viewImage === true ? ["view_image"] : []),
-			...(provider.imagesApi === true && optional.imageGeneration === true
-				? ["image_gen.imagegen"]
-				: []),
+			...(viewImageEnabled ? ["view_image"] : []),
+			...(provider.imagesApi === true && imageGenerationEnabled ? ["image_gen.imagegen"] : []),
 			...(webSurface === "standalone" ? ["web.run"] : []),
-		];
+		].filter((name) => allowed.has(name));
 		return {
 			modelTools: [],
 			dispatchTools:
@@ -134,13 +136,15 @@ class FixtureRuntime implements CodexRuntime {
 						}
 					: { status: "disabled", reason: "disabled_by_configuration" },
 				applyPatch: { status: "available", source: "official" },
-				viewImage:
-					optional.viewImage === true
-						? { status: "available", source: "official" }
+				viewImage: viewImageEnabled
+					? { status: "available", source: "official" }
+					: optional.viewImage === true
+						? { status: "unavailable", reason: "view_image_route_unavailable" }
 						: { status: "disabled", reason: "disabled_by_configuration" },
-				imageGeneration:
-					optional.imageGeneration === true
-						? { status: "available", source: "provider-contract" }
+				imageGeneration: imageGenerationEnabled
+					? { status: "available", source: "provider-contract" }
+					: optional.imageGeneration === true
+						? { status: "unavailable", reason: "image_generation_route_unavailable" }
 						: { status: "disabled", reason: "disabled_by_configuration" },
 				webSearch:
 					webSurface === "unsupported"
@@ -222,7 +226,10 @@ function configuration(initial = createDefaultConfig()): TestConfigurationServic
 	return service;
 }
 
-function context(provider = "openai-codex"): {
+function context(
+	provider = "openai-codex",
+	input: readonly ("text" | "image")[] = ["text", "image"],
+): {
 	ctx: ExtensionContext;
 	widgets: Map<string, string[] | undefined>;
 } {
@@ -236,7 +243,7 @@ function context(provider = "openai-codex"): {
 				name: "Fixture",
 				baseUrl: "https://invalid.example",
 				reasoning: true,
-				input: ["text"],
+				input: [...input],
 				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 				contextWindow: 100_000,
 				maxTokens: 10_000,
@@ -323,6 +330,40 @@ describe("Pi core tool activation", () => {
 		const other = context("other-provider").ctx;
 		await handlers.get("model_select")?.[0]?.({ type: "model_select" }, other);
 		expect(active).toEqual(["third_party"]);
+	});
+
+	test("keeps image tools out of a text-only model profile", async () => {
+		const runtime = new FixtureRuntime();
+		const handlers = new Map<string, EventHandler[]>();
+		const tools = new Map<string, ToolDefinition>();
+		let active = ["third_party"];
+		const service = configuration();
+		registerCodexTools(
+			{
+				registerTool: (tool: ToolDefinition) => tools.set(tool.name, tool),
+				on: (event: string, handler: EventHandler) => {
+					handlers.set(event, [...(handlers.get(event) ?? []), handler]);
+				},
+				getActiveTools: () => active,
+				getAllTools: () => [
+					{ name: "third_party" },
+					...[...tools.keys()].map((name) => ({ name })),
+				],
+				setActiveTools: (next: string[]) => {
+					active = next;
+				},
+			} as never,
+			runtime,
+			service,
+			new ProviderActivationPolicy(service),
+		);
+
+		const selected = context("openai-codex", ["text"]).ctx;
+		await handlers.get("session_start")?.[0]?.({ type: "session_start" }, selected);
+
+		expect(active).not.toContain("view_image");
+		expect(active).not.toContain("image_gen.imagegen");
+		expect(active).toContain("apply_patch");
 	});
 
 	test("isolates before delayed configuration and stays isolated on active resolution failure", async () => {
