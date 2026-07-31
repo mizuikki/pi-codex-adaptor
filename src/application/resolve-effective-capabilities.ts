@@ -48,6 +48,7 @@ export interface EffectiveCapabilitySnapshot {
 export interface ResolveEffectiveCapabilitiesInput {
 	modelId: string;
 	providerId: string;
+	modelInputModalities: readonly ("text" | "image")[];
 	config: CodexConfig;
 	contextWindow?: number;
 	hostToolNames?: readonly ManagedToolName[];
@@ -87,11 +88,15 @@ export class ResolveEffectiveCapabilities {
 		);
 		const bridge = new Set(bridgeCapabilities);
 		const sessionExecutorAvailable = bridge.has("unified_exec");
+		const hostToolNames = input.hostToolNames ?? MANAGED_TOOL_NAMES;
+		const allowedLocalToolNames = input.modelInputModalities.includes("image")
+			? hostToolNames
+			: hostToolNames.filter((name) => name !== "view_image" && name !== "image_gen.imagegen");
 		const tools = parseToolResolution(
 			await this.#runtime.resolveTools(
 				buildToolsResolveParams(modelResolution, {
 					providerId: input.providerId,
-					allowedLocalToolNames: input.hostToolNames ?? MANAGED_TOOL_NAMES,
+					allowedLocalToolNames,
 					webSearchMode: input.config.codex.webSearch.mode,
 					viewImage: input.config.tools.optional.viewImage === "auto",
 					imageGeneration: input.config.tools.optional.imageGeneration === "auto",
@@ -286,6 +291,7 @@ export function capabilityCacheKey(input: ResolveEffectiveCapabilitiesInput): st
 	return JSON.stringify([
 		input.modelId,
 		input.providerId,
+		input.modelInputModalities.includes("image"),
 		input.contextWindow ?? null,
 		input.hostToolNames ?? MANAGED_TOOL_NAMES,
 		{

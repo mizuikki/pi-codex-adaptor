@@ -241,6 +241,14 @@ describe("versioned product configuration", () => {
 	});
 
 	test("exposes explicit unsupported and disabled reasons without inventing availability", () => {
+		const textOnly = createDefaultConfig();
+		expect(
+			validateConfigForSave(textOnly, {
+				viewImageAvailable: false,
+				imageGenerationAvailable: false,
+			}),
+		).toEqual(textOnly);
+
 		const config = createDefaultConfig();
 		config.tools.backgroundSessions = true;
 		const evaluations = evaluateConfigSettings(config, {

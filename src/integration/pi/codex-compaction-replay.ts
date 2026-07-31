@@ -306,6 +306,7 @@ async function handleBeforeProviderPayload(
 	const capabilityKey = capabilityCacheKey({
 		modelId: record.model.id,
 		providerId: record.model.provider,
+		modelInputModalities: record.model.input,
 		config,
 		contextWindow: record.model.contextWindow,
 		hostToolNames,
@@ -314,6 +315,7 @@ async function handleBeforeProviderPayload(
 	const snapshot = await options.capabilities.resolve({
 		modelId: record.model.id,
 		providerId: record.model.provider,
+		modelInputModalities: record.model.input,
 		config,
 		contextWindow: record.model.contextWindow,
 		hostToolNames,

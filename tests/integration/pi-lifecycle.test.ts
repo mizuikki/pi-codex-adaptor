@@ -355,6 +355,57 @@ describe("fake Pi + real native lifecycle", () => {
 		expect(JSON.parse(request?.body ?? "{}")).not.toHaveProperty("tools");
 	}, 60_000);
 
+	test("keeps text-only Pi model metadata coherent across activation and dispatch", async () => {
+		const server = await startFakeResponsesServer([
+			fixtureModelSpec({ slug: "gpt-5.5", shellType: "shell_command" }),
+		]);
+		cleanups.push(() => server.stop());
+		const token = fixtureToken();
+		const { runtime } = await createIntegrationRuntime();
+		cleanups.push(async () => runtime.shutdown());
+		const service = await configurationService();
+		const activation = new ProviderActivationPolicy(service);
+		const capabilities = new ResolveEffectiveCapabilities(runtime);
+		const pi = createFakePi({ token });
+		const profile = createCodexToolProfile(pi.api);
+		registerCodexTools(pi.api, runtime, service, activation, capabilities, profile);
+		const model = {
+			...fixtureModel("gpt-5.5", "openai-codex", server.baseUrl),
+			input: ["text"] as ("text" | "image")[],
+		};
+		await emit(pi, "session_start", pi.context(model));
+
+		expect(pi.activeTools).not.toContain("view_image");
+		expect(pi.activeTools).not.toContain("image_gen.imagegen");
+		expect(profile.readiness.kind).toBe("healthy");
+
+		const stream = createCodexStreamSimple(
+			runtime,
+			service,
+			activation,
+			new CodexCompactionStore(),
+			capabilities,
+			profile,
+		)(
+			model,
+			{
+				systemPrompt: "",
+				messages: [{ role: "user", content: "text-only fixture", timestamp: 1 }],
+			},
+			{ apiKey: token },
+		);
+		for await (const _event of stream) {
+			// Drain the real native response.
+		}
+		const request = server.requests.find(
+			(entry) => entry.method === "POST" && entry.path.endsWith("/responses"),
+		);
+		const body = JSON.parse(request?.body ?? "{}") as { tools?: Array<{ name?: string }> };
+		const names = body.tools?.map((tool) => tool.name) ?? [];
+		expect(names).not.toContain("view_image");
+		expect(names).not.toContain("image_gen");
+	}, 60_000);
+
 	test("treats a host-excluded managed tool as disabled rather than foreign-owned", async () => {
 		const server = await startFakeResponsesServer([
 			fixtureModelSpec({ slug: "gpt-5.5", shellType: "shell_command" }),

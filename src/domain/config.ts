@@ -207,25 +207,6 @@ function collectCapabilityIssues(
 			"Unavailable: the model and bridge do not provide a complete managed-session route",
 		);
 	}
-	if (config.tools.optional.viewImage === "auto" && context.viewImageAvailable === false) {
-		issue(
-			issues,
-			"tools.optional.viewImage",
-			"capability_unavailable",
-			"Unavailable: no complete view_image route exists",
-		);
-	}
-	if (
-		config.tools.optional.imageGeneration === "auto" &&
-		context.imageGenerationAvailable === false
-	) {
-		issue(
-			issues,
-			"tools.optional.imageGeneration",
-			"capability_unavailable",
-			"Unavailable: no complete image generation route exists",
-		);
-	}
 	if (config.codex.webSearch.mode !== "disabled" && context.webSearchAvailable === false) {
 		issue(
 			issues,

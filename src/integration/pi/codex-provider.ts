@@ -109,6 +109,7 @@ async function runResponse(
 		const capabilityKey = capabilityCacheKey({
 			modelId: model.id,
 			providerId: model.provider,
+			modelInputModalities: model.input,
 			config,
 			contextWindow: model.contextWindow,
 			hostToolNames,
@@ -122,6 +123,7 @@ async function runResponse(
 		const snapshot = await capabilities.resolve({
 			modelId: model.id,
 			providerId: model.provider,
+			modelInputModalities: model.input,
 			config,
 			contextWindow: model.contextWindow,
 			hostToolNames,

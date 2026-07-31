@@ -38,6 +38,7 @@ describe("bundled capability reachability", () => {
 			const snapshot = await resolver.resolve({
 				modelId,
 				providerId: "openai-codex",
+				modelInputModalities: ["text", "image"],
 				config: createDefaultConfig(),
 				contextWindow,
 			});

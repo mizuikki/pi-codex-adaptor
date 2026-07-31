@@ -147,6 +147,7 @@ async function compactForPi(
 		const capabilityKey = capabilityCacheKey({
 			modelId: model.id,
 			providerId: model.provider,
+			modelInputModalities: model.input,
 			config,
 			contextWindow: model.contextWindow,
 			hostToolNames,
@@ -157,6 +158,7 @@ async function compactForPi(
 		const snapshot = await state.capabilities.resolve({
 			modelId: model.id,
 			providerId: model.provider,
+			modelInputModalities: model.input,
 			config,
 			contextWindow: model.contextWindow,
 			hostToolNames,

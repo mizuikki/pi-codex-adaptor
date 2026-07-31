@@ -126,9 +126,11 @@ describe("Codex provider request guard", () => {
 				],
 			},
 			contextWindow: model.contextWindow,
+			input: model.input,
 		});
 		expect(Object.isFrozen(record.model)).toBe(true);
 		expect(Object.isFrozen(record.model.cost)).toBe(true);
+		expect(Object.isFrozen(record.model.input)).toBe(true);
 		expect(Object.isFrozen(record.model.cost.tiers)).toBe(true);
 		expect(Object.isFrozen(record.model.cost.tiers?.[0])).toBe(true);
 		expect("headers" in record.model).toBe(false);

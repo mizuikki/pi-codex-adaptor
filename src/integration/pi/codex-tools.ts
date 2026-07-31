@@ -86,6 +86,7 @@ export function registerCodexTools(
 				? capabilityCacheKey({
 						modelId: selected.id,
 						providerId: selected.provider,
+						modelInputModalities: selected.input,
 						config: configOverride,
 						contextWindow: selected.contextWindow,
 						hostToolNames,
@@ -126,6 +127,7 @@ export function registerCodexTools(
 			const capabilityInput = {
 				modelId: selected.id,
 				providerId: selected.provider,
+				modelInputModalities: selected.input,
 				config,
 				contextWindow: selected.contextWindow,
 				hostToolNames,
@@ -225,7 +227,13 @@ export function registerCodexTools(
 
 function modelProfileIdentity(model: ExtensionContext["model"]): string | undefined {
 	if (model === undefined) return undefined;
-	return JSON.stringify([model.id, model.provider, model.api, model.contextWindow ?? null]);
+	return JSON.stringify([
+		model.id,
+		model.provider,
+		model.api,
+		model.contextWindow ?? null,
+		model.input.includes("image"),
+	]);
 }
 
 function registerStandaloneWebTool(
