@@ -6,6 +6,11 @@
 ## Context
 
 Codex `0.146.0` supports RemoteCompactionV2 by provider capability and a typed CompactClient fallback.
+
+The bridge follows the pinned clients' timeout ownership. Remote Compaction V2 uses the provider
+stream idle timeout without a separate total deadline. The CompactClient fallback derives its
+request timeout as four times the provider stream idle timeout. The bridge's optional
+`requestTimeoutMs` field is retained only as an explicit compatibility override.
 Compaction output contains canonical response items that the application must not reinterpret.
 
 ## Historical Decision
