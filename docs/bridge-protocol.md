@@ -36,9 +36,9 @@ The only request methods are:
 | `diagnostics.read` | native bridge | redacted identity and capability snapshot |
 
 `responses.compact` receives a provider connection, typed compaction input, selected implementation
-(`remote_v2` or `compact_endpoint`), transport mode, WebSocket capability, timeout, and optional
-Remote V2 session context. The implementation is selected before the call and never changes after a
-failure.
+(`remote_v2` or `compact_endpoint`), transport mode, WebSocket capability, an optional compatibility
+timeout override, and optional Remote V2 session context. The implementation is selected before the
+call and never changes after a failure.
 
 ## Remote Compaction
 
@@ -58,9 +58,13 @@ The classic endpoint uses the pinned `CompactClient` and provider `RetryConfig`;
 wrap it in another retry loop. Its completed result is the endpoint's output array without invented
 usage fields. Both implementations are validated again by the adaptor checkpoint schema.
 
-Timeouts are bounded to 1-600,000 ms and return `timed_out` with an empty result. Cancellation returns
-the existing aborted lifecycle. Malformed output, incomplete terminal streams after native retry
-exhaustion, authentication failures, and capability failures create no checkpoint.
+When `requestTimeoutMs` is omitted, Remote V2 has no compaction-specific total deadline and uses the
+provider connection's ordinary stream idle and WebSocket connection timeouts. The classic endpoint
+uses four times the provider stream idle timeout, matching the pinned official client. An explicit
+`requestTimeoutMs` remains a 1-600,000 ms compatibility override for either implementation.
+Expiration is a bounded retryable provider error; cancellation remains the distinct aborted
+lifecycle. Malformed output, incomplete terminal streams after native retry exhaustion,
+authentication failures, and capability failures create no checkpoint.
 
 ## Errors, approval, and filesystem scope
 

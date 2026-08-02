@@ -491,8 +491,8 @@ struct ResponsesCompactParams {
     transport_mode: ResponsesTransportMode,
     #[serde(default = "default_provider_websocket_capability")]
     provider_supports_websockets: bool,
-    #[serde(default = "default_compaction_timeout_ms")]
-    request_timeout_ms: u64,
+    #[serde(default)]
+    request_timeout_ms: Option<u64>,
     #[serde(default)]
     remote_compaction_v2_context: Option<RemoteCompactionV2Context>,
 }
@@ -789,10 +789,6 @@ struct ToolExecuteParams {
     request_session_id: Option<String>,
     #[serde(alias = "web_search_mode")]
     web_search_mode: Option<WebSearchMode>,
-}
-
-const fn default_compaction_timeout_ms() -> u64 {
-    120_000
 }
 
 const fn default_allow_login_shell() -> bool {
@@ -4122,7 +4118,10 @@ async fn responses_compact(
 ) -> Result<RequestSuccess, RequestFailure> {
     let mut parsed = serde_json::from_value::<ResponsesCompactParams>(params)
         .map_err(|_| invalid_params("responses.compact parameters are invalid"))?;
-    if parsed.request_timeout_ms == 0 || parsed.request_timeout_ms > 600_000 {
+    if parsed
+        .request_timeout_ms
+        .is_some_and(|timeout| timeout == 0 || timeout > 600_000)
+    {
         return Err(invalid_params(
             "responses.compact requestTimeoutMs must be between 1 and 600000",
         )
@@ -4144,27 +4143,36 @@ async fn responses_compact(
     ensure_not_cancelled(cancellation)?;
     let connection = api::connect(&parsed.connection)?;
     if matches!(implementation, CompactionImplementation::RemoteV2) {
-        let timeout = Duration::from_millis(parsed.request_timeout_ms);
-        return match await_with_cancellation(
+        let operation = responses_compact_remote(
+            parsed.request,
+            parsed.transport_mode,
+            parsed.provider_supports_websockets,
+            connection,
             cancellation,
-            Box::pin(tokio::time::timeout(
-                timeout,
-                responses_compact_remote(
-                    parsed.request,
-                    parsed.transport_mode,
-                    parsed.provider_supports_websockets,
-                    connection,
-                    cancellation,
-                    remote_v2_context,
-                ),
-            )),
-        )
-        .await?
-        {
-            Ok(result) => result.map(RequestSuccess::completed),
-            Err(_) => Ok(RequestSuccess::timed_out(json!({}))),
+            remote_v2_context,
+        );
+        return match parsed.request_timeout_ms {
+            Some(timeout_ms) => match await_with_cancellation(
+                cancellation,
+                Box::pin(tokio::time::timeout(
+                    Duration::from_millis(timeout_ms),
+                    operation,
+                )),
+            )
+            .await?
+            {
+                Ok(result) => result.map(RequestSuccess::completed),
+                Err(_) => Err(provider_timeout_error("remote_compaction_v2").into()),
+            },
+            None => await_with_cancellation(cancellation, Box::pin(operation))
+                .await?
+                .map(RequestSuccess::completed),
         };
     }
+    let timeout = resolve_compact_endpoint_timeout(
+        parsed.request_timeout_ms,
+        connection.provider.stream_idle_timeout,
+    );
     let client = CompactClient::new(
         connection.transport,
         connection.provider,
@@ -4183,7 +4191,6 @@ async fn responses_compact(
         text: request.text,
     };
     ensure_not_cancelled(cancellation)?;
-    let timeout = Duration::from_millis(parsed.request_timeout_ms);
     let output = await_with_cancellation(
         cancellation,
         Box::pin(client.compact_input(&input, HeaderMap::default(), timeout, None)),
@@ -4191,11 +4198,25 @@ async fn responses_compact(
     .await?;
     match output {
         Ok(output) => Ok(RequestSuccess::completed(json!({ "output": output }))),
-        Err(codex_api::ApiError::Transport(codex_api::TransportError::Timeout)) => {
-            Ok(RequestSuccess::timed_out(json!({})))
-        }
         Err(error) => Err(api::map_provider_contract_error(&error, "compact_endpoint").into()),
     }
+}
+
+fn provider_timeout_error(capability: &'static str) -> BridgeError {
+    api::map_provider_contract_error(
+        &codex_api::ApiError::Transport(codex_api::TransportError::Timeout),
+        capability,
+    )
+}
+
+fn resolve_compact_endpoint_timeout(
+    request_timeout_ms: Option<u64>,
+    stream_idle_timeout: Duration,
+) -> Duration {
+    request_timeout_ms.map_or_else(
+        || stream_idle_timeout.saturating_mul(4),
+        Duration::from_millis,
+    )
 }
 
 async fn responses_compact_remote(
@@ -5985,9 +6006,48 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn remote_v2_compaction_accepts_an_omitted_total_timeout() {
+        let (base_url, server) = spawn_fixture_http_server(
+            concat!(
+                "event: response.output_item.done\n",
+                "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"compaction\",\"encrypted_content\":\"opaque\"}}\n\n",
+                "event: response.completed\n",
+                "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"remote-compaction\"}}\n\n",
+            )
+            .to_owned(),
+        )
+        .await;
+        let result = responses_compact(
+            json!({
+                "implementation": "remote_v2",
+                "transportMode": "sse",
+                "providerSupportsWebsockets": false,
+                "request": {
+                    "model": "fixture-model",
+                    "input": [],
+                    "instructions": "",
+                    "tools": null,
+                    "parallel_tool_calls": true,
+                    "reasoning": null,
+                    "service_tier": null,
+                    "prompt_cache_key": null,
+                    "text": null
+                },
+                "connection": fixture_connection(base_url),
+            }),
+            &CancellationToken::new(),
+        )
+        .await
+        .expect("omitted timeout should use provider stream semantics");
+
+        assert_eq!(result.status, TerminalStatus::Completed);
+        server.await.expect("fixture server should join");
+    }
+
+    #[tokio::test]
     async fn remote_v2_compaction_honors_the_request_deadline() {
         let (base_url, server) = spawn_stalling_fixture_http_server().await;
-        let result = responses_compact(
+        let error = responses_compact(
             json!({
                 "implementation": "remote_v2",
                 "transportMode": "sse",
@@ -6009,16 +6069,21 @@ mod tests {
             &CancellationToken::new(),
         )
         .await
-        .expect("stalled remote compaction should return a timeout status");
-        assert_eq!(result.status, TerminalStatus::TimedOut);
-        assert_eq!(result.result, json!({}));
+        .expect_err("stalled remote compaction should return a provider timeout");
+        assert!(matches!(
+            error,
+            RequestFailure::Bridge(error)
+                if error.code == "upstream_request_failed"
+                    && error.message == "request timed out"
+                    && error.retryable
+        ));
         server.abort();
     }
 
     #[tokio::test]
     async fn compact_endpoint_honors_the_request_deadline() {
         let (base_url, server) = spawn_stalling_fixture_http_server().await;
-        let result = responses_compact(
+        let error = responses_compact(
             json!({
                 "request": {
                     "model": "fixture-model",
@@ -6037,10 +6102,31 @@ mod tests {
             &CancellationToken::new(),
         )
         .await
-        .expect("stalled compact endpoint should return a timeout status");
-        assert_eq!(result.status, TerminalStatus::TimedOut);
-        assert_eq!(result.result, json!({}));
+        .expect_err("stalled compact endpoint should return a provider timeout");
+        assert!(matches!(
+            error,
+            RequestFailure::Bridge(error)
+                if error.code == "upstream_request_failed"
+                    && error.message == "request timed out"
+                    && error.retryable
+        ));
         server.abort();
+    }
+
+    #[test]
+    fn compact_endpoint_timeout_uses_explicit_override_or_four_times_provider_idle() {
+        assert_eq!(
+            resolve_compact_endpoint_timeout(Some(25), Duration::from_secs(5)),
+            Duration::from_millis(25)
+        );
+        assert_eq!(
+            resolve_compact_endpoint_timeout(None, Duration::from_secs(5)),
+            Duration::from_secs(20)
+        );
+        assert_eq!(
+            resolve_compact_endpoint_timeout(None, Duration::MAX),
+            Duration::MAX
+        );
     }
 
     #[test]
