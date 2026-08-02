@@ -16,6 +16,7 @@ import {
 } from "../../src/application/compaction.ts";
 import { ProviderActivationPolicy } from "../../src/application/provider-activation.ts";
 import { createDefaultConfig } from "../../src/domain/config.ts";
+import { BridgeRemoteError } from "../../src/infrastructure/codex-bridge/client.ts";
 import { registerCodexCompactionReplay } from "../../src/integration/pi/codex-compaction-replay.ts";
 import { createCodexStreamSimple } from "../../src/integration/pi/codex-provider.ts";
 import { CodexProviderRequestGuard } from "../../src/integration/pi/codex-provider-request-guard.ts";
@@ -70,7 +71,7 @@ function appendToolTurns(session: SessionManager, model: Model<string>): string[
 			role: "toolResult",
 			toolCallId: callId,
 			toolName: "synthetic_tool",
-			content: [{ type: "text", text: `bounded synthetic result ${index}` }],
+			content: [{ type: "text", text: `${"界".repeat(4_000)}-${index}` }],
 			isError: false,
 			timestamp: index * 10 + 2,
 		});
@@ -114,9 +115,11 @@ describe("automatic provider checkpoint dispatch", () => {
 		};
 		const compactRequests: unknown[] = [];
 		const providerRequests: unknown[] = [];
+		let compactFailure: BridgeRemoteError | undefined;
 		const runtime = {
 			compact: async (options: { request: unknown }) => {
 				compactRequests.push(options.request);
+				if (compactFailure !== undefined) throw compactFailure;
 				return {
 					status: "completed",
 					result: {
@@ -174,7 +177,9 @@ describe("automatic provider checkpoint dispatch", () => {
 			profile,
 			guard,
 		);
-		const runTurn = async (): Promise<string[]> => {
+		const runTurn = async (
+			swallowHookError = false,
+		): Promise<Array<{ type: string; error?: { errorMessage?: string } }>> => {
 			const signal = new AbortController().signal;
 			const context: Context = {
 				systemPrompt: "Synthetic system prompt",
@@ -187,25 +192,31 @@ describe("automatic provider checkpoint dispatch", () => {
 				signal,
 				onPayload: async (payload, payloadModel) => {
 					const attribution = controller.createAttribution(payloadModel, "agent", signal);
-					const result = (await handler(
-						{
-							type: "before_provider_payload",
-							model: payloadModel,
-							payload,
-							attribution,
-						},
-						extensionContext,
-					)) as BeforeProviderPayloadEventResult;
-					return controller.commitPayload(payloadModel, result, attribution);
+					try {
+						const result = (await handler(
+							{
+								type: "before_provider_payload",
+								model: payloadModel,
+								payload,
+								attribution,
+							},
+							extensionContext,
+						)) as BeforeProviderPayloadEventResult;
+						return controller.commitPayload(payloadModel, result, attribution);
+					} catch (error) {
+						if (!swallowHookError) throw error;
+						return payload;
+					}
 				},
 			});
-			const events: string[] = [];
-			for await (const event of stream) events.push(event.type);
+			const events: Array<{ type: string; error?: { errorMessage?: string } }> = [];
+			for await (const event of stream) events.push(event as (typeof events)[number]);
 			return events;
 		};
 
-		expect(await runTurn()).toContain("done");
+		expect((await runTurn()).map((event) => event.type)).toContain("done");
 		expect(compactRequests).toHaveLength(1);
+		expect(JSON.stringify(compactRequests[0])).toContain("界".repeat(4_000));
 		expect(providerRequests).toHaveLength(1);
 		expect((providerRequests[0] as { input?: unknown }).input).toEqual([COMPACTION_ITEM]);
 		const checkpoints = session
@@ -224,10 +235,34 @@ describe("automatic provider checkpoint dispatch", () => {
 			);
 		expect(persistedCallIds).toEqual(callIds);
 
-		expect(await runTurn()).toContain("done");
+		expect((await runTurn()).map((event) => event.type)).toContain("done");
 		expect(compactRequests).toHaveLength(1);
 		expect(providerRequests).toHaveLength(2);
 		expect((providerRequests[1] as { input?: unknown }).input).toEqual([COMPACTION_ITEM]);
+		expect(
+			session
+				.getEntries()
+				.filter(
+					(entry) => entry.type === "custom" && entry.customType === CODEX_REMOTE_COMPACTION_KIND,
+				),
+		).toHaveLength(1);
+
+		session.appendMessage({
+			role: "user",
+			content: "synthetic suffix after checkpoint",
+			timestamp: 100,
+		});
+		compactFailure = new BridgeRemoteError({
+			category: "CapabilityError",
+			code: "compaction_context_limit_exceeded",
+			message: "the compaction request exceeded the local model context limit",
+			retryable: false,
+		});
+		const failedEvents = await runTurn(true);
+		const errorEvent = failedEvents.find((event) => event.type === "error");
+		expect(errorEvent?.error?.errorMessage).toBe(compactFailure.message);
+		expect(providerRequests).toHaveLength(2);
+		expect(compactRequests).toHaveLength(2);
 		expect(
 			session
 				.getEntries()

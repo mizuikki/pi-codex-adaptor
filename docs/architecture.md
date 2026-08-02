@@ -35,8 +35,10 @@ Before any Responses or compact request leaves the bridge, and before standalone
 its search input, native code applies the selected model's truncation policy to every function/custom
 tool result and shares one content budget across the latest contiguous result batch. Managed command
 execution also clamps caller-requested output to the same model policy. Canonical Pi history remains
-unchanged; the existing compaction fitter handles `tool_search_output` and remains the final
-whole-request context-window guard.
+unchanged. The compact fitter compares UTF-8-byte and UTF-16-density estimates, rewrites only the
+eligible trailing output batch when both overflow, and leaves ambiguous bounded requests to provider
+accounting. Local `compaction_context_limit_exceeded` and upstream `context_window_exceeded` remain
+distinct.
 
 The native bridge is built from the pinned official Codex source closure. The official version, tag,
 peeled commit, vendor tree hash, target, and source commit are immutable handshake fields. Vendor
@@ -72,7 +74,9 @@ external tools, and restores the captured selection on deactivation or shutdown.
 The provider request guard records one live session/model/connection/request identity and one Pi
 provider commit token. The `before_provider_payload` hook may return one sealed payload and either the
 existing textual proposal or one provider checkpoint proposal. Pi appends and verifies a custom entry
-before dispatch. A stale, forged, reused, cancelled, or indeterminate transaction blocks dispatch.
+before dispatch. The guard also latches the adaptor handler's first failure, so a hook exception
+swallowed by Pi is rethrown before provider dispatch. A stale, forged, reused, cancelled,
+indeterminate, or failed transaction blocks dispatch.
 
 ## Canonical history and checkpoints
 
@@ -82,7 +86,7 @@ Pi does not parse Codex identity fields or opaque response items and does not ad
 or session-format version.
 
 For an exact checkpoint identity, the adaptor selects the latest valid version-one entry on the active
-branch and builds:
+branch that is fully covered by the requested replay or compaction boundary and builds:
 
 ```text
 checkpoint.output + canonical projection of entries after coveredEntryId
@@ -95,7 +99,8 @@ exists in production code.
 
 ## Compaction state machine
 
-Manual and overflow `session_before_compact` handlers call the native remote operation once and return
+Manual and overflow `session_before_compact` handlers reuse an eligible exact checkpoint plus only the
+canonical suffix inside the prefix being replaced, call the native remote operation once, and return
 one provider-checkpoint result. Threshold preparation returns a handled cancellation so the inline
 provider hook remains authoritative. The hook replays an exact checkpoint when the suffix is clean or
 below threshold, and otherwise performs one remote operation and returns a sealed payload plus one

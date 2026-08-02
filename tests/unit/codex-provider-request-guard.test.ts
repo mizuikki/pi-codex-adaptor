@@ -173,6 +173,54 @@ describe("Codex provider request guard", () => {
 		expect(() => guard.assertApproved(record, approved)).toThrow("approval");
 	});
 
+	test("preserves the first request-scoped failure before approval verification", async () => {
+		const guard = new CodexProviderRequestGuard();
+		const record = openRecord(guard, "session-failure");
+		const request = { model: model.id, input: [{ type: "message", role: "user", content: [] }] };
+		const first = new Error("first fixture failure");
+		const second = new Error("second fixture failure");
+
+		const approved = await guard.run(record, () => {
+			const value = guard.approve(record, request);
+			guard.recordFailure(record, first);
+			guard.recordFailure(record, second);
+			return value;
+		});
+
+		try {
+			guard.assertApproved(record, approved);
+			throw new Error("Expected preserved failure");
+		} catch (error) {
+			expect(error).toBe(first);
+		}
+		guard.consume(record);
+	});
+
+	test("isolates preserved failures across overlapping request records", async () => {
+		const guard = new CodexProviderRequestGuard();
+		const failed = openRecord(guard, "session-overlap-failed");
+		const healthy = openRecord(guard, "session-overlap-healthy");
+		const failure = new Error("overlap fixture failure");
+		const request = { model: model.id, input: [] };
+
+		const [failedRequest, healthyRequest] = await Promise.all([
+			guard.run(failed, () => {
+				const approved = guard.approve(failed, request);
+				guard.recordFailure(failed, failure);
+				return approved;
+			}),
+			guard.run(healthy, () => guard.approve(healthy, request)),
+		]);
+
+		try {
+			guard.assertApproved(failed, failedRequest);
+			throw new Error("Expected preserved overlap failure");
+		} catch (error) {
+			expect(error).toBe(failure);
+		}
+		expect(guard.assertApproved(healthy, healthyRequest)).toBe(healthyRequest);
+	});
+
 	test("rejects unsafe request and ledger records before approval", () => {
 		const guard = new CodexProviderRequestGuard();
 		const unsafeRequest = {

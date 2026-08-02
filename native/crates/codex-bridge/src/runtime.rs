@@ -4665,6 +4665,23 @@ mod tests {
         if cfg!(windows) { 15_000 } else { 5_000 }
     }
 
+    fn unicode_heavy_compaction_input() -> Vec<Value> {
+        let mut input = Vec::new();
+        for index in 0..24 {
+            input.push(json!({
+                "type": "function_call_output",
+                "call_id": format!("unicode-call-{index}"),
+                "output": "界".repeat(15_000),
+            }));
+            input.push(json!({
+                "type": "message",
+                "role": "user",
+                "content": [{ "type": "input_text", "text": format!("boundary-{index}") }],
+            }));
+        }
+        input
+    }
+
     async fn wait_for_file_contents(path: &Path, expected: &str) {
         tokio::time::timeout(Duration::from_millis(process_test_timeout_ms()), async {
             loop {
@@ -5315,6 +5332,44 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::large_futures)]
+    async fn compact_endpoint_dispatches_utf16_admissible_unicode_history_unchanged() {
+        let (base_url, request, server) = spawn_capturing_fixture_http_server(
+            "{\"output\":[{\"type\":\"compaction\",\"encrypted_content\":\"fixture-compaction\"}]}"
+                .to_owned(),
+        )
+        .await;
+        let original_input = unicode_heavy_compaction_input();
+        let result = responses_compact(
+            json!({
+                "request": {
+                    "model": "gpt-5.6-sol",
+                    "input": original_input,
+                    "instructions": "fixture instruction ".repeat(500),
+                    "tools": [{ "type": "function", "name": "fixture_tool" }],
+                    "parallel_tool_calls": true,
+                    "reasoning": null,
+                    "service_tier": null,
+                    "prompt_cache_key": null,
+                    "text": null
+                },
+                "requestTimeoutMs": 10_000,
+                "connection": fixture_connection(base_url),
+            }),
+            &CancellationToken::new(),
+        )
+        .await
+        .expect("UTF-16-admissible request should reach compact endpoint");
+
+        assert_eq!(result.status, TerminalStatus::Completed);
+        let request = request.await.expect("fixture request should be captured");
+        let body = fixture_request_body(&request);
+        assert_eq!(body["input"], json!(unicode_heavy_compaction_input()));
+        assert!(body["tools"].is_array());
+        server.await.expect("fixture server should join");
+    }
+
+    #[tokio::test]
     async fn compact_preflight_rejects_unfit_non_eligible_history_without_dispatch() {
         let error = responses_compact(
             json!({
@@ -5344,9 +5399,9 @@ mod tests {
         assert!(matches!(
             error,
             RequestFailure::Bridge(error)
-                if error.code == "context_window_exceeded"
+                if error.code == "compaction_context_limit_exceeded"
                     && !error.retryable
-                    && error.message == "the request exceeded the model context window"
+                    && error.message == "the compaction request exceeded the local model context limit"
         ));
     }
 
@@ -5473,6 +5528,103 @@ mod tests {
                 .count(),
             1
         );
+        server.await.expect("fixture server should join");
+    }
+
+    #[tokio::test]
+    #[allow(clippy::large_futures)]
+    async fn remote_v2_dispatches_utf16_admissible_unicode_history_with_one_trigger() {
+        let (base_url, request, server) = spawn_capturing_fixture_http_server(
+            concat!(
+                "event: response.output_item.done\n",
+                "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"compaction\",\"encrypted_content\":\"opaque\"}}\n\n",
+                "event: response.completed\n",
+                "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"remote-compaction\"}}\n\n",
+            )
+            .to_owned(),
+        )
+        .await;
+        let original_input = unicode_heavy_compaction_input();
+        let result = responses_compact(
+            json!({
+                "implementation": "remote_v2",
+                "transportMode": "sse",
+                "providerSupportsWebsockets": false,
+                "request": {
+                    "model": "gpt-5.6-sol",
+                    "input": original_input,
+                    "instructions": "fixture instruction ".repeat(500),
+                    "tools": [{ "type": "function", "name": "fixture_tool" }],
+                    "parallel_tool_calls": true,
+                    "reasoning": null,
+                    "service_tier": null,
+                    "prompt_cache_key": null,
+                    "text": null
+                },
+                "requestTimeoutMs": 10_000,
+                "connection": fixture_connection(base_url),
+            }),
+            &CancellationToken::new(),
+        )
+        .await
+        .expect("UTF-16-admissible request should reach Remote V2");
+
+        assert_eq!(result.status, TerminalStatus::Completed);
+        let request = request.await.expect("fixture request should be captured");
+        let body = fixture_request_body(&request);
+        let input = body["input"]
+            .as_array()
+            .expect("remote input should be an array");
+        assert_eq!(input.len(), original_input.len() + 1);
+        assert_eq!(&input[..original_input.len()], original_input.as_slice());
+        assert_eq!(
+            input.last().map(|item| &item["type"]),
+            Some(&json!("compaction_trigger"))
+        );
+        server.await.expect("fixture server should join");
+    }
+
+    #[tokio::test]
+    async fn remote_v2_preserves_upstream_context_window_classification() {
+        let (base_url, server) = spawn_fixture_http_server(
+            concat!(
+                "event: response.failed\n",
+                "data: {\"type\":\"response.failed\",\"sequence_number\":1,\"response\":{\"id\":\"fixture-response\",\"object\":\"response\",\"created_at\":0,\"status\":\"failed\",\"background\":false,\"error\":{\"code\":\"context_length_exceeded\",\"message\":\"fixture context exceeded\"},\"usage\":null,\"user\":null,\"metadata\":{}}}\n\n",
+            )
+            .to_owned(),
+        )
+        .await;
+        let error = responses_compact(
+            json!({
+                "implementation": "remote_v2",
+                "transportMode": "sse",
+                "providerSupportsWebsockets": false,
+                "request": {
+                    "model": "gpt-5.6-sol",
+                    "input": [],
+                    "instructions": "",
+                    "tools": null,
+                    "parallel_tool_calls": true,
+                    "reasoning": null,
+                    "service_tier": null,
+                    "prompt_cache_key": null,
+                    "text": null
+                },
+                "requestTimeoutMs": 1_000,
+                "connection": fixture_connection(base_url),
+            }),
+            &CancellationToken::new(),
+        )
+        .await
+        .expect_err("upstream context failure should remain terminal");
+
+        assert!(matches!(
+            error,
+            RequestFailure::Bridge(error)
+                if error.code == "context_window_exceeded"
+                    && !error.retryable
+                    && error.message == "the request exceeded the model context window"
+        ));
         server.await.expect("fixture server should join");
     }
 

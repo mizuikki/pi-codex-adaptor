@@ -17,11 +17,14 @@ import {
 	ResolveEffectiveCapabilities,
 } from "../../application/resolve-effective-capabilities.ts";
 import {
+	checkpointPayload,
 	createRemoteCheckpointProposal,
+	IDENTITY_MISMATCH_WARNING,
 	projectCanonicalEntries,
 	providerCompactionIdentityFromValues,
 	registerCodexCompactionReplay,
 	restoreProviderCheckpointUsageBoundary,
+	scanRemoteCompactionCheckpoints,
 } from "./codex-compaction-replay.ts";
 import type { CodexProviderRequestGuard } from "./codex-provider-request-guard.ts";
 import {
@@ -88,6 +91,7 @@ export function registerCodexCompaction(
 			runtime,
 			configuration,
 			activation,
+			store,
 			coordinator,
 			capabilities,
 			profile,
@@ -115,6 +119,7 @@ async function compactForPi(
 		readonly runtime: CodexRuntime;
 		readonly configuration: ConfigurationService;
 		readonly activation: ProviderActivationPolicy;
+		readonly store: CodexCompactionStore;
 		readonly coordinator: CodexCompactionCoordinator;
 		readonly capabilities: ResolveEffectiveCapabilities;
 		readonly profile: CodexToolProfileCoordinator;
@@ -174,11 +179,19 @@ async function compactForPi(
 		);
 		const coveredEntry = firstKeptIndex > 0 ? branch[firstKeptIndex - 1] : undefined;
 		if (coveredEntry === undefined) throw new Error("Codex compaction boundary is unavailable");
-		const input = projectCanonicalEntries(branch.slice(0, firstKeptIndex));
-		if (input.length === 0) throw new Error("Codex compaction input is empty");
-		if (providerCompactionIdentityFromValues({ sessionId, model, connection }) === undefined) {
+		const identity = providerCompactionIdentityFromValues({ sessionId, model, connection });
+		if (identity === undefined) {
 			throw new Error("OpenAI Codex compaction credentials are unsupported");
 		}
+		const scan = scanRemoteCompactionCheckpoints(branch, identity, firstKeptIndex);
+		if (scan.hasIdentityMismatch && state.store.warnOnce(sessionId, identity)) {
+			ctx.ui.notify(IDENTITY_MISMATCH_WARNING, "warning");
+		}
+		const input =
+			scan.matching === undefined
+				? projectCanonicalEntries(branch.slice(0, firstKeptIndex))
+				: checkpointPayload(scan.matching, branch, firstKeptIndex);
+		if (input.length === 0) throw new Error("Codex compaction input is empty");
 		const compacted = await createRemoteCheckpointProposal({
 			runtime: state.runtime,
 			connection,
