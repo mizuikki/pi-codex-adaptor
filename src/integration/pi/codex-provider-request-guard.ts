@@ -39,6 +39,7 @@ export type CodexProviderRequestRecord = Omit<CodexProviderRequestRecordInput, "
 	readonly requestDigest: string;
 	approvedRequest?: Record<string, unknown>;
 	approvedDigest?: string;
+	failure?: { readonly cause: unknown };
 	closed: boolean;
 };
 
@@ -98,8 +99,15 @@ export class CodexProviderRequestGuard {
 		return frozen;
 	}
 
+	recordFailure(record: CodexProviderRequestRecord, cause: unknown): void {
+		this.assertLive(record);
+		if (this.current() !== record) throw new Error(RECORD_REJECTED);
+		if (record.failure === undefined) record.failure = { cause };
+	}
+
 	assertApproved(record: CodexProviderRequestRecord, request: unknown): Record<string, unknown> {
 		this.assertLive(record);
+		if (record.failure !== undefined) throw record.failure.cause;
 		if (
 			record.approvedRequest === undefined ||
 			record.approvedDigest === undefined ||

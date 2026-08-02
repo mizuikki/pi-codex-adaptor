@@ -25,6 +25,7 @@ uses the same structure: context, decision, and consequences.
 | [0018](./0018-private-local-fork-integration.md) | Private local Pi fork integration and removal of publication automation |
 | [0019](./0019-upstream-provider-error-visibility.md) | Bounded upstream provider error visibility in Pi |
 | [0020](./0020-extension-owned-remote-compaction-clean-slate.md) | Extension-owned Remote Compaction and identity-bound continuity |
+| [0021](./0021-provider-authoritative-ambiguous-compaction-fit.md) | Provider-authoritative handling of ambiguous compact-request fit |
 
 Accepted ADRs are changed only to correct factual errors. A decision change requires a new ADR that
 explicitly supersedes the earlier record. Baseline upgrades and product-boundary changes must remain

@@ -11,15 +11,23 @@ the captured selection on deactivation or shutdown.
 The provider request guard supplies one live session/model/connection record and one Pi commit token.
 The `before_provider_payload` hook may return a sealed payload and one provider checkpoint proposal.
 Pi appends and reads back the context-invisible custom entry before provider dispatch. Stale, forged,
-reused, cancelled, or indeterminate transactions block dispatch and are never retried.
+reused, cancelled, or indeterminate transactions block dispatch and are never retried. The guard
+retains the adaptor handler's first failure and rethrows it before dispatch if Pi swallows the hook
+exception; only existing trusted provider-error classes expose their bounded detail.
 
 ## Compaction
 
 All Codex compaction triggers use the native `responses.compact` operation once per native attempt.
-Manual and overflow handlers return the provider-checkpoint result. Threshold preparation returns a
-handled cancellation so the inline provider hook is the sole threshold authority. The hook replays an
-exact matching checkpoint plus the canonical suffix, or performs one remote operation when the suffix
-first exceeds the effective threshold.
+Manual and overflow handlers reuse the newest exact checkpoint fully contained in the prefix being
+replaced, append only that prefix's canonical suffix, and return the provider-checkpoint result.
+Threshold preparation returns a handled cancellation so the inline provider hook is the sole
+threshold authority. The hook replays an exact matching checkpoint plus the canonical suffix, or
+performs one remote operation when the suffix first exceeds the effective threshold.
+
+Native compact preflight compares UTF-8-byte and UTF-16-density estimates of the complete request.
+Both must overflow before eligible trailing outputs are rewritten or the request is rejected locally.
+Estimator disagreement is provider-authoritative; local and upstream context failures use distinct
+bounded codes.
 
 Plain `/compact` is supported. Custom `/compact` instructions are rejected before dispatch because the
 official remote operation does not accept them.

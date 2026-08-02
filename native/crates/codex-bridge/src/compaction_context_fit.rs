@@ -15,6 +15,18 @@ const CONTEXT_WINDOW_TRUNCATED_OUTPUT_MESSAGE: &str =
     "Output exceeded the available model context and was truncated";
 const COMPACTION_REQUEST_OVERHEAD_TOKENS: u64 = 128;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct CompactionTokenEstimates {
+    utf8_bytes: u64,
+    utf16_code_units: u64,
+}
+
+impl CompactionTokenEstimates {
+    fn fits(self, limit: u64) -> bool {
+        self.utf8_bytes <= limit || self.utf16_code_units <= limit
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct OwnedCompactionInput {
@@ -67,29 +79,29 @@ pub(crate) fn fit_compaction_input(
     let Some(limit) = effective_context_window_limit(model) else {
         return Ok(());
     };
-    let mut estimated_tokens = estimate_compaction_request_tokens(request);
-    if estimated_tokens <= limit {
+    let mut estimates = estimate_compaction_request_tokens(request);
+    if estimates.fits(limit) {
         return Ok(());
     }
 
     for index in (0..request.input.len()).rev() {
-        if estimated_tokens <= limit {
+        if estimates.fits(limit) {
             break;
         }
         let Some(rewritten) = rewritten_output_for_context_window(&request.input[index]) else {
             break;
         };
         request.input[index] = rewritten;
-        estimated_tokens = estimate_compaction_request_tokens(request);
+        estimates = estimate_compaction_request_tokens(request);
     }
 
-    if estimated_tokens > limit {
-        return Err(context_window_exceeded());
+    if !estimates.fits(limit) {
+        return Err(compaction_context_limit_exceeded());
     }
     Ok(())
 }
 
-fn estimate_compaction_request_tokens(request: &OwnedCompactionInput) -> u64 {
+fn estimate_compaction_request_tokens(request: &OwnedCompactionInput) -> CompactionTokenEstimates {
     let mut input = request.input.clone();
     input.push(ResponseItem::CompactionTrigger {});
     let estimate = CompactionRequestEstimate {
@@ -107,10 +119,23 @@ fn estimate_compaction_request_tokens(request: &OwnedCompactionInput) -> u64 {
         prompt_cache_key: request.prompt_cache_key.as_deref(),
         text: request.text.as_ref(),
     };
-    serde_json::to_vec(&estimate).map_or(u64::MAX, |bytes| {
-        approx_tokens_from_byte_count(bytes.len())
-            .saturating_add(COMPACTION_REQUEST_OVERHEAD_TOKENS)
-    })
+    serde_json::to_vec(&estimate).map_or(
+        CompactionTokenEstimates {
+            utf8_bytes: u64::MAX,
+            utf16_code_units: u64::MAX,
+        },
+        |bytes| {
+            let utf8_bytes = approx_tokens_from_byte_count(bytes.len());
+            let utf16_code_units = std::str::from_utf8(&bytes).map_or(u64::MAX, |serialized| {
+                approx_tokens_from_byte_count(serialized.encode_utf16().count())
+            });
+            CompactionTokenEstimates {
+                utf8_bytes: utf8_bytes.saturating_add(COMPACTION_REQUEST_OVERHEAD_TOKENS),
+                utf16_code_units: utf16_code_units
+                    .saturating_add(COMPACTION_REQUEST_OVERHEAD_TOKENS),
+            }
+        },
+    )
 }
 
 fn rewritten_output_for_context_window(item: &ResponseItem) -> Option<ResponseItem> {
@@ -165,11 +190,11 @@ fn truncated_output_payload(output: &FunctionCallOutputPayload) -> FunctionCallO
     }
 }
 
-fn context_window_exceeded() -> BridgeError {
+fn compaction_context_limit_exceeded() -> BridgeError {
     BridgeError {
         category: ErrorCategory::CapabilityError,
-        code: "context_window_exceeded".to_owned(),
-        message: "the request exceeded the model context window".to_owned(),
+        code: "compaction_context_limit_exceeded".to_owned(),
+        message: "the compaction request exceeded the local model context limit".to_owned(),
         retryable: false,
     }
 }
@@ -249,6 +274,21 @@ mod tests {
     }
 
     #[test]
+    fn leaves_utf16_admissible_unicode_output_unchanged() {
+        let model = fixture_model(1_300, 50);
+        let mut request = request(vec![function_output("界".repeat(800))]);
+        let original = request.input.clone();
+        let estimates = estimate_compaction_request_tokens(&request);
+
+        assert!(estimates.utf8_bytes > 650);
+        assert!(estimates.utf16_code_units <= 650);
+
+        fit_compaction_input(&mut request, &model).expect("ambiguous input should reach upstream");
+
+        assert_eq!(request.input, original);
+    }
+
+    #[test]
     fn rewrites_eligible_trailing_outputs_and_preserves_metadata() {
         let model = fixture_model(1_000, 50);
         let mut request = request(vec![function_output("x".repeat(2_000))]);
@@ -277,7 +317,7 @@ mod tests {
                 .and_then(|metadata| metadata.turn_id.as_deref()),
             Some("turn-id")
         );
-        assert!(estimate_compaction_request_tokens(&request) <= 500);
+        assert!(estimate_compaction_request_tokens(&request).fits(500));
     }
 
     #[test]
@@ -347,11 +387,11 @@ mod tests {
 
         let error = fit_compaction_input(&mut request, &model).expect_err("history should not fit");
 
-        assert_eq!(error.code, "context_window_exceeded");
+        assert_eq!(error.code, "compaction_context_limit_exceeded");
         assert!(!error.retryable);
         assert_eq!(
             error.message,
-            "the request exceeded the model context window"
+            "the compaction request exceeded the local model context limit"
         );
         assert_eq!(request.input[0], original);
     }

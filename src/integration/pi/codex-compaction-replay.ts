@@ -54,7 +54,7 @@ import {
 } from "./provider-payload-compaction-api.ts";
 
 const REPLAY_ERROR = "OpenAI Codex request could not be safely reconstructed";
-const IDENTITY_MISMATCH_WARNING =
+export const IDENTITY_MISMATCH_WARNING =
 	"Codex checkpoint identity changed; canonical session history is being used. Start a new session if it does not fit.";
 
 export interface CodexCompactionReplayOptions {
@@ -98,7 +98,13 @@ export interface RemoteCheckpointRequestOptions {
 
 export function registerCodexCompactionReplay(options: CodexCompactionReplayOptions): void {
 	onBeforeProviderPayload(options.pi, async (event, ctx) => {
-		return handleBeforeProviderPayload(event, ctx, options);
+		try {
+			return await handleBeforeProviderPayload(event, ctx, options);
+		} catch (error) {
+			const record = options.guard.current();
+			if (record !== undefined) options.guard.recordFailure(record, error);
+			throw error;
+		}
 	});
 }
 
@@ -432,6 +438,7 @@ function refreshBoundaryForRequest(
 export function scanRemoteCompactionCheckpoints(
 	branch: readonly SessionEntry[],
 	identity: CodexCompactionIdentity,
+	coveredBeforeIndex: number = branch.length,
 ): CheckpointScan {
 	let hasIdentityMismatch = false;
 	for (let index = branch.length - 1; index >= 0; index -= 1) {
@@ -446,7 +453,7 @@ export function scanRemoteCompactionCheckpoints(
 		const coveredIndex = branch.findIndex(
 			(candidate) => candidate.id === checkpoint.coveredEntryId,
 		);
-		if (coveredIndex < 0 || coveredIndex >= index) continue;
+		if (coveredIndex < 0 || coveredIndex >= index || coveredIndex >= coveredBeforeIndex) continue;
 		return {
 			matching: { entry, checkpoint, coveredIndex, entryIndex: index },
 			hasIdentityMismatch,
@@ -458,17 +465,27 @@ export function scanRemoteCompactionCheckpoints(
 export function checkpointPayload(
 	selection: CheckpointSelection,
 	branch: readonly SessionEntry[],
+	endExclusive: number = branch.length,
 ): readonly StructuredResponseItem[] {
-	return [...selection.checkpoint.output, ...checkpointSuffix(branch, selection.coveredIndex)].map(
-		(item) => structuredClone(item),
-	);
+	if (
+		!Number.isInteger(endExclusive) ||
+		endExclusive <= selection.coveredIndex ||
+		endExclusive > branch.length
+	) {
+		throw new Error(REPLAY_ERROR);
+	}
+	return [
+		...selection.checkpoint.output,
+		...checkpointSuffix(branch, selection.coveredIndex, endExclusive),
+	].map((item) => structuredClone(item));
 }
 
 function checkpointSuffix(
 	branch: readonly SessionEntry[],
 	coveredIndex: number,
+	endExclusive: number = branch.length,
 ): readonly StructuredResponseItem[] {
-	return projectCanonicalEntries(branch.slice(coveredIndex + 1));
+	return projectCanonicalEntries(branch.slice(coveredIndex + 1, endExclusive));
 }
 
 export function projectCanonicalEntries(

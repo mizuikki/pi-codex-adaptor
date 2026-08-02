@@ -202,6 +202,43 @@ describe("remote compaction checkpoint contract", () => {
 		expect(scanRemoteCompactionCheckpoints(invalidCoverage, identity).matching).toBeUndefined();
 	});
 
+	test("selects the newest exact checkpoint fully covered by a requested prefix", () => {
+		const first = messageEntry("entry-1", null, "user", "first canonical input");
+		const olderCheckpoint: SessionEntry = {
+			type: "custom",
+			id: "checkpoint-old",
+			parentId: first.id,
+			timestamp: "2026-07-27T00:00:01.000Z",
+			customType: CODEX_REMOTE_COMPACTION_KIND,
+			data: { ...checkpoint(), checkpointId: "checkpoint-old", coveredEntryId: first.id },
+		};
+		const second = messageEntry("entry-2", olderCheckpoint.id, "user", "second canonical input");
+		const newerCheckpoint: SessionEntry = {
+			type: "custom",
+			id: "checkpoint-new",
+			parentId: second.id,
+			timestamp: "2026-07-27T00:00:02.000Z",
+			customType: CODEX_REMOTE_COMPACTION_KIND,
+			data: { ...checkpoint(), checkpointId: "checkpoint-new", coveredEntryId: second.id },
+		};
+		const retained = messageEntry("entry-3", newerCheckpoint.id, "assistant", "retained input");
+		const branch = [first, olderCheckpoint, second, newerCheckpoint, retained];
+
+		const scan = scanRemoteCompactionCheckpoints(branch, identity, 2);
+		if (scan.matching === undefined) throw new Error("Expected an eligible older checkpoint");
+		const matching = scan.matching;
+		expect(matching.entry.id).toBe("checkpoint-old");
+		expect(checkpointPayload(matching, branch, 3)).toEqual([
+			compactionItem,
+			{
+				type: "message",
+				role: "user",
+				content: [{ type: "input_text", text: "second canonical input" }],
+			},
+		]);
+		expect(() => checkpointPayload(matching, branch, 0)).toThrow();
+	});
+
 	test("serializes mismatch warnings once per exact identity and session", () => {
 		const store = new CodexCompactionStore();
 		expect(store.warnOnce("session-1", identity)).toBe(true);
@@ -587,6 +624,105 @@ describe("remote compaction checkpoint contract", () => {
 			totalTokens: 130,
 		});
 		expect(overflow?.providerCheckpoint).toBeDefined();
+	});
+
+	test("reuses only an exact checkpoint inside manual and overflow prefixes", async () => {
+		const sessionId = "checkpointed-manual-session";
+		const pi = createFakePi({ token: fixtureToken(), sessionId });
+		const model = fixtureModel() as Model<string>;
+		const ctx = pi.context(model, sessionId);
+		const connection = createProviderConnection(model, { apiKey: fixtureToken() });
+		const exactIdentity = providerCompactionIdentityFromValues({ sessionId, model, connection });
+		if (exactIdentity === undefined) throw new Error("fixture identity was not created");
+		const first = messageEntry("entry-1", null, "user", "covered canonical input");
+		const checkpointEntry: SessionEntry = {
+			type: "custom",
+			id: "checkpoint-entry",
+			parentId: first.id,
+			timestamp: "2026-07-27T00:00:01.000Z",
+			customType: CODEX_REMOTE_COMPACTION_KIND,
+			data: createRemoteCompactionCheckpoint(
+				exactIdentity,
+				"checkpoint-exact",
+				first.id,
+				"compact_endpoint",
+				[compactionItem],
+				100,
+			),
+		};
+		const second = messageEntry("entry-2", checkpointEntry.id, "user", "checkpoint suffix");
+		const retained = messageEntry("entry-3", second.id, "assistant", "retained assistant");
+		const exactBranch = [first, checkpointEntry, second, retained];
+		const mismatchData = createRemoteCompactionCheckpoint(
+			{ ...exactIdentity, modelId: "different-model" },
+			"checkpoint-mismatch",
+			first.id,
+			"compact_endpoint",
+			[compactionItem],
+			100,
+		);
+		const mismatchBranch = exactBranch.map((entry) =>
+			entry.id === checkpointEntry.id && entry.type === "custom"
+				? { ...entry, data: mismatchData }
+				: entry,
+		);
+		const manager = ctx.sessionManager as unknown as { getLeafId: () => string };
+		manager.getLeafId = () => retained.id;
+		const compactInputs: unknown[] = [];
+		const runtime = {
+			compact: async (options: { request: { input: unknown } }) => {
+				compactInputs.push(structuredClone(options.request.input));
+				return {
+					status: "completed",
+					result: { output: [compactionItem] },
+				};
+			},
+		} as unknown as CodexRuntime;
+		registerCodexCompaction(
+			pi.api,
+			runtime,
+			{ load: async () => createDefaultConfig() } as never,
+			new CodexCompactionStore(),
+			{ isActive: () => true } as never,
+			new CodexCompactionCoordinator(),
+			{
+				resolve: async () => ({
+					compaction: { implementation: "compact_endpoint", threshold: 100 },
+					providerSupportsWebsockets: false,
+					shell: { sessionSurface: "official" },
+				}),
+			} as never,
+			{ isHealthy: () => true, registeredManagedTools: () => [] } as never,
+		);
+		const handler = pi.handlers.get("session_before_compact")?.[0];
+		if (handler === undefined) throw new Error("session_before_compact handler was not registered");
+		const event = {
+			customInstructions: undefined,
+			signal: new AbortController().signal,
+			preparation: { firstKeptEntryId: retained.id },
+			checkpointToken: {} as never,
+		};
+
+		for (const reason of ["manual", "overflow"] as const) {
+			const result = (await handler({ ...event, reason, branchEntries: exactBranch }, ctx)) as
+				| { providerCheckpoint?: ProviderCheckpointProposal }
+				| undefined;
+			expect(result?.providerCheckpoint).toBeDefined();
+		}
+		await handler({ ...event, reason: "manual", branchEntries: mismatchBranch }, ctx);
+
+		const expectedCheckpointInput = [
+			compactionItem,
+			{
+				type: "message",
+				role: "user",
+				content: [{ type: "input_text", text: "checkpoint suffix" }],
+			},
+		];
+		expect(compactInputs.slice(0, 2)).toEqual([expectedCheckpointInput, expectedCheckpointInput]);
+		expect(JSON.stringify(compactInputs[2])).not.toContain("opaque-fixture-output");
+		expect(JSON.stringify(compactInputs[2])).toContain("covered canonical input");
+		expect(pi.notifications).toHaveLength(1);
 	});
 
 	test("projects canonical entries without checkpoint or context-invisible metadata", () => {
