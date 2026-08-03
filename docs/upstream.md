@@ -34,3 +34,17 @@ manifests without inferring provenance from filenames.
 The paired Pi fork is a separate private baseline. It preserves Pi session format version `3` and
 extension ABI version `1`, and adds only the independently versioned provider checkpoint transaction
 needed by this adaptor. Pi product versions are not compatibility identifiers.
+
+The active immutable host baseline is:
+
+| Field | Value |
+| --- | --- |
+| Repository | `https://github.com/mizuikki/pi.git` |
+| SDK tag | `pi-extension-sdk-v1.2.2` |
+| Annotated tag object | `4710c31910c6a5baa856752e5832e6d81cdf326a` |
+| Peeled commit | `ad4a7afe23c265204bbc6b66eb59bae7c860ed7a` |
+| Host navigation contract | Verified provider checkpoints carry host-owned navigation metadata and remain opaque/context-invisible |
+
+The adaptor consumes this host contract through the existing provider checkpoint transaction and
+`session_tree` lifecycle. It does not parse host navigation metadata, decrypt checkpoint output, or
+create a textual Pi compaction entry.

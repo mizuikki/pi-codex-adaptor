@@ -85,6 +85,14 @@ extension-owned cache of one covered active-branch prefix, stored in a context-i
 Pi does not parse Codex identity fields or opaque response items and does not add a session entry type
 or session-format version.
 
+The paired Pi host at the protected SDK tag `pi-extension-sdk-v1.2.2` adds a trusted navigation
+projection to verified provider-checkpoint custom entries. Pi owns the default Session Tree filter,
+bounded provider-checkpoint label, reload/resume/fork persistence, and HTML redaction. The adaptor
+owns neither that projection nor its rendering: it
+continues to use the checkpoint entry ID and `session_tree` event only to restore or clear the active
+branch usage boundary. Navigation metadata is not provider payload and is never included in model
+context.
+
 For an exact checkpoint identity, the adaptor selects the latest valid version-one entry on the active
 branch that is fully covered by the requested replay or compaction boundary and builds:
 
