@@ -28,6 +28,16 @@ cargo test --manifest-path native/Cargo.toml --workspace
 bun run test:pi-fork -- --pi-dir /absolute/path/to/pi --pi-ref <immutable-commit-or-tag>
 ```
 
+The current paired baseline uses the protected tag `pi-extension-sdk-v1.2.2`, peeled to
+`ad4a7afe23c265204bbc6b66eb59bae7c860ed7a`. The tag object is
+`4710c31910c6a5baa856752e5832e6d81cdf326a`; the manifest's four package digests and `forkCommit`
+remain the provenance authority. Verification against a branch or a workspace-linked SDK is not
+equivalent evidence.
+
+Host navigation behavior is evidenced by the public Pi PR
+`https://github.com/mizuikki/pi/pull/16`; this repository verifies the paired SDK identity, loader
+isolation, checkpoint replay, and usage-boundary restoration.
+
 ## Behavioral gates
 
 - every logical compaction calls `runtime.compact()` once at most;
@@ -44,6 +54,8 @@ bun run test:pi-fork -- --pi-dir /absolute/path/to/pi --pi-ref <immutable-commit
 - context usage is unknown after commit and becomes valid only after a later assistant usage;
 - native retry and backoff mutate no Pi payload and create no checkpoint on cancellation;
 - ordinary Pi sessions and ordinary textual compactions remain readable without adaptor parsing;
+- verified provider checkpoints remain visible and searchable in Pi's default Session Tree, while
+  opaque checkpoint data remains outside model context and HTML export;
 - v5/v6 startup mismatch fails before provider registration;
 - diagnostics contain no credentials, prompts, account data, opaque output, or local paths.
 

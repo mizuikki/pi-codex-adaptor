@@ -33,6 +33,10 @@ Pi's atomic custom-entry transaction. The UI presents an explicit provider-check
 the verified entry ID and token counts; it never fabricates a textual summary or `CompactionEntry`.
 The UI never decrypts or displays encrypted output.
 
+The paired Pi host also exposes a verified provider checkpoint as a navigable Session Tree boundary.
+Its bounded label and parent/checkpoint navigation are host-owned; the adaptor does not duplicate the
+label or expose opaque checkpoint data.
+
 Inline automatic compaction remains silent in the live provider flow: it continues the current
 provider request and adds no synthetic conversational message or continuation turn. Pi verifies the
 custom checkpoint before dispatching the exact sealed rewritten payload. A matching checkpoint with

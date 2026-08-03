@@ -38,6 +38,13 @@ unchanged. The adaptor validates identity, branch coverage, output shape, and re
 owns append/readback and the usage-boundary entry ID. Older adaptor checkpoint data is inert and has
 no reader or migration path.
 
+The paired Pi host at the protected SDK tag `pi-extension-sdk-v1.2.2` gives a transaction-verified
+checkpoint a host-owned `navigation.role = "provider_checkpoint"` projection and trusted
+`tokensBefore` label. That makes the boundary visible and selectable in the default Session Tree while
+keeping the checkpoint data opaque, context-invisible, and redacted from HTML export. The adaptor does
+not parse this navigation metadata or render a duplicate summary; it reacts only to the existing
+`session_tree` lifecycle and entry ID.
+
 Provider/model/authentication changes never replay opaque output. The adaptor keeps canonical Pi
 history, emits one non-sensitive warning, and does not promise that the destination model can fit it.
 Starting a new session is the supported recovery when it cannot.
