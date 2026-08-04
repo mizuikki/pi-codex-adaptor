@@ -52,7 +52,7 @@ describe("bridge protocol v8", () => {
 			method: "responses.estimate_context",
 			params: {
 				model: "fixture-model",
-				instructions: "fixture instructions",
+				instructions: "",
 				baseline: { totalTokens: 100, minimumModelGeneratedIndex: 0 },
 			},
 		});

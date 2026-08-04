@@ -1,6 +1,6 @@
 {"type":"initialize","requestId":"init-1","protocolVersion":8,"client":{"name":"pi-codex-adaptor","version":"0.0.0"}}
 {"type":"request","requestId":"request-0","method":"responses.compact","params":{"implementation":"compact_endpoint","request":{"model":"fixture-model","input":[]}}}
-{"type":"request","requestId":"request-estimate","method":"responses.estimate_context","params":{"model":"fixture-model","instructions":"fixture instructions","input":[],"baseline":{"totalTokens":100,"minimumModelGeneratedIndex":0}}}
+{"type":"request","requestId":"request-estimate","method":"responses.estimate_context","params":{"model":"fixture-model","instructions":"","input":[],"baseline":{"totalTokens":100,"minimumModelGeneratedIndex":0}}}
 {"type":"request","requestId":"request-1","method":"models.resolve","params":{"modelId":"fixture-model"}}
 {"type":"cancel","requestId":"cancel-1","targetRequestId":"request-1"}
 {"type":"approval_decision","requestId":"decision-1","approvalId":"approval-1","decision":"decline"}

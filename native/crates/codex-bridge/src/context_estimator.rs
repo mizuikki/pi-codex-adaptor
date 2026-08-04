@@ -1,5 +1,8 @@
+use std::io::Cursor;
+
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use bridge_protocol::MAX_FRAME_BYTES;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
@@ -9,12 +12,16 @@ use codex_protocol::openai_models::ModelInfo;
 use codex_utils_output_truncation::approx_bytes_for_tokens;
 use codex_utils_output_truncation::approx_token_count;
 use codex_utils_output_truncation::approx_tokens_from_byte_count_i64;
+use image::ImageReader;
 use serde::Serialize;
 
 const REASONING_BASE64_OVERHEAD_BYTES: usize = 650;
 const RESIZED_IMAGE_BYTES_ESTIMATE: i64 = 7_373;
-const ORIGINAL_IMAGE_PATCH_SIZE: i64 = 32;
-const ORIGINAL_IMAGE_MAX_PATCHES: i64 = 10_000;
+const ORIGINAL_IMAGE_PATCH_SIZE: u32 = 32;
+const ORIGINAL_IMAGE_MAX_PATCHES: u64 = 10_000;
+const ORIGINAL_IMAGE_MAX_PIXELS: u64 = ORIGINAL_IMAGE_PATCH_SIZE as u64
+    * ORIGINAL_IMAGE_PATCH_SIZE as u64
+    * ORIGINAL_IMAGE_MAX_PATCHES;
 
 pub(crate) fn estimate_items(items: &[ResponseItem]) -> i64 {
     items
@@ -138,10 +145,25 @@ fn base64_data_url_payload<'a>(url: &'a str, media_prefix: &str) -> Option<&'a s
 }
 
 fn estimate_original_image_bytes(payload: &str) -> Option<i64> {
+    if payload.len() > MAX_FRAME_BYTES {
+        return None;
+    }
     let bytes = BASE64_STANDARD.decode(payload).ok()?;
-    let image = image::load_from_memory(&bytes).ok()?;
-    let patches_wide = i64::from(image.width()).saturating_add(31) / ORIGINAL_IMAGE_PATCH_SIZE;
-    let patches_high = i64::from(image.height()).saturating_add(31) / ORIGINAL_IMAGE_PATCH_SIZE;
+    let (width, height) = ImageReader::new(Cursor::new(bytes))
+        .with_guessed_format()
+        .ok()?
+        .into_dimensions()
+        .ok()?;
+    estimate_original_image_dimensions(width, height)
+}
+
+fn estimate_original_image_dimensions(width: u32, height: u32) -> Option<i64> {
+    let pixels = u64::from(width).saturating_mul(u64::from(height));
+    if pixels > ORIGINAL_IMAGE_MAX_PIXELS {
+        return None;
+    }
+    let patches_wide = u64::from(width.div_ceil(ORIGINAL_IMAGE_PATCH_SIZE));
+    let patches_high = u64::from(height.div_ceil(ORIGINAL_IMAGE_PATCH_SIZE));
     let patches = patches_wide
         .saturating_mul(patches_high)
         .min(ORIGINAL_IMAGE_MAX_PATCHES);
@@ -268,5 +290,26 @@ mod tests {
             i64::try_from(serialized_len(&image) + serialized_len(&encrypted)).unwrap_or(i64::MAX),
         );
         assert!(estimate_items(&[image, encrypted]) < raw_tokens);
+    }
+
+    #[test]
+    fn bounds_original_image_inspection_before_estimating_patches() {
+        let mut encoded = Cursor::new(Vec::new());
+        image::DynamicImage::new_rgba8(1, 1)
+            .write_to(&mut encoded, image::ImageFormat::Png)
+            .expect("synthetic image should encode");
+        let payload = BASE64_STANDARD.encode(encoded.into_inner());
+        assert_eq!(
+            estimate_original_image_bytes(&payload),
+            estimate_original_image_dimensions(1, 1)
+        );
+        assert!(
+            estimate_original_image_bytes(&"A".repeat(MAX_FRAME_BYTES + 1)).is_none(),
+            "encoded payloads above the frame limit must not be decoded"
+        );
+        assert!(
+            estimate_original_image_dimensions(ORIGINAL_IMAGE_PATCH_SIZE * 101, 3_200).is_none(),
+            "images above the pixel budget must use the resized fallback"
+        );
     }
 }

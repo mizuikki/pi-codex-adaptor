@@ -132,6 +132,47 @@ describe("native child integration", () => {
 		).rejects.toMatchObject({ code: "context_window_exceeded", retryable: false });
 	}, 60_000);
 
+	test("does not promote a phrase in a large fake HTTP 200 JSON output", async () => {
+		const server = await startFakeResponsesServer([fixtureModelSpec({ slug: "fixture-model" })], {
+			responsesResponse: () =>
+				Response.json({
+					output: [
+						{
+							message: `Your input exceeds the context window of this model.${"x".repeat(70_000)}`,
+						},
+					],
+				}),
+		});
+		cleanups.push(() => server.stop());
+		const { runtime } = await createIntegrationRuntime();
+		cleanups.push(async () => runtime.shutdown());
+
+		try {
+			await runtime.createResponse({
+				connection: providerConnection(server.baseUrl) as never,
+				request: {
+					model: "fixture-model",
+					instructions: "",
+					input: [],
+					tools: null,
+					tool_choice: "auto",
+					parallel_tool_calls: false,
+					reasoning: null,
+					store: false,
+					stream: true,
+					include: [],
+				},
+				transportMode: "sse",
+				providerSupportsWebsockets: false,
+				onEvent: () => {},
+			});
+			expect.unreachable();
+		} catch (error) {
+			expect(error).toBeInstanceOf(BridgeRemoteError);
+			expect(error).not.toMatchObject({ code: "context_window_exceeded" });
+		}
+	}, 60_000);
+
 	test("streams responses through a local fake server without user CODEX_HOME", async () => {
 		const server = await startFakeResponsesServer([
 			fixtureModelSpec({ slug: "fixture-model", shellType: "shell_command" }),

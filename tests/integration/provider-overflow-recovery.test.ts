@@ -90,13 +90,13 @@ function contextErrorResponse(): Response {
 
 async function createScenario(options: {
 	readonly failEveryResponse: boolean;
-	readonly responseDelayMs?: number;
+	readonly responseGate?: Promise<void>;
 }) {
 	const server = await startFakeResponsesServer(
 		[fixtureModelSpec({ slug: "overflow-fixture-model", shellType: "shell_command" })],
 		{
 			responsesResponse: async (_request, responseIndex) => {
-				if (options.responseDelayMs !== undefined) await Bun.sleep(options.responseDelayMs);
+				if (options.responseGate !== undefined) await options.responseGate;
 				return options.failEveryResponse || responseIndex === 0
 					? contextErrorResponse()
 					: undefined;
@@ -218,6 +218,14 @@ async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<voi
 	}
 }
 
+function createResponseGate(): { readonly wait: Promise<void>; release(): void } {
+	let release = () => {};
+	const wait = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	return { wait, release };
+}
+
 describe("provider overflow recovery", () => {
 	test("commits one provider checkpoint and retries one fake-200 overflow", async () => {
 		const scenario = await createScenario({ failEveryResponse: false });
@@ -248,14 +256,17 @@ describe("provider overflow recovery", () => {
 	}, 60_000);
 
 	test("cancellation does not start overflow recovery", async () => {
-		const scenario = await createScenario({ failEveryResponse: true, responseDelayMs: 100 });
+		const gate = createResponseGate();
+		const scenario = await createScenario({ failEveryResponse: true, responseGate: gate.wait });
 		try {
 			const prompt = scenario.agentSession.prompt("synthetic cancelled overflow request");
 			await waitFor(() => requestCounts(scenario.server.requests).responses === 1);
 			await scenario.agentSession.abort();
+			gate.release();
 			await prompt;
 			expect(requestCounts(scenario.server.requests)).toEqual({ responses: 1, compactions: 0 });
 		} finally {
+			gate.release();
 			await scenario.dispose();
 		}
 	}, 60_000);
