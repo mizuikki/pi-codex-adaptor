@@ -134,6 +134,15 @@ also recognizes the same structured context error when a proxy incorrectly retur
 body instead of an SSE failure event. JSON inspection accumulates at most a 64 KiB prefix across
 arbitrary transport chunks and replays non-error bodies without collecting the remaining stream.
 
+Checkpoint replay and context estimation run even when Pi cannot prepare an inline checkpoint token
+for the current leaf. Existing checkpoints are still rewritten before dispatch. If an
+uncheckpointed request reaches the threshold without a token, a local provider preflight emits the
+same Pi overflow sentinel before any native provider request; Pi's bounded overflow lifecycle then
+creates the commit token and performs the single checkpoint-and-retry sequence. Uncheckpointed
+epochs use the conservative maximum of aligned server usage and the full bounded estimate, while an
+aligned post-checkpoint epoch trusts its current-generation server baseline instead of repeatedly
+compacting an opaque replacement from the coarse full estimate.
+
 ## Privacy and verification
 
 Credentials, prompts, account data, opaque output, headers, and absolute paths are bounded or redacted

@@ -35,6 +35,7 @@ import {
 	isStrictPlainRecord,
 } from "../../application/structured-json.ts";
 import { responseItemsFromMessages } from "./codex-provider.ts";
+import { CodexProviderContextWindowError } from "./codex-provider-error.ts";
 import {
 	authenticationSummary,
 	type CodexProviderRequestGuard,
@@ -296,7 +297,6 @@ async function handleBeforeProviderPayload(
 	const attribution = event.attribution as unknown as ProviderPayloadAttribution;
 	if (attribution.origin !== "agent") return { payload: options.guard.approve(record, payload) };
 	const token = attribution.compaction?.token;
-	if (token === undefined) return { payload: options.guard.approve(record, payload) };
 	const input = responseInput(payload.input);
 	const identity = providerCompactionIdentity(record);
 	if (identity === undefined) throw new Error(REPLAY_ERROR);
@@ -356,13 +356,17 @@ async function handleBeforeProviderPayload(
 	].filter((value): value is number => typeof value === "number" && value > 0);
 	const decisionThreshold =
 		thresholdCandidates.length === 0 ? undefined : Math.min(...thresholdCandidates);
+	const decisionContextTokens =
+		current === undefined
+			? Math.max(estimate.activeContextTokens, estimate.fullEstimatedTokens)
+			: estimate.activeContextTokens;
 	const hasUncheckpointedInput =
 		current === undefined
 			? input.length > 0
 			: checkpointSuffix(branch, current.coveredIndex).length > 0;
 	const shouldCompact = shouldCreateAutomaticCheckpoint({
 		mode: config.codex.compaction.mode,
-		contextTokens: estimate.activeContextTokens,
+		contextTokens: decisionContextTokens,
 		threshold: decisionThreshold,
 		hasUncheckpointedInput,
 		busy: options.coordinator.isBusy(record.sessionId),
@@ -370,7 +374,7 @@ async function handleBeforeProviderPayload(
 	if (
 		!shouldCompact &&
 		estimate.contextWindow > 0 &&
-		estimate.activeContextTokens >= estimate.contextWindow
+		decisionContextTokens >= estimate.contextWindow
 	) {
 		throw new Error(REPLAY_ERROR);
 	}
@@ -384,6 +388,7 @@ async function handleBeforeProviderPayload(
 		};
 		return { payload: options.guard.approve(record, rewritePayload(payload, replayInput)) };
 	}
+	if (token === undefined) throw new CodexProviderContextWindowError();
 	if (!options.coordinator.begin(record.sessionId)) throw new Error(REPLAY_ERROR);
 	try {
 		const coveredEntryId = ctx.sessionManager.getLeafId();

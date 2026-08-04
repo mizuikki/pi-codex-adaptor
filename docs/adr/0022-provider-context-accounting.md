@@ -35,6 +35,15 @@ dispatch. A checkpoint replacement invalidates the accounting generation before 
 ordinary response usage can establish the next baseline only for the still-current generation.
 Older overlapping completions cannot overwrite newer state.
 
+Provider replay and accounting do not depend on an inline checkpoint token. Pi may be unable to
+prepare that token while a tool result is the active leaf. In that case the adaptor still rewrites an
+existing checkpoint replay. If an uncheckpointed request has reached the threshold, the adaptor
+returns Pi's context-overflow sentinel before provider dispatch; Pi then appends its bounded retry
+state, prepares the checkpoint token, commits one provider checkpoint, and retries once. Before the
+first checkpoint, the decision uses the conservative maximum of aligned server usage and the full
+bounded estimate. After a checkpoint, an aligned current-generation server baseline remains
+authoritative so the opaque replacement is not repeatedly compacted from a coarse full estimate.
+
 Normalize both official SSE context failures and bounded, chunk-independent 200-JSON proxy failures to the native
 `context_window_exceeded` code, then map only that trusted `BridgeRemoteError` to Pi's
 `context_length_exceeded` sentinel. Pi retains ownership of the single compact-and-retry lifecycle;

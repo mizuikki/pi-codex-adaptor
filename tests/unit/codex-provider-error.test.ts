@@ -11,7 +11,10 @@ import {
 	BridgeConnectionError,
 	BridgeRemoteError,
 } from "../../src/infrastructure/codex-bridge/client.ts";
-import { toPiProviderErrorMessage } from "../../src/integration/pi/codex-provider-error.ts";
+import {
+	CodexProviderContextWindowError,
+	toPiProviderErrorMessage,
+} from "../../src/integration/pi/codex-provider-error.ts";
 
 const RETRYABLE_TEXT = "OpenAI provider service unavailable";
 const GENERIC_TEXT = "OpenAI Codex request failed";
@@ -61,6 +64,12 @@ describe("toPiProviderErrorMessage", () => {
 				retryable: false,
 			}),
 		);
+		expect(message).toStartWith("context_length_exceeded:");
+		expect(isContextOverflow(classifierInput("error", message))).toBe(true);
+	});
+
+	test("maps the local provider-context preflight to Pi's overflow lifecycle", () => {
+		const message = toPiProviderErrorMessage(new CodexProviderContextWindowError());
 		expect(message).toStartWith("context_length_exceeded:");
 		expect(isContextOverflow(classifierInput("error", message))).toBe(true);
 	});
