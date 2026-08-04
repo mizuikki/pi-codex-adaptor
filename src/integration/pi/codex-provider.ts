@@ -34,6 +34,7 @@ import { toPiProviderErrorMessage } from "./codex-provider-error.ts";
 import {
 	type CodexProviderRequestGuard,
 	type CodexProviderRequestRecord,
+	digestJson,
 	snapshotSimpleStreamOptions,
 } from "./codex-provider-request-guard.ts";
 import {
@@ -194,6 +195,31 @@ async function runResponse(
 			throw new Error(`OpenAI Codex response ended with status ${result.status}`);
 		}
 		state.complete(result.result);
+		if (requestRecord?.contextAccounting !== undefined) {
+			const totalTokens = responseTotalTokens(result.result);
+			const requestInput = Array.isArray(request.input) ? request.input : undefined;
+			const requestInstructions =
+				typeof request.instructions === "string" ? request.instructions : undefined;
+			if (
+				totalTokens !== undefined &&
+				requestInput !== undefined &&
+				requestInstructions !== undefined &&
+				requestInput.length === requestRecord.contextAccounting.inputItemCount &&
+				digestJson(requestInput) === requestRecord.contextAccounting.inputDigest &&
+				digestJson(requestInstructions) === requestRecord.contextAccounting.instructionsDigest
+			) {
+				compactions.recordContextUsage({
+					sessionId: requestRecord.sessionId,
+					identity: requestRecord.contextAccounting.identity,
+					generation: requestRecord.contextAccounting.generation,
+					requestGeneration: requestRecord.generation,
+					totalTokens,
+					inputItemCount: requestRecord.contextAccounting.inputItemCount,
+					inputDigest: requestRecord.contextAccounting.inputDigest,
+					instructionsDigest: requestRecord.contextAccounting.instructionsDigest,
+				});
+			}
+		}
 		calculateCost(model, output.usage);
 		const reason =
 			output.stopReason === "toolUse" || output.stopReason === "length"
@@ -811,6 +837,13 @@ function applyUsage(output: AssistantMessage, value: unknown): void {
 	output.usage.output = integer(usage.output_tokens);
 	output.usage.reasoning = integer(usage.reasoning_output_tokens);
 	output.usage.totalTokens = integer(usage.total_tokens);
+}
+
+function responseTotalTokens(value: unknown): number | undefined {
+	const completion = record(value);
+	const usage = record(completion?.tokenUsage);
+	const total = usage?.total_tokens;
+	return typeof total === "number" && Number.isSafeInteger(total) && total >= 0 ? total : undefined;
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {

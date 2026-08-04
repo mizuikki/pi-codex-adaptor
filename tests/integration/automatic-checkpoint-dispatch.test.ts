@@ -104,7 +104,7 @@ describe("automatic provider checkpoint dispatch", () => {
 		const extensionContext = {
 			...baseContext,
 			sessionManager: session,
-			getContextUsage: () => ({ tokens: 200, contextWindow: 1_000, percent: 20 }),
+			getContextUsage: () => ({ tokens: 20, contextWindow: 1_000, percent: 2 }),
 		} as ExtensionContext;
 		const config = createDefaultConfig();
 		const snapshot = {
@@ -115,8 +115,20 @@ describe("automatic provider checkpoint dispatch", () => {
 		};
 		const compactRequests: unknown[] = [];
 		const providerRequests: unknown[] = [];
+		const estimateRequests: unknown[] = [];
 		let compactFailure: BridgeRemoteError | undefined;
 		const runtime = {
+			estimateContext: async (options: unknown) => {
+				estimateRequests.push(options);
+				return {
+					activeContextTokens: 200,
+					fullEstimatedTokens: 200,
+					suffixEstimatedTokens: 0,
+					accountingSource: "full_estimate" as const,
+					autoCompactTokenLimit: null,
+					contextWindow: 1_000,
+				};
+			},
 			compact: async (options: { request: unknown }) => {
 				compactRequests.push(options.request);
 				if (compactFailure !== undefined) throw compactFailure;
@@ -179,10 +191,11 @@ describe("automatic provider checkpoint dispatch", () => {
 		);
 		const runTurn = async (
 			swallowHookError = false,
+			systemPrompt = "Synthetic system prompt",
 		): Promise<Array<{ type: string; error?: { errorMessage?: string } }>> => {
 			const signal = new AbortController().signal;
 			const context: Context = {
-				systemPrompt: "Synthetic system prompt",
+				systemPrompt,
 				messages: convertToLlm(session.buildSessionContext().messages),
 				tools: [],
 			};
@@ -238,6 +251,10 @@ describe("automatic provider checkpoint dispatch", () => {
 		expect((await runTurn()).map((event) => event.type)).toContain("done");
 		expect(compactRequests).toHaveLength(1);
 		expect(providerRequests).toHaveLength(2);
+		expect(estimateRequests[1]).toMatchObject({
+			instructions: "Synthetic system prompt",
+			baseline: { totalTokens: 11, minimumModelGeneratedIndex: 1 },
+		});
 		expect((providerRequests[1] as { input?: unknown }).input).toEqual([COMPACTION_ITEM]);
 		expect(
 			session
@@ -258,7 +275,8 @@ describe("automatic provider checkpoint dispatch", () => {
 			message: "the compaction request exceeded the local model context limit",
 			retryable: false,
 		});
-		const failedEvents = await runTurn(true);
+		const failedEvents = await runTurn(true, "Changed synthetic system prompt");
+		expect(estimateRequests[2]).not.toHaveProperty("baseline");
 		const errorEvent = failedEvents.find((event) => event.type === "error");
 		expect(errorEvent?.error?.errorMessage).toBe(compactFailure.message);
 		expect(providerRequests).toHaveLength(2);

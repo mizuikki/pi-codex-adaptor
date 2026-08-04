@@ -28,6 +28,25 @@ function providerConnection(
 	};
 }
 
+function splitJsonResponse(chunks: readonly string[]): Response {
+	const encoder = new TextEncoder();
+	let index = 0;
+	return new Response(
+		new ReadableStream({
+			async pull(controller) {
+				const chunk = chunks[index++];
+				if (chunk === undefined) {
+					controller.close();
+					return;
+				}
+				controller.enqueue(encoder.encode(chunk));
+				await Bun.sleep(5);
+			},
+		}),
+		{ status: 200, headers: { "content-type": "application/json" } },
+	);
+}
+
 afterEach(async () => {
 	let failure: unknown;
 	while (cleanups.length > 0) {
@@ -41,6 +60,78 @@ afterEach(async () => {
 });
 
 describe("native child integration", () => {
+	test("estimates exact Responses history without opening a provider connection", async () => {
+		const { client } = await connectIntegrationBridge();
+		cleanups.push(async () => client.shutdown());
+		const input = [
+			{ type: "message", role: "user", content: [{ type: "input_text", text: "alpha" }] },
+			{
+				type: "message",
+				role: "assistant",
+				content: [{ type: "output_text", text: "beta" }],
+			},
+			{ type: "function_call_output", call_id: "call-1", output: "gamma" },
+		];
+		const full = await client.request("responses.estimate_context", {
+			model: "fixture-model",
+			instructions: "synthetic instructions",
+			input,
+		});
+		expect(full.status).toBe("completed");
+		expect(full.result).toMatchObject({
+			accountingSource: "full_estimate",
+			suffixEstimatedTokens: 0,
+		});
+
+		const aligned = await client.request("responses.estimate_context", {
+			model: "fixture-model",
+			instructions: "synthetic instructions",
+			input,
+			baseline: { totalTokens: 100, minimumModelGeneratedIndex: 1 },
+		});
+		expect(aligned.status).toBe("completed");
+		expect(aligned.result).toMatchObject({
+			accountingSource: "server_usage_plus_suffix",
+		});
+		expect((aligned.result as { activeContextTokens: number }).activeContextTokens).toBeGreaterThan(
+			100,
+		);
+	}, 60_000);
+
+	test("preserves the structured context code from a fake HTTP 200 JSON error", async () => {
+		const server = await startFakeResponsesServer([fixtureModelSpec({ slug: "fixture-model" })], {
+			responsesResponse: () =>
+				splitJsonResponse([
+					'{"error":{"code":"context_',
+					'length_exceeded","message":"Your input exceeds the context window of this model."}}',
+				]),
+		});
+		cleanups.push(() => server.stop());
+		const { runtime } = await createIntegrationRuntime();
+		cleanups.push(async () => runtime.shutdown());
+
+		await expect(
+			runtime.createResponse({
+				connection: providerConnection(server.baseUrl) as never,
+				request: {
+					model: "fixture-model",
+					instructions: "",
+					input: [],
+					tools: null,
+					tool_choice: "auto",
+					parallel_tool_calls: false,
+					reasoning: null,
+					store: false,
+					stream: true,
+					include: [],
+				},
+				transportMode: "sse",
+				providerSupportsWebsockets: false,
+				onEvent: () => {},
+			}),
+		).rejects.toMatchObject({ code: "context_window_exceeded", retryable: false });
+	}, 60_000);
+
 	test("streams responses through a local fake server without user CODEX_HOME", async () => {
 		const server = await startFakeResponsesServer([
 			fixtureModelSpec({ slug: "fixture-model", shellType: "shell_command" }),

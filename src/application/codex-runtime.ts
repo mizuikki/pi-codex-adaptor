@@ -94,6 +94,27 @@ export type CompactResponseResult =
 	  }
 	| { status: NonCompletedResponseStatus };
 
+export interface ContextUsageBaseline {
+	readonly totalTokens: number;
+	readonly minimumModelGeneratedIndex: number;
+}
+
+export interface EstimateContextOptions {
+	readonly model: string;
+	readonly instructions: string;
+	readonly input: readonly StructuredResponseItem[];
+	readonly baseline?: ContextUsageBaseline;
+}
+
+export interface ContextEstimate {
+	readonly activeContextTokens: number;
+	readonly fullEstimatedTokens: number;
+	readonly suffixEstimatedTokens: number;
+	readonly accountingSource: "server_usage_plus_suffix" | "full_estimate";
+	readonly autoCompactTokenLimit: number | null;
+	readonly contextWindow: number;
+}
+
 /**
  * Stable Pi session identity used by Codex Remote Compaction V2 requests.
  *
@@ -149,6 +170,7 @@ export interface ExecuteToolOptions {
 export interface CodexRuntime {
 	createResponse(options: CreateResponseOptions): Promise<CreateResponseResult>;
 	compact(options: CompactResponseOptions): Promise<CompactResponseResult>;
+	estimateContext?(options: EstimateContextOptions): Promise<ContextEstimate>;
 	readDiagnostics?(): Promise<unknown>;
 	resolveModel(modelId: string): Promise<unknown>;
 	resolveTools(params: unknown): Promise<unknown>;

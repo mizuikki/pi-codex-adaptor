@@ -307,6 +307,8 @@ async function handleBeforeProviderPayload(
 	}
 	const current = scan.matching;
 	const replayInput = current === undefined ? input : checkpointPayload(current, branch);
+	const instructions = responseInstructions(payload.instructions);
+	const instructionsDigest = digestJson(instructions);
 	const config = await options.configuration.load();
 	const hostToolNames = options.profile.registeredManagedTools();
 	const capabilityKey = capabilityCacheKey({
@@ -326,20 +328,62 @@ async function handleBeforeProviderPayload(
 		contextWindow: record.model.contextWindow,
 		hostToolNames,
 	});
-	const effectiveTokens = ctx.getContextUsage()?.tokens ?? estimateTokens(replayInput);
+	const accounting = options.store.contextAccounting(record.sessionId, identity);
+	const storedBaseline = accounting.baseline;
+	const alignedBaseline =
+		storedBaseline !== undefined &&
+		storedBaseline.instructionsDigest === instructionsDigest &&
+		storedBaseline.inputItemCount <= replayInput.length &&
+		digestJson(replayInput.slice(0, storedBaseline.inputItemCount)) === storedBaseline.inputDigest
+			? {
+					totalTokens: storedBaseline.totalTokens,
+					minimumModelGeneratedIndex: storedBaseline.inputItemCount,
+				}
+			: undefined;
+	const estimateContext = options.runtime.estimateContext;
+	if (estimateContext === undefined) throw new Error(REPLAY_ERROR);
+	const estimate = await estimateContext.call(options.runtime, {
+		model: record.model.id,
+		instructions,
+		input: replayInput,
+		...(alignedBaseline === undefined ? {} : { baseline: alignedBaseline }),
+	});
+	options.guard.assertLive(record);
+	const thresholdCandidates = [
+		snapshot.compaction.threshold,
+		estimate.autoCompactTokenLimit,
+		estimate.contextWindow,
+	].filter((value): value is number => typeof value === "number" && value > 0);
+	const decisionThreshold =
+		thresholdCandidates.length === 0 ? undefined : Math.min(...thresholdCandidates);
 	const hasUncheckpointedInput =
 		current === undefined
 			? input.length > 0
 			: checkpointSuffix(branch, current.coveredIndex).length > 0;
 	const shouldCompact = shouldCreateAutomaticCheckpoint({
 		mode: config.codex.compaction.mode,
-		contextTokens: effectiveTokens,
-		threshold: snapshot.compaction.threshold ?? undefined,
+		contextTokens: estimate.activeContextTokens,
+		threshold: decisionThreshold,
 		hasUncheckpointedInput,
 		busy: options.coordinator.isBusy(record.sessionId),
 	});
-	if (!shouldCompact)
+	if (
+		!shouldCompact &&
+		estimate.contextWindow > 0 &&
+		estimate.activeContextTokens >= estimate.contextWindow
+	) {
+		throw new Error(REPLAY_ERROR);
+	}
+	if (!shouldCompact) {
+		record.contextAccounting = {
+			generation: accounting.generation,
+			identity,
+			inputItemCount: replayInput.length,
+			inputDigest: digestJson(replayInput),
+			instructionsDigest,
+		};
 		return { payload: options.guard.approve(record, rewritePayload(payload, replayInput)) };
+	}
 	if (!options.coordinator.begin(record.sessionId)) throw new Error(REPLAY_ERROR);
 	try {
 		const coveredEntryId = ctx.sessionManager.getLeafId();
@@ -361,6 +405,15 @@ async function handleBeforeProviderPayload(
 		options.guard.assertLive(record);
 		if (ctx.sessionManager.getLeafId() !== coveredEntryId || record.signal.aborted)
 			throw new Error(REPLAY_ERROR);
+		options.store.invalidateContextAccounting(record.sessionId);
+		const replacementAccounting = options.store.contextAccounting(record.sessionId, identity);
+		record.contextAccounting = {
+			generation: replacementAccounting.generation,
+			identity,
+			inputItemCount: compacted.rewrittenInput.length,
+			inputDigest: digestJson(compacted.rewrittenInput),
+			instructionsDigest,
+		};
 		const rewrittenPayload = rewritePayload(payload, compacted.rewrittenInput);
 		return {
 			payload: options.guard.approve(record, rewrittenPayload),
@@ -510,6 +563,11 @@ function responseInput(value: unknown): readonly StructuredResponseItem[] {
 	if (!isStrictJsonArray(value)) throw new Error(REPLAY_ERROR);
 	const items = validateCompactionInput(value);
 	return items;
+}
+
+function responseInstructions(value: unknown): string {
+	if (typeof value !== "string") throw new Error(REPLAY_ERROR);
+	return value;
 }
 
 function validateCompactionInput(value: readonly unknown[]): readonly StructuredResponseItem[] {

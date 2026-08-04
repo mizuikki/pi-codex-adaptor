@@ -34,6 +34,18 @@ export interface NormalizedUsage {
 	readonly reasoningTokens?: number;
 }
 
+export interface CodexContextUsageBaseline {
+	readonly totalTokens: number;
+	readonly inputItemCount: number;
+	readonly inputDigest: string;
+	readonly instructionsDigest: string;
+}
+
+export interface CodexContextAccountingSnapshot {
+	readonly generation: number;
+	readonly baseline?: CodexContextUsageBaseline;
+}
+
 export interface CodexRemoteCompactionCheckpointV1 extends CodexCompactionIdentity {
 	readonly kind: typeof CODEX_REMOTE_COMPACTION_KIND;
 	readonly version: typeof CODEX_REMOTE_COMPACTION_VERSION;
@@ -298,9 +310,15 @@ export function sameCompactionIdentity(
 	);
 }
 
-/** Process-local lifecycle serialization and one-time continuity warnings only. */
+/** Process-local checkpoint warnings and provider context-accounting state. */
 export class CodexCompactionStore {
 	readonly #warningKeys = new Set<string>();
+	readonly #accountingGenerations = new Map<string, number>();
+	readonly #activeAccountingIdentities = new Map<string, string>();
+	readonly #accounting = new Map<
+		string,
+		CodexContextUsageBaseline & { readonly generation: number; readonly requestGeneration: number }
+	>();
 
 	warnOnce(sessionId: string, identity: CodexCompactionIdentity): boolean {
 		const key = `${sessionId}\u0000${identityKey(identity)}`;
@@ -316,15 +334,108 @@ export class CodexCompactionStore {
 		return true;
 	}
 
+	contextAccounting(
+		sessionId: string,
+		identity: CodexCompactionIdentity,
+	): CodexContextAccountingSnapshot {
+		const selectedIdentity = identityKey(identity);
+		const activeIdentity = this.#activeAccountingIdentities.get(sessionId);
+		if (activeIdentity !== undefined && activeIdentity !== selectedIdentity) {
+			this.invalidateContextAccounting(sessionId);
+		}
+		this.#activeAccountingIdentities.set(sessionId, selectedIdentity);
+		const generation = this.#accountingGenerations.get(sessionId) ?? 0;
+		const baseline = this.#accounting.get(accountingKey(sessionId, identity));
+		return {
+			generation,
+			...(baseline === undefined || baseline.generation !== generation
+				? {}
+				: {
+						baseline: {
+							totalTokens: baseline.totalTokens,
+							inputItemCount: baseline.inputItemCount,
+							inputDigest: baseline.inputDigest,
+							instructionsDigest: baseline.instructionsDigest,
+						},
+					}),
+		};
+	}
+
+	recordContextUsage(options: {
+		readonly sessionId: string;
+		readonly identity: CodexCompactionIdentity;
+		readonly generation: number;
+		readonly requestGeneration: number;
+		readonly totalTokens: number;
+		readonly inputItemCount: number;
+		readonly inputDigest: string;
+		readonly instructionsDigest: string;
+	}): boolean {
+		if (
+			(this.#accountingGenerations.get(options.sessionId) ?? 0) !== options.generation ||
+			!Number.isSafeInteger(options.totalTokens) ||
+			options.totalTokens < 0 ||
+			!Number.isSafeInteger(options.inputItemCount) ||
+			options.inputItemCount < 0
+		) {
+			return false;
+		}
+		const key = accountingKey(options.sessionId, options.identity);
+		const current = this.#accounting.get(key);
+		if (
+			current !== undefined &&
+			current.generation === options.generation &&
+			current.requestGeneration > options.requestGeneration
+		) {
+			return false;
+		}
+		this.#accounting.set(key, { ...options });
+		return true;
+	}
+
+	invalidateContextAccounting(sessionId: string): void {
+		this.#accountingGenerations.set(
+			sessionId,
+			(this.#accountingGenerations.get(sessionId) ?? 0) + 1,
+		);
+		for (const key of this.#accounting.keys()) {
+			if (key.startsWith(`${sessionId}\u0000`)) this.#accounting.delete(key);
+		}
+	}
+
 	dispose(sessionId: string): void {
 		for (const key of this.#warningKeys) {
 			if (key.startsWith(`${sessionId}\u0000`)) this.#warningKeys.delete(key);
+		}
+		this.#accountingGenerations.set(
+			sessionId,
+			(this.#accountingGenerations.get(sessionId) ?? 0) + 1,
+		);
+		this.#activeAccountingIdentities.delete(sessionId);
+		for (const key of this.#accounting.keys()) {
+			if (key.startsWith(`${sessionId}\u0000`)) this.#accounting.delete(key);
 		}
 	}
 
 	disposeAll(): void {
 		this.#warningKeys.clear();
+		const sessionIds = new Set([
+			...this.#accountingGenerations.keys(),
+			...this.#activeAccountingIdentities.keys(),
+		]);
+		for (const sessionId of sessionIds) {
+			this.#accountingGenerations.set(
+				sessionId,
+				(this.#accountingGenerations.get(sessionId) ?? 0) + 1,
+			);
+		}
+		this.#activeAccountingIdentities.clear();
+		this.#accounting.clear();
 	}
+}
+
+function accountingKey(sessionId: string, identity: CodexCompactionIdentity): string {
+	return `${sessionId}\u0000${identityKey(identity)}`;
 }
 
 export type CompactionCoordinatorPhase = "idle" | "pending" | "requested" | "executing";
@@ -406,7 +517,7 @@ export function shouldCreateAutomaticCheckpoint(options: {
 		options.contextTokens !== null &&
 		Number.isFinite(options.contextTokens) &&
 		options.threshold !== undefined &&
-		options.contextTokens > options.threshold &&
+		options.contextTokens >= options.threshold &&
 		options.hasUncheckpointedInput &&
 		!options.busy
 	);

@@ -13,6 +13,7 @@ path = "src/main.rs"
 
 [dependencies]
 base64.workspace = true
+bytes.workspace = true
 codex-api = { path = "../../official/crates/codex-api" }
 codex-apply-patch-adapter = { path = "../codex-apply-patch-adapter" }
 codex-client = { path = "../../official/crates/codex-client" }
@@ -23,7 +24,9 @@ codex-utils-image = { path = "../../official/crates/codex-utils-image" }
 codex-utils-output-truncation = { path = "../../official/crates/codex-utils-output-truncation" }
 codex-utils-pty = { path = "../../official/crates/codex-utils-pty" }
 codex-websocket-client = { path = "../../official/crates/codex-websocket-client" }
+futures.workspace = true
 http.workspace = true
+image.workspace = true
 openssl-sys.workspace = true
 pi-codex-bridge-protocol = { path = "../bridge-protocol" }
 reqwest.workspace = true

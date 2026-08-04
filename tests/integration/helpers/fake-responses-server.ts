@@ -31,9 +31,16 @@ const repositoryRoot = resolve(import.meta.dir, "../../..");
 
 export async function startFakeResponsesServer(
 	models: readonly FakeModelSpec[] = [fixtureModelSpec()],
+	options: {
+		responsesResponse?: (
+			request: FakeResponsesRequest,
+			responseIndex: number,
+		) => Response | undefined | Promise<Response | undefined>;
+	} = {},
 ): Promise<FakeResponsesServer> {
 	const sse = await readFile(resolve(repositoryRoot, "fixtures/responses/sse-basic.sse"), "utf8");
 	const requests: FakeResponsesServer["requests"] = [];
+	let responseIndex = 0;
 	const server = Bun.serve({
 		port: 0,
 		fetch: async (request) => {
@@ -43,7 +50,7 @@ export async function startFakeResponsesServer(
 			for (const [name, value] of request.headers.entries()) {
 				headers[name.toLowerCase()] = value;
 			}
-			requests.push({
+			const recorded = {
 				method: request.method,
 				path: url.pathname,
 				body,
@@ -51,13 +58,16 @@ export async function startFakeResponsesServer(
 				chatgptAccountId: request.headers.get("chatgpt-account-id"),
 				contentType: request.headers.get("content-type"),
 				headers,
-			});
+			};
+			requests.push(recorded);
 			if (request.method === "GET" && url.pathname.endsWith("/models")) {
 				return Response.json({
 					models: models.map((model) => toOfficialModel(model)),
 				});
 			}
 			if (request.method === "POST" && url.pathname.endsWith("/responses")) {
+				const override = await options.responsesResponse?.(recorded, responseIndex++);
+				if (override !== undefined) return override;
 				return new Response(sse, {
 					headers: {
 						"content-type": "text/event-stream",

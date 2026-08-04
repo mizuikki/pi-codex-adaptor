@@ -124,10 +124,11 @@ provider-specific branches.
 
 ## Protocol and configuration
 
-Protocol v7 is bounded JSONL with request IDs, cancellation, acknowledgement/backpressure, approval,
-and terminal results. It contains `responses.create`, `responses.compact`, `models.resolve`,
-`tools.resolve`, `tools.execute`, and `diagnostics.read`; the removed context-summary operation is not
-part of the contract. Capabilities include `remote_compaction_v2` and `compact_endpoint`.
+Protocol v8 is bounded JSONL with request IDs, cancellation, acknowledgement/backpressure, approval,
+and terminal results. It contains `responses.create`, `responses.compact`, `responses.estimate_context`,
+`models.resolve`, `tools.resolve`, `tools.execute`, and `diagnostics.read`; context estimation is a
+native pure operation over the exact request instructions and typed replay input. Capabilities include
+`remote_compaction_v2`, `compact_endpoint`, and `context_estimation`.
 
 The supported configuration is exact schema version `3` in
 `~/.pi/agent/pi-codex-adaptor.json`. `security.approvalPolicy` is `on-request | never`, independently

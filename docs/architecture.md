@@ -20,9 +20,10 @@ implementations. Pi-specific types stay in `src/integration/pi` and UI code.
 
 ## Native boundary
 
-TypeScript communicates with Rust only through the bounded protocol version 7. The bridge methods are
-`responses.create`, `responses.compact`, `models.resolve`, `tools.resolve`, `tools.execute`, and
-`diagnostics.read`. Native code owns Responses request construction, SSE/WebSocket parsing, compact
+TypeScript communicates with Rust only through the bounded protocol version 8. The bridge methods are
+`responses.create`, `responses.compact`, `responses.estimate_context`, `models.resolve`,
+`tools.resolve`, `tools.execute`, and `diagnostics.read`. Native code owns Responses request
+construction, model-visible context estimation, SSE/WebSocket parsing, compact
 endpoint calls, retry classification, backoff, cancellation, PTY/session handling, and patch
 execution. TypeScript validates only adaptor-owned envelopes and checkpoint data.
 
@@ -118,6 +119,20 @@ settles overflow lifecycle before its existing one-time turn retry.
 After a verified checkpoint, the Pi usage epoch is unknown until a later valid assistant usage. The
 adaptor restores or clears the epoch by active-branch custom entry ID on session start, model/provider
 changes, reload, fork, and tree selection. This is state about a boundary, not opaque data parsing.
+
+Before every ordinary provider dispatch, the adaptor asks native Rust to estimate the exact request
+instructions and replay input. A successful server usage total is reused only when the prior request
+input is an exact prefix and the instructions digest matches in the same session,
+provider/model/authentication identity, branch, and checkpoint generation. The native estimate then
+adds only items after the latest model-generated boundary, following the pinned official Codex
+accounting rule. Missing or stale alignment estimates the instructions plus complete replay. Reaching
+either the effective automatic threshold or the model's hard context window enters the same
+commit-before-dispatch checkpoint transaction. A provider-authoritative
+`context_window_exceeded` bridge error is exposed to Pi as its stable overflow sentinel so Pi's
+existing lifecycle performs at most one compact-and-retry attempt. The native Responses transport
+also recognizes the same structured context error when a proxy incorrectly returns it as a 200 JSON
+body instead of an SSE failure event. JSON inspection accumulates at most a 64 KiB prefix across
+arbitrary transport chunks and replays non-error bodies without collecting the remaining stream.
 
 ## Privacy and verification
 

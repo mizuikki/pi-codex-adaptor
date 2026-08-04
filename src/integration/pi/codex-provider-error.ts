@@ -19,6 +19,9 @@ export function toPiProviderErrorMessage(error: unknown): string {
 	if (error instanceof CapabilityError) {
 		return error.reason;
 	}
+	if (error instanceof BridgeRemoteError && error.code === "context_window_exceeded") {
+		return "context_length_exceeded: the request exceeded the model context window";
+	}
 	if (error instanceof BridgeRemoteError && error.retryable) {
 		return `${PI_RETRYABLE_PROVIDER_ERROR}: ${error.message}`;
 	}

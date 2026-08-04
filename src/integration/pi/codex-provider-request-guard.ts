@@ -6,6 +6,7 @@ import type {
 	CodexProviderAuthentication,
 	CodexProviderConnection,
 } from "../../application/codex-runtime.ts";
+import type { CodexCompactionIdentity } from "../../application/compaction.ts";
 import type { EffectiveCapabilitySnapshot } from "../../application/resolve-effective-capabilities.ts";
 import {
 	isStrictJsonArray,
@@ -37,6 +38,13 @@ export type CodexProviderRequestRecord = Omit<CodexProviderRequestRecordInput, "
 	readonly model: CodexProviderModelSnapshot;
 	readonly generation: number;
 	readonly requestDigest: string;
+	contextAccounting?: {
+		readonly generation: number;
+		readonly identity: CodexCompactionIdentity;
+		readonly inputItemCount: number;
+		readonly inputDigest: string;
+		readonly instructionsDigest: string;
+	};
 	approvedRequest?: Record<string, unknown>;
 	approvedDigest?: string;
 	failure?: { readonly cause: unknown };

@@ -76,9 +76,11 @@ export function registerCodexCompaction(
 		await restore(ctx);
 	});
 	pi.on("model_select", async (_event, ctx) => {
+		store.invalidateContextAccounting(ctx.sessionManager.getSessionId());
 		await restore(ctx);
 	});
 	pi.on("session_tree", async (_event, ctx) => {
+		store.invalidateContextAccounting(ctx.sessionManager.getSessionId());
 		await restore(ctx);
 	});
 	pi.on("session_shutdown", (_event, ctx) => {
@@ -208,6 +210,7 @@ async function compactForPi(
 		if (event.signal.aborted || ctx.sessionManager.getLeafId() !== branch.at(-1)?.id) {
 			throw new Error("Codex compaction became stale");
 		}
+		state.store.invalidateContextAccounting(sessionId);
 		state.coordinator.end(sessionId, "success");
 		return { providerCheckpoint: compacted.proposal };
 	} catch (error) {

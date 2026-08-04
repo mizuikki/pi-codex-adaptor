@@ -1,0 +1,12 @@
+{"type":"initialize","requestId":"init-1","protocolVersion":8,"client":{"name":"pi-codex-adaptor","version":"0.0.0"}}
+{"type":"request","requestId":"request-0","method":"responses.compact","params":{"implementation":"compact_endpoint","request":{"model":"fixture-model","input":[]}}}
+{"type":"request","requestId":"request-estimate","method":"responses.estimate_context","params":{"model":"fixture-model","instructions":"fixture instructions","input":[],"baseline":{"totalTokens":100,"minimumModelGeneratedIndex":0}}}
+{"type":"request","requestId":"request-1","method":"models.resolve","params":{"modelId":"fixture-model"}}
+{"type":"cancel","requestId":"cancel-1","targetRequestId":"request-1"}
+{"type":"approval_decision","requestId":"decision-1","approvalId":"approval-1","decision":"decline"}
+{"type":"session_write","requestId":"write-1","sessionId":"session-1","approvalPolicy":"on-request","data":"sample input"}
+{"type":"session_write","requestId":"write-2","sessionId":"session-1","approvalPolicy":"never","data":""}
+{"type":"session_resize","requestId":"resize-1","sessionId":"session-1","columns":100,"rows":30}
+{"type":"session_terminate","requestId":"terminate-1","sessionId":"session-1"}
+{"type":"acknowledge","targetRequestId":"request-1","sequence":4}
+{"type":"shutdown","requestId":"shutdown-1"}

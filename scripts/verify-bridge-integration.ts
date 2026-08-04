@@ -52,6 +52,17 @@ try {
 		if (model.status !== "completed") {
 			throw new Error("Native model resolution against the fake Responses server failed");
 		}
+		const estimate = await client.request("responses.estimate_context", {
+			model: "fixture-model",
+			instructions: "fixture instructions",
+			input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "x" }] }],
+		});
+		if (
+			estimate.status !== "completed" ||
+			typeof (estimate.result as { activeContextTokens?: unknown }).activeContextTokens !== "number"
+		) {
+			throw new Error("Native responses.estimate_context did not complete without provider I/O");
+		}
 
 		const events: string[] = [];
 		const response = await client.request(
@@ -273,6 +284,7 @@ function isExpectedDiagnostics(value: unknown, target: string): boolean {
 				"compact_endpoint",
 				"remote_compaction_v2",
 				"model_metadata",
+				"context_estimation",
 				"update_plan",
 				"hosted_web_search",
 				"unified_exec",
