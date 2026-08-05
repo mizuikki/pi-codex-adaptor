@@ -116,6 +116,7 @@ describe("automatic provider checkpoint dispatch", () => {
 		const compactRequests: unknown[] = [];
 		const providerRequests: unknown[] = [];
 		const estimateRequests: unknown[] = [];
+		const hookErrors: unknown[] = [];
 		let compactFailure: BridgeRemoteError | undefined;
 		const runtime = {
 			estimateContext: async (options: unknown) => {
@@ -221,6 +222,7 @@ describe("automatic provider checkpoint dispatch", () => {
 						)) as BeforeProviderPayloadEventResult;
 						return controller.commitPayload(payloadModel, result, attribution);
 					} catch (error) {
+						hookErrors.push(error);
 						if (!swallowHookError) throw error;
 						return payload;
 					}
@@ -269,6 +271,7 @@ describe("automatic provider checkpoint dispatch", () => {
 		).toBeUndefined();
 
 		const thresholdEvents = await runTurn();
+		expect(hookErrors).toHaveLength(0);
 		expect(estimateRequests).toHaveLength(2);
 		expect(
 			thresholdEvents.find((event) => event.type === "error")?.error?.errorMessage,
@@ -384,6 +387,7 @@ describe("automatic provider checkpoint dispatch", () => {
 			retryable: false,
 		});
 		const failedEvents = await runTurn(true, "Changed synthetic system prompt");
+		expect(hookErrors).toEqual([compactFailure]);
 		expect(estimateRequests[4]).not.toHaveProperty("baseline");
 		const errorEvent = failedEvents.find((event) => event.type === "error");
 		expect(errorEvent?.error?.errorMessage).toBe(compactFailure.message);
