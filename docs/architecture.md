@@ -75,9 +75,11 @@ external tools, and restores the captured selection on deactivation or shutdown.
 The provider request guard records one live session/model/connection/request identity and one Pi
 provider commit token. The `before_provider_payload` hook may return one sealed payload and either the
 existing textual proposal or one provider checkpoint proposal. Pi appends and verifies a custom entry
-before dispatch. The guard also latches the adaptor handler's first failure, so a hook exception
-swallowed by Pi is rethrown before provider dispatch. A stale, forged, reused, cancelled,
-indeterminate, or failed transaction blocks dispatch.
+before dispatch. The guard also latches the adaptor handler's first failure. For the expected
+tokenless checkpoint-threshold sentinel, the hook returns the unchanged unapproved payload to avoid a
+misleading extension diagnostic, then the guard rethrows the sentinel before provider dispatch. Other
+hook failures still escape directly, and the guard rethrows them before dispatch if Pi swallows them.
+A stale, forged, reused, cancelled, indeterminate, or failed transaction blocks dispatch.
 
 ## Canonical history and checkpoints
 

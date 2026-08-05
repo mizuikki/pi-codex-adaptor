@@ -103,7 +103,12 @@ export function registerCodexCompactionReplay(options: CodexCompactionReplayOpti
 			return await handleBeforeProviderPayload(event, ctx, options);
 		} catch (error) {
 			const record = options.guard.current();
-			if (record !== undefined) options.guard.recordFailure(record, error);
+			if (record !== undefined) {
+				options.guard.recordFailure(record, error);
+				if (error instanceof CodexProviderContextWindowError) {
+					return { payload: event.payload };
+				}
+			}
 			throw error;
 		}
 	});
