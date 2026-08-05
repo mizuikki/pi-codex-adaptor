@@ -104,7 +104,7 @@ describe("automatic provider checkpoint dispatch", () => {
 		const extensionContext = {
 			...baseContext,
 			sessionManager: session,
-			getContextUsage: () => ({ tokens: 200, contextWindow: 1_000, percent: 20 }),
+			getContextUsage: () => ({ tokens: 20, contextWindow: 1_000, percent: 2 }),
 		} as ExtensionContext;
 		const config = createDefaultConfig();
 		const snapshot = {
@@ -115,8 +115,24 @@ describe("automatic provider checkpoint dispatch", () => {
 		};
 		const compactRequests: unknown[] = [];
 		const providerRequests: unknown[] = [];
+		const estimateRequests: unknown[] = [];
 		let compactFailure: BridgeRemoteError | undefined;
 		const runtime = {
+			estimateContext: async (options: unknown) => {
+				estimateRequests.push(options);
+				const index = estimateRequests.length - 1;
+				return {
+					activeContextTokens: index === 0 ? 90 : index <= 2 ? 90 : index === 3 ? 12 : 200,
+					fullEstimatedTokens: index === 0 ? 90 : index <= 2 ? 110 : index === 3 ? 120 : 200,
+					suffixEstimatedTokens: 0,
+					accountingSource:
+						index === 0 || index >= 4
+							? ("full_estimate" as const)
+							: ("server_usage_plus_suffix" as const),
+					autoCompactTokenLimit: null,
+					contextWindow: 1_000,
+				};
+			},
 			compact: async (options: { request: unknown }) => {
 				compactRequests.push(options.request);
 				if (compactFailure !== undefined) throw compactFailure;
@@ -179,10 +195,11 @@ describe("automatic provider checkpoint dispatch", () => {
 		);
 		const runTurn = async (
 			swallowHookError = false,
+			systemPrompt = "Synthetic system prompt",
 		): Promise<Array<{ type: string; error?: { errorMessage?: string } }>> => {
 			const signal = new AbortController().signal;
 			const context: Context = {
-				systemPrompt: "Synthetic system prompt",
+				systemPrompt,
 				messages: convertToLlm(session.buildSessionContext().messages),
 				tools: [],
 			};
@@ -215,10 +232,66 @@ describe("automatic provider checkpoint dispatch", () => {
 		};
 
 		expect((await runTurn()).map((event) => event.type)).toContain("done");
+		expect(compactRequests).toHaveLength(0);
+		expect(providerRequests).toHaveLength(1);
+		session.appendMessage({
+			role: "user",
+			content: "synthetic threshold continuation",
+			timestamp: 89,
+		});
+		session.appendMessage({
+			role: "assistant",
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			content: [
+				{
+					type: "toolCall",
+					id: "synthetic-threshold-call",
+					name: "synthetic_tool",
+					arguments: { phase: "threshold" },
+				},
+			],
+			usage: usage(95),
+			stopReason: "toolUse",
+			timestamp: 90,
+		});
+		session.appendMessage({
+			role: "toolResult",
+			toolCallId: "synthetic-threshold-call",
+			toolName: "synthetic_tool",
+			content: [{ type: "text", text: "synthetic threshold suffix" }],
+			isError: false,
+			timestamp: 91,
+		});
+		expect(
+			controller.createAttribution(model, "agent", new AbortController().signal).compaction,
+		).toBeUndefined();
+
+		const thresholdEvents = await runTurn();
+		expect(estimateRequests).toHaveLength(2);
+		expect(
+			thresholdEvents.find((event) => event.type === "error")?.error?.errorMessage,
+		).toStartWith("context_length_exceeded:");
+		expect(providerRequests).toHaveLength(1);
+		expect(compactRequests).toHaveLength(0);
+		session.appendMessage({
+			role: "assistant",
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			content: [],
+			usage: usage(0),
+			stopReason: "error",
+			errorMessage: "context_length_exceeded: synthetic local preflight",
+			timestamp: 92,
+		});
+
+		expect((await runTurn()).map((event) => event.type)).toContain("done");
 		expect(compactRequests).toHaveLength(1);
 		expect(JSON.stringify(compactRequests[0])).toContain("界".repeat(4_000));
-		expect(providerRequests).toHaveLength(1);
-		expect((providerRequests[0] as { input?: unknown }).input).toEqual([COMPACTION_ITEM]);
+		expect(providerRequests).toHaveLength(2);
+		expect((providerRequests[1] as { input?: unknown }).input).toEqual([COMPACTION_ITEM]);
 		const checkpoints = session
 			.getEntries()
 			.filter(
@@ -233,12 +306,54 @@ describe("automatic provider checkpoint dispatch", () => {
 					? [entry.message.toolCallId]
 					: [],
 			);
-		expect(persistedCallIds).toEqual(callIds);
+		expect(persistedCallIds).toEqual([...callIds, "synthetic-threshold-call"]);
 
+		session.appendMessage({
+			role: "user",
+			content: "synthetic post-checkpoint continuation",
+			timestamp: 93,
+		});
+		session.appendMessage({
+			role: "assistant",
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			content: [
+				{
+					type: "toolCall",
+					id: "synthetic-post-checkpoint-call",
+					name: "synthetic_tool",
+					arguments: { phase: "post-checkpoint" },
+				},
+			],
+			usage: usage(12),
+			stopReason: "toolUse",
+			timestamp: 94,
+		});
+		session.appendMessage({
+			role: "toolResult",
+			toolCallId: "synthetic-post-checkpoint-call",
+			toolName: "synthetic_tool",
+			content: [{ type: "text", text: "synthetic post-checkpoint suffix" }],
+			isError: false,
+			timestamp: 95,
+		});
 		expect((await runTurn()).map((event) => event.type)).toContain("done");
 		expect(compactRequests).toHaveLength(1);
-		expect(providerRequests).toHaveLength(2);
-		expect((providerRequests[1] as { input?: unknown }).input).toEqual([COMPACTION_ITEM]);
+		expect(providerRequests).toHaveLength(3);
+		expect(estimateRequests[3]).toMatchObject({
+			instructions: "Synthetic system prompt",
+			baseline: { totalTokens: 11, minimumModelGeneratedIndex: 1 },
+		});
+		expect((providerRequests[2] as { input?: unknown }).input).toEqual([
+			COMPACTION_ITEM,
+			expect.objectContaining({ type: "message", role: "user" }),
+			expect.objectContaining({ type: "function_call", call_id: "synthetic-post-checkpoint-call" }),
+			expect.objectContaining({
+				type: "function_call_output",
+				call_id: "synthetic-post-checkpoint-call",
+			}),
+		]);
 		expect(
 			session
 				.getEntries()
@@ -248,9 +363,19 @@ describe("automatic provider checkpoint dispatch", () => {
 		).toHaveLength(1);
 
 		session.appendMessage({
+			role: "assistant",
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			content: [{ type: "text", text: "synthetic completed continuation" }],
+			usage: usage(13),
+			stopReason: "stop",
+			timestamp: 96,
+		});
+		session.appendMessage({
 			role: "user",
 			content: "synthetic suffix after checkpoint",
-			timestamp: 100,
+			timestamp: 97,
 		});
 		compactFailure = new BridgeRemoteError({
 			category: "CapabilityError",
@@ -258,10 +383,11 @@ describe("automatic provider checkpoint dispatch", () => {
 			message: "the compaction request exceeded the local model context limit",
 			retryable: false,
 		});
-		const failedEvents = await runTurn(true);
+		const failedEvents = await runTurn(true, "Changed synthetic system prompt");
+		expect(estimateRequests[4]).not.toHaveProperty("baseline");
 		const errorEvent = failedEvents.find((event) => event.type === "error");
 		expect(errorEvent?.error?.errorMessage).toBe(compactFailure.message);
-		expect(providerRequests).toHaveLength(2);
+		expect(providerRequests).toHaveLength(3);
 		expect(compactRequests).toHaveLength(2);
 		expect(
 			session

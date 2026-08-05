@@ -1,7 +1,7 @@
-# Bridge Protocol v7
+# Bridge Protocol v8
 
 The TypeScript host and Rust sidecar communicate over one bounded newline-delimited JSON channel.
-Protocol version `7` is a breaking identity: a v6 client or server is rejected during initialization
+Protocol version `8` is a breaking identity: a v7 client or server is rejected during initialization
 before provider registration.
 
 ## Frames
@@ -10,7 +10,7 @@ Every frame is one JSON object followed by a newline and is at most 16 MiB befor
 Request IDs are non-empty and at most 256 bytes. The first client frame is:
 
 ```json
-{"type":"initialize","requestId":"init-1","protocolVersion":7,"client":{"name":"pi-codex-adaptor","version":"0.0.0"}}
+{"type":"initialize","requestId":"init-1","protocolVersion":8,"client":{"name":"pi-codex-adaptor","version":"0.0.0"}}
 ```
 
 The server returns a handshake containing protocol identity, official Codex version/tag/source
@@ -30,6 +30,7 @@ The only request methods are:
 | --- | --- | --- |
 | `responses.create` | native bridge | typed Responses request and event stream |
 | `responses.compact` | native bridge | official Remote Compaction operation |
+| `responses.estimate_context` | native bridge | pure pinned-model context accounting |
 | `models.resolve` | native bridge | pinned Codex model metadata |
 | `tools.resolve` | native bridge | official model-visible and dispatch tool surface |
 | `tools.execute` | native bridge | approved native, image, search, and session tools |
@@ -39,6 +40,16 @@ The only request methods are:
 (`remote_v2` or `compact_endpoint`), transport mode, WebSocket capability, an optional compatibility
 timeout override, and optional Remote V2 session context. The implementation is selected before the
 call and never changes after a failure.
+
+`responses.estimate_context` receives a model ID, the exact request instructions, the exact typed
+replay input, and an optional aligned server-usage baseline. It opens no provider connection. The
+result contains the active and full estimates, suffix estimate, accounting source, automatic
+threshold, and hard context window, but no request content. With an aligned baseline it returns the
+last server total plus only the model-visible items after the latest model-generated boundary. The
+host may align that baseline only when both its prior input prefix and instructions digest still
+match. Otherwise native code estimates the instructions plus complete input with the pinned official
+byte heuristics. Encrypted reasoning/compaction, structured encrypted outputs, and image inputs use
+the same coarse rules; these remain estimates, not tokenizer-equivalence claims.
 
 ## Remote Compaction
 
@@ -82,8 +93,8 @@ broaden filesystem scope. Approval decisions are advertised in the stable order 
 ## Fixtures and verification
 
 The canonical active fixtures are
-[`client-v7.jsonl`](../fixtures/bridge-protocol/client-v7.jsonl) and
-[`server-v7.jsonl`](../fixtures/bridge-protocol/server-v7.jsonl). Rust and TypeScript contract tests
-decode them, validate the v7 handshake, approval order, event backpressure, cancellation, and result
-envelopes. The v6 fixtures remain only as negative mixed-version startup cases; they are never active
+[`client-v8.jsonl`](../fixtures/bridge-protocol/client-v8.jsonl) and
+[`server-v8.jsonl`](../fixtures/bridge-protocol/server-v8.jsonl). Rust and TypeScript contract tests
+decode them, validate the v8 handshake, approval order, event backpressure, cancellation, and result
+envelopes. The v7 and older fixtures remain only as negative mixed-version startup cases; they are never active
 consumer fixtures and contain no removed operation or capability.

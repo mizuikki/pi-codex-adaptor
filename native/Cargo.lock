@@ -587,6 +587,7 @@ name = "codex-bridge"
 version = "0.0.0"
 dependencies = [
  "base64",
+ "bytes",
  "codex-api",
  "codex-apply-patch-adapter",
  "codex-client",
@@ -597,7 +598,9 @@ dependencies = [
  "codex-utils-output-truncation",
  "codex-utils-pty",
  "codex-websocket-client",
+ "futures",
  "http",
+ "image",
  "openssl-sys",
  "pi-codex-bridge-protocol",
  "rand 0.9.3",

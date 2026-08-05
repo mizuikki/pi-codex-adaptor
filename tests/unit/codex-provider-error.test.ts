@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { type AssistantMessage, isRetryableAssistantError } from "@earendil-works/pi-ai";
+import {
+	type AssistantMessage,
+	isContextOverflow,
+	isRetryableAssistantError,
+} from "@earendil-works/pi-ai";
 
 import { CapabilityError } from "../../src/domain/capability.ts";
 import { ConfigurationError } from "../../src/domain/config.ts";
@@ -7,7 +11,10 @@ import {
 	BridgeConnectionError,
 	BridgeRemoteError,
 } from "../../src/infrastructure/codex-bridge/client.ts";
-import { toPiProviderErrorMessage } from "../../src/integration/pi/codex-provider-error.ts";
+import {
+	CodexProviderContextWindowError,
+	toPiProviderErrorMessage,
+} from "../../src/integration/pi/codex-provider-error.ts";
 
 const RETRYABLE_TEXT = "OpenAI provider service unavailable";
 const GENERIC_TEXT = "OpenAI Codex request failed";
@@ -47,6 +54,24 @@ describe("toPiProviderErrorMessage", () => {
 		expect(message).toBe("The OpenAI request failed");
 		expect(message).not.toBe(RETRYABLE_TEXT);
 		expect(isRetryableAssistantError(classifierInput("error", message))).toBe(false);
+	});
+
+	test("maps only the trusted bridge context code to Pi's overflow sentinel", () => {
+		const message = toPiProviderErrorMessage(
+			bridgeError({
+				code: "context_window_exceeded",
+				message: "provider-specific wording",
+				retryable: false,
+			}),
+		);
+		expect(message).toStartWith("context_length_exceeded:");
+		expect(isContextOverflow(classifierInput("error", message))).toBe(true);
+	});
+
+	test("maps the local provider-context preflight to Pi's overflow lifecycle", () => {
+		const message = toPiProviderErrorMessage(new CodexProviderContextWindowError());
+		expect(message).toStartWith("context_length_exceeded:");
+		expect(isContextOverflow(classifierInput("error", message))).toBe(true);
 	});
 
 	test("does not promote a spoofed ordinary Error by message text", () => {

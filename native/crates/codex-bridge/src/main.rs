@@ -7,6 +7,7 @@ use bridge_protocol::OFFICIAL_SOURCE_COMMIT;
 
 mod api;
 pub(crate) mod compaction_context_fit;
+pub(crate) mod context_estimator;
 pub(crate) mod model_output_bounds;
 pub(crate) mod models;
 mod official;

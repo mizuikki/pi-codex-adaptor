@@ -12,6 +12,7 @@ const MAX_FINITE_TIMEOUT_MS: u64 = 86_400_000;
 const PI_DISABLED_IDLE_TIMEOUT_MS: u64 = 2_147_483_647;
 /// Leave room for JSONL protocol framing and a status prefix within the 4,096-character bridge field.
 const MAX_UPSTREAM_ERROR_DETAIL_CHARS: usize = 4_000;
+use bytes::Bytes;
 use codex_api::ApiError;
 use codex_api::AuthProvider;
 use codex_api::Provider;
@@ -20,12 +21,22 @@ use codex_api::ResponseEvent;
 use codex_api::RetryConfig;
 use codex_api::SharedAuthProvider;
 use codex_api::TransportError;
+use codex_http_client::ByteStream;
+use codex_http_client::HttpTransport;
+use codex_http_client::Request;
+use codex_http_client::Response;
 use codex_http_client::build_reqwest_client_with_custom_ca;
+use futures::StreamExt;
+use futures::stream;
 use http::HeaderMap;
 use http::HeaderName;
 use http::HeaderValue;
+use http::header::CONTENT_TYPE;
 use serde_json::Value;
 use serde_json::json;
+
+const NORMALIZED_CONTEXT_WINDOW_BODY: &str = "__codex_context_window_exceeded__";
+const MAX_CONTEXT_ERROR_BODY_BYTES: usize = 64 * 1024;
 
 pub struct ApiConnection {
     pub transport: ReqwestTransport,
@@ -33,6 +44,127 @@ pub struct ApiConnection {
     pub authentication: SharedAuthProvider,
     pub max_retries: u32,
     pub websocket_connect_timeout: Duration,
+}
+
+#[derive(Clone, Debug)]
+pub struct ResponsesTransport {
+    inner: ReqwestTransport,
+}
+
+impl ResponsesTransport {
+    pub fn new(inner: ReqwestTransport) -> Self {
+        Self { inner }
+    }
+}
+
+impl HttpTransport for ResponsesTransport {
+    async fn execute(&self, request: Request) -> Result<Response, TransportError> {
+        self.inner.execute(request).await
+    }
+
+    async fn stream(
+        &self,
+        request: Request,
+    ) -> Result<codex_http_client::StreamResponse, TransportError> {
+        let mut response = self.inner.stream(request).await?;
+        if !is_json_content_type(&response.headers) {
+            return Ok(response);
+        }
+
+        let mut consumed = Vec::new();
+        let mut inspected = Vec::new();
+        let mut reached_end = false;
+        while inspected.len() < MAX_CONTEXT_ERROR_BODY_BYTES {
+            let Some(chunk) = response.bytes.next().await else {
+                reached_end = true;
+                break;
+            };
+            let chunk = chunk?;
+            if chunk.is_empty() {
+                continue;
+            }
+            let remaining = MAX_CONTEXT_ERROR_BODY_BYTES.saturating_sub(inspected.len());
+            inspected.extend_from_slice(&chunk[..chunk.len().min(remaining)]);
+            consumed.push(chunk);
+        }
+        if is_context_window_error_body(&inspected, reached_end) {
+            return Err(normalized_context_window_error(response.status));
+        }
+        response.bytes = if reached_end {
+            one_chunk_stream(inspected)
+        } else {
+            stream::iter(consumed.into_iter().map(Ok::<Bytes, TransportError>))
+                .chain(response.bytes)
+                .boxed()
+        };
+        Ok(response)
+    }
+}
+
+fn normalized_context_window_error(status: http::StatusCode) -> TransportError {
+    TransportError::Http {
+        status,
+        url: None,
+        headers: None,
+        body: Some(NORMALIZED_CONTEXT_WINDOW_BODY.to_owned()),
+    }
+}
+
+fn one_chunk_stream(body: Vec<u8>) -> ByteStream {
+    stream::once(async move { Ok(Bytes::from(body)) }).boxed()
+}
+
+fn is_json_content_type(headers: &HeaderMap) -> bool {
+    headers
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .is_some_and(|value| value.trim().eq_ignore_ascii_case("application/json"))
+}
+
+fn is_context_window_error_body(body: &[u8], complete: bool) -> bool {
+    if let Ok(value) = serde_json::from_slice::<Value>(body) {
+        return is_context_window_error_value(&value);
+    }
+    if !complete {
+        return false;
+    }
+    let body = String::from_utf8_lossy(body).to_ascii_lowercase();
+    body.contains("context_length_exceeded")
+        || body.contains("context_window_exceeded")
+        || body.contains("your input exceeds the context window")
+        || body.contains("maximum context length")
+}
+
+fn is_context_window_error_value(value: &Value) -> bool {
+    let Some(object) = value.as_object() else {
+        return false;
+    };
+    let code = object
+        .get("code")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if code.eq_ignore_ascii_case("context_length_exceeded")
+        || code.eq_ignore_ascii_case("context_window_exceeded")
+    {
+        return true;
+    }
+    let message = object
+        .get("message")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if message.contains("your input exceeds the context window")
+        || message.contains("maximum context length")
+    {
+        return true;
+    }
+    object
+        .get("error")
+        .is_some_and(is_context_window_error_value)
+        || object
+            .get("response")
+            .is_some_and(is_context_window_error_value)
 }
 
 struct BridgeAuthProvider {
@@ -385,6 +517,13 @@ pub fn map_response_event(event: ResponseEvent) -> Option<MappedResponseEvent> {
 
 pub fn map_api_error(error: &ApiError) -> BridgeError {
     let (category, code, retryable) = match error {
+        ApiError::Transport(TransportError::Http {
+            body: Some(body), ..
+        }) if body == NORMALIZED_CONTEXT_WINDOW_BODY => (
+            ErrorCategory::CapabilityError,
+            "context_window_exceeded",
+            false,
+        ),
         ApiError::Transport(TransportError::Http { status, .. })
             if *status == http::StatusCode::UNAUTHORIZED
                 || *status == http::StatusCode::FORBIDDEN =>
@@ -439,6 +578,11 @@ pub fn map_api_error(error: &ApiError) -> BridgeError {
 /// This intentionally never formats the whole transport error, which could include URLs or headers.
 fn format_upstream_api_error(error: &ApiError) -> String {
     let detail = match error {
+        ApiError::Transport(TransportError::Http {
+            body: Some(body), ..
+        }) if body == NORMALIZED_CONTEXT_WINDOW_BODY => {
+            "the request exceeded the model context window".to_owned()
+        }
         ApiError::Transport(TransportError::Http { status, body, .. }) => match body {
             Some(body) if !body.trim().is_empty() => format!("{status}: {}", body.trim()),
             _ => format!("HTTP {status}"),
@@ -539,6 +683,57 @@ mod tests {
         });
         assert_eq!(error.code, "upstream_invalid_request");
         assert_eq!(error.message, "upstream fixture detail");
+    }
+
+    #[test]
+    fn recognizes_context_errors_in_json_error_envelopes_only() {
+        assert!(is_context_window_error_body(
+            br#"{"error":{"code":"context_length_exceeded"}}"#,
+            true,
+        ));
+        assert!(is_context_window_error_body(
+            br#"{"error":{"code":"context_window_exceeded"}}"#,
+            true,
+        ));
+        assert!(is_context_window_error_body(
+            br#"{"response":{"error":{"message":"Your input exceeds the context window of this model"}}}"#,
+            true,
+        ));
+        assert!(!is_context_window_error_body(
+            br#"{"output":[{"message":"Your input exceeds the context window of this model"}]}"#,
+            true,
+        ));
+
+        let large_output = serde_json::to_vec(&json!({
+            "output": [{
+                "message": format!(
+                    "Your input exceeds the context window of this model.{}",
+                    "x".repeat(MAX_CONTEXT_ERROR_BODY_BYTES)
+                )
+            }]
+        }))
+        .expect("synthetic response should serialize");
+        assert!(large_output.len() > MAX_CONTEXT_ERROR_BODY_BYTES);
+        assert!(!is_context_window_error_body(
+            &large_output[..MAX_CONTEXT_ERROR_BODY_BYTES],
+            false,
+        ));
+    }
+
+    #[test]
+    fn normalized_context_errors_use_the_standard_safe_message() {
+        let error = map_api_error(&ApiError::Transport(TransportError::Http {
+            status: http::StatusCode::OK,
+            url: None,
+            headers: None,
+            body: Some(NORMALIZED_CONTEXT_WINDOW_BODY.to_owned()),
+        }));
+        assert_eq!(error.code, "context_window_exceeded");
+        assert_eq!(
+            error.message,
+            "the request exceeded the model context window"
+        );
+        assert!(!error.message.contains(NORMALIZED_CONTEXT_WINDOW_BODY));
     }
 
     #[test]

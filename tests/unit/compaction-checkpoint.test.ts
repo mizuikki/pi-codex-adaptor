@@ -250,6 +250,111 @@ describe("remote compaction checkpoint contract", () => {
 		expect(store.warnSessionOnce("session-2")).toBe(false);
 	});
 
+	test("keeps context usage baselines generation-scoped and rejects stale completions", () => {
+		const store = new CodexCompactionStore();
+		const initial = store.contextAccounting("session-1", identity);
+		expect(initial).toEqual({ generation: 0 });
+		expect(
+			store.recordContextUsage({
+				sessionId: "session-1",
+				identity,
+				generation: initial.generation,
+				requestGeneration: 2,
+				totalTokens: 120,
+				inputItemCount: 3,
+				inputDigest: "digest-new",
+				instructionsDigest: "instructions-new",
+			}),
+		).toBe(true);
+		expect(
+			store.recordContextUsage({
+				sessionId: "session-1",
+				identity,
+				generation: initial.generation,
+				requestGeneration: 1,
+				totalTokens: 80,
+				inputItemCount: 2,
+				inputDigest: "digest-stale",
+				instructionsDigest: "instructions-stale",
+			}),
+		).toBe(false);
+		expect(store.contextAccounting("session-1", identity).baseline?.totalTokens).toBe(120);
+
+		store.invalidateContextAccounting("session-1");
+		const replacement = store.contextAccounting("session-1", identity);
+		expect(replacement).toEqual({ generation: 1 });
+		expect(
+			store.recordContextUsage({
+				sessionId: "session-1",
+				identity,
+				generation: initial.generation,
+				requestGeneration: 3,
+				totalTokens: 200,
+				inputItemCount: 4,
+				inputDigest: "digest-late",
+				instructionsDigest: "instructions-late",
+			}),
+		).toBe(false);
+		const changedIdentity = { ...identity, modelId: "replacement-model" };
+		expect(store.contextAccounting("session-1", changedIdentity)).toEqual({ generation: 2 });
+		expect(store.contextAccounting("session-1", identity)).toEqual({ generation: 3 });
+	});
+
+	test("keeps disposed-session generations ahead of in-flight completions", () => {
+		const store = new CodexCompactionStore();
+		const pending = store.contextAccounting("session-1", identity);
+
+		store.dispose("session-1");
+
+		const reloaded = store.contextAccounting("session-1", identity);
+		expect(reloaded.generation).toBe(pending.generation + 1);
+		expect(
+			store.recordContextUsage({
+				sessionId: "session-1",
+				identity,
+				generation: pending.generation,
+				requestGeneration: 1,
+				totalTokens: 100,
+				inputItemCount: 1,
+				inputDigest: "stale-after-dispose",
+				instructionsDigest: "instructions-stale",
+			}),
+		).toBe(false);
+		expect(
+			store.recordContextUsage({
+				sessionId: "session-1",
+				identity,
+				generation: reloaded.generation,
+				requestGeneration: 2,
+				totalTokens: 200,
+				inputItemCount: 2,
+				inputDigest: "current-after-dispose",
+				instructionsDigest: "instructions-current",
+			}),
+		).toBe(true);
+	});
+
+	test("invalidates active sessions when the store is disposed globally", () => {
+		const store = new CodexCompactionStore();
+		const pending = store.contextAccounting("session-1", identity);
+
+		store.disposeAll();
+
+		expect(store.contextAccounting("session-1", identity).generation).toBe(pending.generation + 1);
+		expect(
+			store.recordContextUsage({
+				sessionId: "session-1",
+				identity,
+				generation: pending.generation,
+				requestGeneration: 1,
+				totalTokens: 100,
+				inputItemCount: 1,
+				inputDigest: "stale-after-dispose-all",
+				instructionsDigest: "instructions-stale",
+			}),
+		).toBe(false);
+	});
+
 	test("serializes checkpoint work and releases it after every terminal outcome", () => {
 		const coordinator = new CodexCompactionCoordinator();
 		expect(coordinator.begin("session-1")).toBe(true);
@@ -315,6 +420,14 @@ describe("remote compaction checkpoint contract", () => {
 
 		const runtime = {
 			compactCalls: 0,
+			estimateContext: async () => ({
+				activeContextTokens: contextTokens,
+				fullEstimatedTokens: contextTokens,
+				suffixEstimatedTokens: 0,
+				accountingSource: "full_estimate" as const,
+				autoCompactTokenLimit: null,
+				contextWindow: 1_000,
+			}),
 			compact: async () => {
 				runtime.compactCalls += 1;
 				return { status: "completed", result: { output: [compactionItem] } };
@@ -344,6 +457,7 @@ describe("remote compaction checkpoint contract", () => {
 		const signal = new AbortController().signal;
 		const request = {
 			model: model.id,
+			instructions: "",
 			input: [
 				{ type: "message", role: "user", content: [{ type: "input_text", text: "fixture" }] },
 			],

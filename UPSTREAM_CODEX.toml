@@ -27,7 +27,7 @@ allowlist_sha256 = "c6b6fdda335da06be1b5fd02e87757ed29e02cbf5d0f0fe27b52a7ffd235
 license_inventory = "native/upstream/openai-codex-licenses.json"
 license_inventory_sha256 = "f670b47b8f973e4a3e3ff557640b3de7bd3ff648d62cf7b709232d9b299f9186"
 sbom = "native/upstream/openai-codex-sbom.json"
-sbom_sha256 = "dc75545e01b6d923029b4bce616e651e066546dda676579987784fdc7cafbef3"
+sbom_sha256 = "ae5623fd0b433d879fcba2afd7ba35e44428c84ac9725188116882b4084f698e"
 patches = [
   "native/patches/openai-codex/0001-deserialize-responses-requests.patch",
   "native/patches/openai-codex/0002-cast-windows-pseudoconsole-handle.patch",

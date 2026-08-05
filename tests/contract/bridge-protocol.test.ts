@@ -17,10 +17,10 @@ import {
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 
-describe("bridge protocol v7", () => {
+describe("bridge protocol v8", () => {
 	test("keeps the canonical compact request fixture structurally valid", async () => {
 		const fixture = await readFile(
-			resolve(repositoryRoot, "fixtures/bridge-protocol/client-v7.jsonl"),
+			resolve(repositoryRoot, "fixtures/bridge-protocol/client-v8.jsonl"),
 			"utf8",
 		);
 		const request = fixture
@@ -37,9 +37,30 @@ describe("bridge protocol v7", () => {
 		});
 	});
 
+	test("keeps context estimation closed and camel-cased in the active fixture", async () => {
+		const fixture = await readFile(
+			resolve(repositoryRoot, "fixtures/bridge-protocol/client-v8.jsonl"),
+			"utf8",
+		);
+		const request = fixture
+			.trimEnd()
+			.split("\n")
+			.map((line) => JSON.parse(line) as Record<string, unknown>)
+			.find((frame) => frame.method === "responses.estimate_context");
+		expect(request).toMatchObject({
+			type: "request",
+			method: "responses.estimate_context",
+			params: {
+				model: "fixture-model",
+				instructions: "",
+				baseline: { totalTokens: 100, minimumModelGeneratedIndex: 0 },
+			},
+		});
+	});
+
 	test("decodes every native server contract frame", async () => {
 		const fixture = await readFile(
-			resolve(repositoryRoot, "fixtures/bridge-protocol/server-v7.jsonl"),
+			resolve(repositoryRoot, "fixtures/bridge-protocol/server-v8.jsonl"),
 			"utf8",
 		);
 		const messages = fixture.trimEnd().split("\n").map(decodeServerFrame);
@@ -112,7 +133,7 @@ describe("bridge protocol v7", () => {
 
 	test("decodes arbitrarily chunked process output", async () => {
 		const fixture = await readFile(
-			resolve(repositoryRoot, "fixtures/bridge-protocol/server-v7.jsonl"),
+			resolve(repositoryRoot, "fixtures/bridge-protocol/server-v8.jsonl"),
 		);
 		const decoder = new ServerFrameDecoder();
 		const messages = [];
@@ -134,7 +155,7 @@ describe("bridge protocol v7", () => {
 
 	test("advertises approval decisions in decline, cancel, allow_once order", async () => {
 		const fixture = await readFile(
-			resolve(repositoryRoot, "fixtures/bridge-protocol/server-v7.jsonl"),
+			resolve(repositoryRoot, "fixtures/bridge-protocol/server-v8.jsonl"),
 			"utf8",
 		);
 		const approval = fixture
@@ -162,14 +183,14 @@ describe("bridge protocol v7", () => {
 			expect(error).toBeInstanceOf(BridgeProtocolError);
 			expect(String(error)).not.toContain(secret);
 			expect((error as BridgeProtocolError).message).toBe(
-				"Bridge frame does not match protocol v7",
+				"Bridge frame does not match protocol v8",
 			);
 		}
 	});
 
 	test("verifies every immutable handshake field", async () => {
 		const fixture = await readFile(
-			resolve(repositoryRoot, "fixtures/bridge-protocol/server-v7.jsonl"),
+			resolve(repositoryRoot, "fixtures/bridge-protocol/server-v8.jsonl"),
 			"utf8",
 		);
 		const message = decodeServerFrame(fixture.split("\n")[0] ?? "");
@@ -224,20 +245,20 @@ describe("bridge protocol v7", () => {
 			approvalPolicy: "allow_once",
 		};
 
-		expect(() => encodeClientMessage(withoutAuthorization as never)).toThrow("protocol v7");
-		expect(() => encodeClientMessage(unknownApprovalPolicy as never)).toThrow("protocol v7");
+		expect(() => encodeClientMessage(withoutAuthorization as never)).toThrow("protocol v8");
+		expect(() => encodeClientMessage(unknownApprovalPolicy as never)).toThrow("protocol v8");
 	});
 
-	test("rejects a v6 handshake before provider activation", async () => {
+	test("rejects a v7 handshake before provider activation", async () => {
 		const fixture = await readFile(
-			resolve(repositoryRoot, "fixtures/bridge-protocol/server-v6.jsonl"),
+			resolve(repositoryRoot, "fixtures/bridge-protocol/server-v7.jsonl"),
 			"utf8",
 		);
 		const frame = fixture.split("\n")[0] ?? "";
 		const legacy = JSON.parse(frame) as {
 			handshake?: { bridgeProtocolVersion?: unknown; capabilities?: unknown[] };
 		};
-		expect(legacy.handshake?.bridgeProtocolVersion).toBe(6);
+		expect(legacy.handshake?.bridgeProtocolVersion).toBe(7);
 		const message = decodeServerFrame(frame);
 		if (message.type !== "handshake") throw new Error("Legacy fixture must start with handshake");
 		expect(() => verifyHandshake(message.handshake, "x86_64-unknown-linux-musl")).toThrow(

@@ -71,6 +71,7 @@ export type NativeApprovalPolicy = Type.Static<typeof NativeApprovalPolicySchema
 const RequestMethod = Type.Union([
 	Type.Literal("responses.create"),
 	Type.Literal("responses.compact"),
+	Type.Literal("responses.estimate_context"),
 	Type.Literal("models.resolve"),
 	Type.Literal("tools.resolve"),
 	Type.Literal("tools.execute"),
@@ -170,6 +171,7 @@ const BridgeCapability = Type.Union([
 	Type.Literal("remote_compaction_v2"),
 	Type.Literal("compact_endpoint"),
 	Type.Literal("model_metadata"),
+	Type.Literal("context_estimation"),
 	Type.Literal("update_plan"),
 	Type.Literal("unified_exec"),
 	Type.Literal("shell_command"),

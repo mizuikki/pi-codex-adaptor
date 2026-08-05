@@ -62,7 +62,7 @@ describe("file diagnostics exporter", () => {
 						{
 							category: "ProtocolError",
 							code: "invalid_frame",
-							message: "Bridge frame does not match protocol v7",
+							message: "Bridge frame does not match protocol v8",
 						},
 					],
 				},

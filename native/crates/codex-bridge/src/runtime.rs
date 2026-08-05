@@ -98,6 +98,7 @@ use crate::official;
 const INPUT_CHANNEL_CAPACITY: usize = 32;
 const OUTPUT_CHANNEL_CAPACITY: usize = 64;
 const MAX_REQUEST_ID_BYTES: usize = 256;
+const MAX_SAFE_JSON_INTEGER: i64 = 9_007_199_254_740_991;
 const MAX_REQUEST_IDS_PER_CONNECTION: usize = 65_536;
 const MAX_SESSION_OUTPUT_BYTES: usize = codex_utils_pty::DEFAULT_OUTPUT_BYTES_CAP;
 const DEFAULT_MAX_OUTPUT_TOKENS: usize = 10_000;
@@ -495,6 +496,23 @@ struct ResponsesCompactParams {
     request_timeout_ms: Option<u64>,
     #[serde(default)]
     remote_compaction_v2_context: Option<RemoteCompactionV2Context>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ResponsesEstimateContextParams {
+    model: String,
+    instructions: String,
+    input: Vec<ResponseItem>,
+    #[serde(default)]
+    baseline: Option<ContextUsageBaseline>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ContextUsageBaseline {
+    total_tokens: i64,
+    minimum_model_generated_index: usize,
 }
 
 #[derive(Clone, Copy, Default, Deserialize)]
@@ -1551,6 +1569,9 @@ async fn dispatch(
             .await
             .map(RequestSuccess::completed),
         RequestMethod::ResponsesCompact => responses_compact(params, cancellation).await,
+        RequestMethod::ResponsesEstimateContext => {
+            responses_estimate_context(params, cancellation).map(RequestSuccess::completed)
+        }
         RequestMethod::ModelsResolve => {
             models_resolve(params, cancellation).map(RequestSuccess::completed)
         }
@@ -3894,6 +3915,52 @@ fn models_resolve(
     }))
 }
 
+fn responses_estimate_context(
+    params: Value,
+    cancellation: &CancellationToken,
+) -> Result<Value, RequestFailure> {
+    ensure_not_cancelled(cancellation)?;
+    let parsed = serde_json::from_value::<ResponsesEstimateContextParams>(params)
+        .map_err(|_| invalid_params("responses.estimate_context parameters are invalid"))?;
+    let invalid_baseline = parsed.baseline.as_ref().is_some_and(|baseline| {
+        baseline.total_tokens < 0
+            || baseline.total_tokens > MAX_SAFE_JSON_INTEGER
+            || baseline.minimum_model_generated_index > parsed.input.len()
+    });
+    if parsed.model.is_empty()
+        || parsed.model.len() > 256
+        || parsed.input.len() > 8192
+        || invalid_baseline
+    {
+        return Err(invalid_params("responses.estimate_context parameters are invalid").into());
+    }
+    let model = crate::models::resolve_model(&parsed.model);
+    let mut input = parsed.input;
+    crate::model_output_bounds::bound_model_output_items(&mut input, &model);
+    let full_estimated_tokens =
+        crate::context_estimator::estimate_instructions(&parsed.instructions)
+            .saturating_add(crate::context_estimator::estimate_items(&input));
+    let aligned = parsed.baseline.as_ref().and_then(|baseline| {
+        crate::context_estimator::estimate_suffix_after_last_model_item(
+            &input,
+            baseline.minimum_model_generated_index,
+        )
+        .map(|suffix| (baseline.total_tokens.saturating_add(suffix), suffix))
+    });
+    let (active_context_tokens, suffix_estimated_tokens, accounting_source) = match aligned {
+        Some((active, suffix)) => (active, suffix, "server_usage_plus_suffix"),
+        None => (full_estimated_tokens, 0, "full_estimate"),
+    };
+    Ok(json!({
+        "activeContextTokens": active_context_tokens,
+        "fullEstimatedTokens": full_estimated_tokens,
+        "suffixEstimatedTokens": suffix_estimated_tokens,
+        "accountingSource": accounting_source,
+        "autoCompactTokenLimit": crate::context_estimator::auto_compact_token_limit(&model),
+        "contextWindow": crate::context_estimator::context_window(&model),
+    }))
+}
+
 async fn responses_create(
     params: Value,
     flow: &FlowController,
@@ -4089,7 +4156,7 @@ async fn start_response_stream_with_transport(
         provider.retry.retry_transport = false;
     }
     ResponsesClient::new(
-        connection.transport.clone(),
+        api::ResponsesTransport::new(connection.transport.clone()),
         provider,
         Arc::clone(&connection.authentication),
     )
@@ -4594,6 +4661,7 @@ fn compiled_capabilities() -> Vec<BridgeCapability> {
         BridgeCapability::CompactEndpoint,
         BridgeCapability::RemoteCompactionV2,
         BridgeCapability::ModelMetadata,
+        BridgeCapability::ContextEstimation,
         BridgeCapability::UpdatePlan,
         BridgeCapability::HostedWebSearch,
         BridgeCapability::UnifiedExec,
@@ -4790,7 +4858,7 @@ mod tests {
 
     fn initialization() -> &'static str {
         concat!(
-            "{\"type\":\"initialize\",\"requestId\":\"init-1\",\"protocolVersion\":7,",
+            "{\"type\":\"initialize\",\"requestId\":\"init-1\",\"protocolVersion\":8,",
             "\"client\":{\"name\":\"contract-test\",\"version\":\"0.0.0\"}}\n"
         )
     }
@@ -6141,6 +6209,71 @@ mod tests {
         assert_eq!(result["shellSurface"], "shell-command");
         assert_eq!(result["model"]["used_fallback_model_metadata"], Value::Null);
         assert!(result.get("provider").is_none());
+    }
+
+    #[test]
+    fn estimates_context_without_connection_and_rejects_invalid_baselines() {
+        let cancellation = CancellationToken::new();
+        let result = responses_estimate_context(
+            json!({
+                "model": "unknown-fixture-model",
+                "instructions": "fixture instructions",
+                "input": [
+                    {"type":"message","role":"assistant","content":[{"type":"output_text","text":"alpha"}]},
+                    {"type":"function_call_output","call_id":"call-1","output":"beta"}
+                ],
+                "baseline": {"totalTokens": 100, "minimumModelGeneratedIndex": 0}
+            }),
+            &cancellation,
+        )
+        .expect("context estimate should complete without a provider connection");
+        assert_eq!(result["accountingSource"], "server_usage_plus_suffix");
+        assert!(result["activeContextTokens"].as_i64().unwrap_or_default() > 100);
+        assert_eq!(result["contextWindow"], 272_000);
+
+        let error = responses_estimate_context(
+            json!({
+                "model": "unknown-fixture-model",
+                "instructions": "",
+                "input": [],
+                "baseline": {"totalTokens": -1, "minimumModelGeneratedIndex": 0}
+            }),
+            &cancellation,
+        )
+        .expect_err("negative server usage should be rejected");
+        let RequestFailure::Bridge(error) = error else {
+            panic!("invalid baseline should return a bridge error");
+        };
+        assert_eq!(error.code, "invalid_params");
+    }
+
+    #[test]
+    fn context_estimate_matches_the_bounded_provider_input() {
+        let cancellation = CancellationToken::new();
+        let input = json!([{
+            "type": "function_call_output",
+            "call_id": "call-1",
+            "output": "x".repeat(100_000)
+        }]);
+        let parsed = serde_json::from_value::<Vec<ResponseItem>>(input.clone())
+            .expect("synthetic tool output should decode");
+        let model = crate::models::resolve_model("unknown-fixture-model");
+        let mut bounded = parsed;
+        crate::model_output_bounds::bound_model_output_items(&mut bounded, &model);
+        let instructions = "fixture instructions";
+        let expected = crate::context_estimator::estimate_instructions(instructions)
+            .saturating_add(crate::context_estimator::estimate_items(&bounded));
+
+        let result = responses_estimate_context(
+            json!({
+                "model": "unknown-fixture-model",
+                "instructions": instructions,
+                "input": input
+            }),
+            &cancellation,
+        )
+        .expect("context estimate should complete");
+        assert_eq!(result["fullEstimatedTokens"], json!(expected));
     }
 
     #[test]
@@ -10810,7 +10943,7 @@ mod tests {
         };
         assert!(request_id.is_none());
         assert_eq!(error.code, "invalid_frame");
-        assert_eq!(error.message, "bridge frame does not match protocol v7");
+        assert_eq!(error.message, "bridge frame does not match protocol v8");
         assert!(!error.message.contains(secret));
         assert!(!error.message.contains("fixture-secret-sentinel"));
         assert!(!format!("{messages:?}").contains(secret));

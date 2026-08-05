@@ -2,7 +2,7 @@
   "schema_version": 1,
   "official_version": "0.146.0",
   "official_source_commit": "e363b08c9175ac1cbe5893615dd2cb9ddf95043b",
-  "cargo_lock_sha256": "dfcfdcdcd981c8ecbf4fe629da0a5d31c4689cfe7de6efbc4953f3968ee145a3",
+  "cargo_lock_sha256": "acde3d4b05f16c3531b654179b29f507eee5bebf4a48d7afd8e11fbae2357228",
   "root": "codex-bridge@0.0.0:244210e48437",
   "packages": [
     {
@@ -732,6 +732,7 @@
       "checksum": null,
       "dependencies": [
         "base64@0.22.1:c19b7c6f923b",
+        "bytes@1.11.1:c19b7c6f923b",
         "codex-api@0.146.0:0d829e31a582",
         "codex-apply-patch-adapter@0.0.0:244210e48437",
         "codex-client@0.146.0:0d829e31a582",
@@ -742,7 +743,9 @@
         "codex-utils-output-truncation@0.146.0:0d829e31a582",
         "codex-utils-pty@0.146.0:0d829e31a582",
         "codex-websocket-client@0.146.0:0d829e31a582",
+        "futures@0.3.31:c19b7c6f923b",
         "http@1.4.0:c19b7c6f923b",
+        "image@0.25.9:c19b7c6f923b",
         "openssl-sys@0.9.117:c19b7c6f923b",
         "pi-codex-bridge-protocol@0.0.0:244210e48437",
         "rand@0.9.3:c19b7c6f923b",

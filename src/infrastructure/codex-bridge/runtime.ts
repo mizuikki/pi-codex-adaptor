@@ -2,8 +2,10 @@ import type {
 	CodexRuntime,
 	CompactResponseOptions,
 	CompactResponseResult,
+	ContextEstimate,
 	CreateResponseOptions,
 	CreateResponseResult,
+	EstimateContextOptions,
 	ExecuteToolOptions,
 } from "../../application/codex-runtime.ts";
 import { connectBundledBridge } from "./binary.ts";
@@ -88,6 +90,25 @@ export class BundledCodexRuntime implements CodexRuntime {
 						result: result.result as CompletedCompactResponseResult["result"],
 					}
 				: { status: result.status };
+		} catch (error) {
+			this.#discardClientIfFatal(client, error);
+			throw error;
+		}
+	}
+
+	async estimateContext(options: EstimateContextOptions): Promise<ContextEstimate> {
+		const client = await this.#connect();
+		try {
+			const response = await client.request("responses.estimate_context", {
+				model: options.model,
+				instructions: options.instructions,
+				input: options.input,
+				...(options.baseline === undefined ? {} : { baseline: options.baseline }),
+			});
+			if (response.status !== "completed") {
+				throw new Error("Native context estimation did not complete");
+			}
+			return decodeContextEstimate(response.result);
 		} catch (error) {
 			this.#discardClientIfFatal(client, error);
 			throw error;
@@ -278,6 +299,48 @@ export class BundledCodexRuntime implements CodexRuntime {
 		this.#connecting = undefined;
 		this.#models.clear();
 	}
+}
+
+function decodeContextEstimate(value: unknown): ContextEstimate {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) {
+		throw new Error("Native context estimate is invalid");
+	}
+	const result = value as Record<string, unknown>;
+	const keys = [
+		"activeContextTokens",
+		"fullEstimatedTokens",
+		"suffixEstimatedTokens",
+		"accountingSource",
+		"autoCompactTokenLimit",
+		"contextWindow",
+	];
+	if (Object.keys(result).length !== keys.length || keys.some((key) => !(key in result))) {
+		throw new Error("Native context estimate is invalid");
+	}
+	for (const key of [
+		"activeContextTokens",
+		"fullEstimatedTokens",
+		"suffixEstimatedTokens",
+		"contextWindow",
+	] as const) {
+		if (!Number.isSafeInteger(result[key]) || (result[key] as number) < 0) {
+			throw new Error("Native context estimate is invalid");
+		}
+	}
+	if (
+		result.autoCompactTokenLimit !== null &&
+		(!Number.isSafeInteger(result.autoCompactTokenLimit) ||
+			(result.autoCompactTokenLimit as number) <= 0)
+	) {
+		throw new Error("Native context estimate is invalid");
+	}
+	if (
+		result.accountingSource !== "server_usage_plus_suffix" &&
+		result.accountingSource !== "full_estimate"
+	) {
+		throw new Error("Native context estimate is invalid");
+	}
+	return result as unknown as ContextEstimate;
 }
 
 function isNetworkTool(tool: string): boolean {
