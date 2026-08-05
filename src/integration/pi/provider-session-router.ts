@@ -216,8 +216,9 @@ function createRouteErrorStream(
 	error: CapabilityError,
 ): AssistantMessageEventStream {
 	const stream = createAssistantMessageEventStream();
+	const start = createEmptyAssistantMessage(model);
+	stream.push({ type: "start", partial: start });
 	const output = createEmptyAssistantMessage(model);
-	stream.push({ type: "start", partial: output });
 	output.stopReason = "error";
 	output.errorMessage = error.reason;
 	stream.push({ type: "error", reason: "error", error: output });
@@ -241,7 +242,7 @@ function createEmptyAssistantMessage(model: Model<string>): AssistantMessage {
 			totalTokens: 0,
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 		},
-		stopReason: "stop",
+		stopReason: "pending",
 		timestamp: Date.now(),
 	};
 }

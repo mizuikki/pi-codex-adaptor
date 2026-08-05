@@ -88,7 +88,7 @@ extension-owned cache of one covered active-branch prefix, stored in a context-i
 Pi does not parse Codex identity fields or opaque response items and does not add a session entry type
 or session-format version.
 
-The paired Pi host at the protected SDK tag `pi-extension-sdk-v1.2.2` adds a trusted navigation
+The paired Pi host at the protected SDK tag `pi-extension-sdk-v1.3.1` adds a trusted navigation
 projection to verified provider-checkpoint custom entries. Pi owns the default Session Tree filter,
 bounded provider-checkpoint label, reload/resume/fork persistence, and HTML redaction. The adaptor
 owns neither that projection nor its rendering: it

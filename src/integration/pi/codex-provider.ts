@@ -46,6 +46,9 @@ import { createProviderConnection } from "./provider-connection.ts";
 
 export { officialToolNames } from "./codex-tool-surface.ts";
 
+const CUSTOM_FETCH_UNSUPPORTED_REASON =
+	"Codex provider does not support custom fetch for native dispatch";
+
 export function createCodexStreamSimple(
 	runtime: CodexRuntime,
 	configuration: ConfigurationService,
@@ -96,8 +99,11 @@ async function runResponse(
 	let dispatchConnection: CodexProviderConnection | undefined;
 	let dispatchConfig: CodexConfig["codex"] | undefined;
 	let dispatchProviderSupportsWebsockets: boolean | undefined;
-	stream.push({ type: "start", partial: output });
+	stream.push({ type: "start", partial: createOutput(model) });
 	try {
+		if (options?.fetch !== undefined) {
+			throw new CapabilityError("provider_capability_unavailable", CUSTOM_FETCH_UNSUPPORTED_REASON);
+		}
 		if (!activation.isActive(model)) {
 			throw new CapabilityError(
 				"inactive_provider",
@@ -191,10 +197,13 @@ async function runResponse(
 		if (result.status === "aborted" || options?.signal?.aborted === true) {
 			throw new DOMException("The OpenAI Codex request was aborted", "AbortError");
 		}
-		if (result.status !== "completed") {
+		if (result.status === "completed") {
+			state.complete(result.result, "stop");
+		} else if (result.status === "incomplete") {
+			state.complete(result.result, "length");
+		} else {
 			throw new Error(`OpenAI Codex response ended with status ${result.status}`);
 		}
-		state.complete(result.result);
 		if (requestRecord?.contextAccounting !== undefined) {
 			const totalTokens = responseTotalTokens(result.result);
 			const requestInput = Array.isArray(request.input) ? request.input : undefined;
@@ -221,14 +230,15 @@ async function runResponse(
 			}
 		}
 		calculateCost(model, output.usage);
-		const reason =
-			output.stopReason === "toolUse" || output.stopReason === "length"
-				? output.stopReason
-				: "stop";
+		const reason = output.stopReason;
+		if (reason !== "stop" && reason !== "toolUse" && reason !== "length") {
+			throw new Error("OpenAI Codex response ended without a terminal success reason");
+		}
 		stream.push({ type: "done", reason, message: output });
 		stream.end();
 	} catch (error) {
-		output.stopReason = options?.signal?.aborted === true ? "aborted" : "error";
+		output.stopReason =
+			options?.signal?.aborted === true || isAbortError(error) ? "aborted" : "error";
 		output.errorMessage = toPiProviderErrorMessage(error);
 		stream.push({ type: "error", reason: output.stopReason, error: output });
 		stream.end();
@@ -273,7 +283,7 @@ class ResponseState {
 		}
 	}
 
-	complete(value: unknown): void {
+	complete(value: unknown, terminalReason: "stop" | "length"): void {
 		this.#endOpenBlocks();
 		const completion = record(value);
 		if (completion !== undefined) {
@@ -282,7 +292,8 @@ class ResponseState {
 			}
 			applyUsage(this.#output, completion.tokenUsage);
 		}
-		this.#output.stopReason = this.#hasToolCall ? "toolUse" : "stop";
+		this.#output.stopReason =
+			terminalReason === "length" ? "length" : this.#hasToolCall ? "toolUse" : "stop";
 	}
 
 	#appendText(delta: string): void {
@@ -823,9 +834,13 @@ function createOutput(model: Model<string>): AssistantMessage {
 			totalTokens: 0,
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 		},
-		stopReason: "stop",
+		stopReason: "pending",
 		timestamp: Date.now(),
 	};
+}
+
+function isAbortError(error: unknown): boolean {
+	return error instanceof DOMException && error.name === "AbortError";
 }
 
 function applyUsage(output: AssistantMessage, value: unknown): void {

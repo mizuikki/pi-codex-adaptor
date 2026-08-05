@@ -172,9 +172,11 @@ describe("provider session router", () => {
 		for (const stream of streams) {
 			const emitted = (await events(stream)) as Array<{
 				type?: string;
+				partial?: { stopReason?: string };
 				error?: { errorMessage?: string };
 			}>;
 			expect(emitted.map((event) => event.type)).toEqual(["start", "error"]);
+			expect(emitted[0]?.partial?.stopReason).toBe("pending");
 			expect(emitted[1]?.error?.errorMessage).toBe(
 				"Codex provider route is unavailable for the current Pi session",
 			);

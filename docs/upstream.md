@@ -40,9 +40,9 @@ The active immutable host baseline is:
 | Field | Value |
 | --- | --- |
 | Repository | `https://github.com/mizuikki/pi.git` |
-| SDK tag | `pi-extension-sdk-v1.2.2` |
-| Annotated tag object | `4710c31910c6a5baa856752e5832e6d81cdf326a` |
-| Peeled commit | `ad4a7afe23c265204bbc6b66eb59bae7c860ed7a` |
+| SDK tag | `pi-extension-sdk-v1.3.1` |
+| Annotated tag object | `91323be540c4618bc337e71e8f46b869f3d78374` |
+| Peeled commit | `769eaaba2ead3e9153d4460dd64b040f9703a9f8` |
 | Host navigation contract | Verified provider checkpoints carry host-owned navigation metadata and remain opaque/context-invisible |
 
 The adaptor consumes this host contract through the existing provider checkpoint transaction and

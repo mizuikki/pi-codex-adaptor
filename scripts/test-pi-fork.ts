@@ -27,6 +27,7 @@ const focusedTests = [
 	"tests/smoke/tool-surface.test.ts",
 	"tests/unit/compaction-checkpoint.test.ts",
 	"tests/unit/codex-provider-request-guard.test.ts",
+	"tests/unit/codex-provider-lifecycle.test.ts",
 	"tests/unit/provider-session-router.test.ts",
 	"tests/unit/codex-tool-profile.test.ts",
 ] as const;
