@@ -10,8 +10,8 @@ permissions:
   contents: read
 
 env:
-  PI_EXTENSION_SDK_REF: pi-extension-sdk-v1.2.2
-  PI_EXTENSION_SDK_COMMIT: ad4a7afe23c265204bbc6b66eb59bae7c860ed7a
+  PI_EXTENSION_SDK_REF: pi-extension-sdk-v1.3.1
+  PI_EXTENSION_SDK_COMMIT: 769eaaba2ead3e9153d4460dd64b040f9703a9f8
   PI_EXTENSION_SDK_API_VERSION: "1"
 
 jobs:

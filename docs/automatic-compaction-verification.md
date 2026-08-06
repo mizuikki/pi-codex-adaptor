@@ -28,9 +28,9 @@ cargo test --manifest-path native/Cargo.toml --workspace
 bun run test:pi-fork -- --pi-dir /absolute/path/to/pi --pi-ref <immutable-commit-or-tag>
 ```
 
-The current paired baseline uses the protected tag `pi-extension-sdk-v1.2.2`, peeled to
-`ad4a7afe23c265204bbc6b66eb59bae7c860ed7a`. The tag object is
-`4710c31910c6a5baa856752e5832e6d81cdf326a`; the manifest's four package digests and `forkCommit`
+The current paired baseline uses the protected tag `pi-extension-sdk-v1.3.1`, peeled to
+`769eaaba2ead3e9153d4460dd64b040f9703a9f8`. The tag object is
+`91323be540c4618bc337e71e8f46b869f3d78374`; the manifest's four package digests and `forkCommit`
 remain the provenance authority. Verification against a branch or a workspace-linked SDK is not
 equivalent evidence.
 
