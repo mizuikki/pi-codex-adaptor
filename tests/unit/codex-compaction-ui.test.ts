@@ -41,7 +41,6 @@ function fakeEntry(
 	navigation: unknown,
 	data: unknown = {
 		output: [{ type: "reasoning", encrypted_content: "opaque-fixture-output" }],
-		prompt: "never-render-this",
 	},
 ): CustomEntry<unknown> {
 	return {
@@ -147,7 +146,6 @@ describe("Codex compaction UI projection", () => {
 
 		expect(text).toBe("Codex checkpoint (98,765 tokens before compaction)");
 		expect(text).not.toContain("opaque-fixture-output");
-		expect(text).not.toContain("never-render-this");
 		expect(text).not.toContain("encrypted_content");
 	});
 
