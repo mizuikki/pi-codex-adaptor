@@ -1,5 +1,6 @@
 import type { Model } from "@earendil-works/pi-ai";
 import type {
+	EntryRenderer,
 	ExtensionAPI,
 	ExtensionContext,
 	ProviderConfig,
@@ -17,6 +18,7 @@ export interface FakePi {
 	commands: string[];
 	providers: string[];
 	providerConfigs: Array<{ name: string; config: ProviderConfig }>;
+	entryRenderers: Map<string, EntryRenderer<unknown>>;
 	status: Map<string, string | undefined>;
 	widgets: Map<string, string[] | undefined>;
 	notifications: string[];
@@ -36,6 +38,7 @@ export function createFakePi(options: {
 	const commands: string[] = [];
 	const providers: string[] = [];
 	const providerConfigs: Array<{ name: string; config: ProviderConfig }> = [];
+	const entryRenderers = new Map<string, EntryRenderer<unknown>>();
 	const status = new Map<string, string | undefined>();
 	const widgets = new Map<string, string[] | undefined>();
 	const notifications: string[] = [];
@@ -82,6 +85,9 @@ export function createFakePi(options: {
 		registerProvider: (name: string, config: ProviderConfig) => {
 			providers.push(name);
 			providerConfigs.push({ name, config });
+		},
+		registerEntryRenderer: (customType: string, renderer: EntryRenderer<unknown>) => {
+			entryRenderers.set(customType, renderer);
 		},
 		on: (event: string, handler: EventHandler) => {
 			handlers.set(event, [...(handlers.get(event) ?? []), handler]);
@@ -153,6 +159,7 @@ export function createFakePi(options: {
 		commands,
 		providers,
 		providerConfigs,
+		entryRenderers,
 		status,
 		widgets,
 		notifications,

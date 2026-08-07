@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { Context, Model } from "@earendil-works/pi-ai";
 import {
 	convertToLlm,
@@ -17,7 +20,7 @@ import {
 import { ProviderActivationPolicy } from "../../src/application/provider-activation.ts";
 import { createDefaultConfig } from "../../src/domain/config.ts";
 import { BridgeRemoteError } from "../../src/infrastructure/codex-bridge/client.ts";
-import { registerCodexCompactionReplay } from "../../src/integration/pi/codex-compaction-replay.ts";
+import { registerCodexCompaction } from "../../src/integration/pi/codex-compaction.ts";
 import { createCodexStreamSimple } from "../../src/integration/pi/codex-provider.ts";
 import { CodexProviderRequestGuard } from "../../src/integration/pi/codex-provider-request-guard.ts";
 import type { BeforeProviderPayloadEventResult } from "../../src/integration/pi/provider-payload-compaction-api.ts";
@@ -170,20 +173,21 @@ describe("automatic provider checkpoint dispatch", () => {
 		} as never;
 		const guard = new CodexProviderRequestGuard();
 		const store = new CodexCompactionStore();
-		registerCodexCompactionReplay({
-			pi: pi.api,
+		registerCodexCompaction(
+			pi.api,
 			runtime,
 			configuration,
-			activation,
 			store,
-			coordinator: new CodexCompactionCoordinator(),
+			activation,
+			new CodexCompactionCoordinator(),
 			capabilities,
 			profile,
 			guard,
-		});
+		);
 		const handler = pi.handlers.get("before_provider_payload")?.[0];
 		if (handler === undefined)
 			throw new Error("before_provider_payload handler was not registered");
+		expect(pi.entryRenderers.get(CODEX_REMOTE_COMPACTION_KIND)).toBeDefined();
 
 		const streamSimple = createCodexStreamSimple(
 			runtime,
@@ -301,6 +305,15 @@ describe("automatic provider checkpoint dispatch", () => {
 				(entry) => entry.type === "custom" && entry.customType === CODEX_REMOTE_COMPACTION_KIND,
 			);
 		expect(checkpoints).toHaveLength(1);
+		const checkpoint = checkpoints[0];
+		if (checkpoint?.type !== "custom") throw new Error("Expected a persisted Codex checkpoint");
+		expect(checkpoint.navigation).toMatchObject({
+			role: "provider_checkpoint",
+		});
+		expect(checkpoint.navigation?.tokensBefore).toBeGreaterThan(0);
+		expect(JSON.stringify(session.buildSessionContext().messages)).not.toContain(
+			"opaque-synthetic-checkpoint",
+		);
 		expect(session.getEntries().slice(0, canonicalEntries.length)).toEqual(canonicalEntries);
 		const persistedCallIds = session
 			.getEntries()
@@ -403,5 +416,50 @@ describe("automatic provider checkpoint dispatch", () => {
 
 		guard.dispose();
 		activation.dispose();
+	});
+
+	test("reconstructs a safe checkpoint marker without projecting opaque data into context", async () => {
+		const sessionDir = await mkdtemp(join(tmpdir(), "codex-checkpoint-"));
+		try {
+			const model = fixtureModel() as Model<string>;
+			const session = SessionManager.create("<synthetic-cwd>", sessionDir, {
+				id: "reconstructed-checkpoint-session",
+			});
+			session.appendMessage({
+				role: "user",
+				content: "synthetic checkpoint input",
+				timestamp: 1,
+			});
+			session.appendMessage({
+				role: "assistant",
+				api: model.api,
+				provider: model.provider,
+				model: model.id,
+				content: [{ type: "text", text: "synthetic checkpoint response" }],
+				usage: usage(42),
+				stopReason: "stop",
+				timestamp: 2,
+			});
+			const entryId = session.appendCustomEntry(
+				CODEX_REMOTE_COMPACTION_KIND,
+				{ output: [{ type: "compaction", encrypted_content: "opaque-reconstructed-output" }] },
+				{ role: "provider_checkpoint", tokensBefore: 42 },
+			);
+			const sessionFile = session.getSessionFile();
+			if (sessionFile === undefined) throw new Error("Expected a persisted session file");
+
+			const reconstructed = SessionManager.open(sessionFile, sessionDir);
+			const entry = reconstructed.getEntry(entryId);
+			if (entry?.type !== "custom") throw new Error("Expected a reconstructed custom entry");
+			expect(entry.navigation).toEqual({
+				role: "provider_checkpoint",
+				tokensBefore: 42,
+			});
+			expect(JSON.stringify(reconstructed.buildSessionContext().messages)).not.toContain(
+				"opaque-reconstructed-output",
+			);
+		} finally {
+			await rm(sessionDir, { recursive: true, force: true });
+		}
 	});
 });
