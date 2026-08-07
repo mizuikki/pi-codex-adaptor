@@ -90,11 +90,14 @@ or session-format version.
 
 The paired Pi host at the protected SDK tag `pi-extension-sdk-v1.3.1` adds a trusted navigation
 projection to verified provider-checkpoint custom entries. Pi owns the default Session Tree filter,
-bounded provider-checkpoint label, reload/resume/fork persistence, and HTML redaction. The adaptor
-owns neither that projection nor its rendering: it
-continues to use the checkpoint entry ID and `session_tree` event only to restore or clear the active
-branch usage boundary. Navigation metadata is not provider payload and is never included in model
-context.
+reload/resume/fork persistence, and HTML redaction. The adaptor registers an optional renderer for
+the existing custom entry and projects only a fixed `Codex checkpoint` label plus the host-owned
+`navigation.tokensBefore` value. It never reads opaque entry data. The same safe marker is available
+after reconstruction wherever the optional renderer is supported; missing UI registration is a no-op.
+Navigation metadata is not provider payload and is never included in model context. The adaptor also
+owns the inline automatic-compaction status and bounded provider-inline completion/failure notices,
+while Pi retains ownership of textual, manual, and overflow compaction lifecycle feedback. Exact
+checkpoint replay remains silent.
 
 For an exact checkpoint identity, the adaptor selects the latest valid version-one entry on the active
 branch that is fully covered by the requested replay or compaction boundary and builds:

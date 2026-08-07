@@ -34,6 +34,7 @@ import {
 	isStrictJsonValue,
 	isStrictPlainRecord,
 } from "../../application/structured-json.ts";
+import { beginInline, type CodexInlineCompactionPhase, failInline } from "./codex-compaction-ui.ts";
 import { responseItemsFromMessages } from "./codex-provider.ts";
 import { CodexProviderContextWindowError } from "./codex-provider-error.ts";
 import {
@@ -395,6 +396,9 @@ async function handleBeforeProviderPayload(
 	}
 	if (token === undefined) throw new CodexProviderContextWindowError();
 	if (!options.coordinator.begin(record.sessionId)) throw new Error(REPLAY_ERROR);
+	const phase: CodexInlineCompactionPhase = current === undefined ? "threshold" : "recompact";
+	beginInline(ctx, phase);
+	let outcome: "success" | "error" | "cancel" = "success";
 	try {
 		const coveredEntryId = ctx.sessionManager.getLeafId();
 		if (coveredEntryId === null) throw new Error(REPLAY_ERROR);
@@ -429,9 +433,21 @@ async function handleBeforeProviderPayload(
 			payload: options.guard.approve(record, rewrittenPayload),
 			providerCheckpoint: compacted.proposal,
 		};
+	} catch (error) {
+		const cancelled = record.signal.aborted || isCompactionCancellation(error);
+		outcome = cancelled ? "cancel" : "error";
+		failInline(ctx, cancelled ? "cancel" : "error");
+		throw error;
 	} finally {
-		options.coordinator.end(record.sessionId, "success");
+		options.coordinator.end(record.sessionId, outcome);
 	}
+}
+
+function isCompactionCancellation(error: unknown): boolean {
+	return (
+		error instanceof Error &&
+		(error.message === "Compaction cancelled" || error.name === "AbortError")
+	);
 }
 
 function buildCompactRequest(options: RemoteCheckpointRequestOptions): Record<string, unknown> {

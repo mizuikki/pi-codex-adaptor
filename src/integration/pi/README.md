@@ -26,6 +26,23 @@ Threshold preparation returns a handled cancellation so the inline provider hook
 threshold authority. The hook replays an exact matching checkpoint plus the canonical suffix, or
 performs one remote operation when the suffix first exceeds the effective threshold.
 
+### Compaction UI boundary
+
+Pi's textual compaction and its manual/overflow compaction lifecycle remain Pi-native. The adaptor
+does not add a second Codex completion notification for those paths. Automatic compaction from
+`before_provider_payload` is a separate adaptor-owned UI path: after a new remote request is known to
+be eligible, it sets one Codex status and distinguishes the initial `threshold` phase from
+`recompact`. Exact checkpoint replay does not start that status, make a remote request, or emit a
+compaction notification.
+
+The remote response is not the completion boundary. The adaptor clears the inline status and emits
+one bounded success notice only after Pi reports a verified
+`session_provider_checkpoint` transaction for the `provider_inline` trigger. Remote failure or
+cancellation clears the status and emits outcome-only feedback; an indeterminate checkpoint commit
+clears it without claiming success. Manual and overflow transaction events clear any stale adaptor
+status but keep completion feedback owned by Pi. Missing status or notification methods are treated
+as optional presentation capabilities and cannot block provider dispatch or checkpoint persistence.
+
 Native compact preflight compares UTF-8-byte and UTF-16-density estimates of the complete request.
 Both must overflow before eligible trailing outputs are rewritten or the request is rejected locally.
 Estimator disagreement is provider-authoritative; local and upstream context failures use distinct
@@ -43,9 +60,13 @@ no reader or migration path.
 The paired Pi host at the protected SDK tag `pi-extension-sdk-v1.3.1` gives a transaction-verified
 checkpoint a host-owned `navigation.role = "provider_checkpoint"` projection and trusted
 `tokensBefore` label. That makes the boundary visible and selectable in the default Session Tree while
-keeping the checkpoint data opaque, context-invisible, and redacted from HTML export. The adaptor does
-not parse this navigation metadata or render a duplicate summary; it reacts only to the existing
-`session_tree` lifecycle and entry ID.
+keeping the checkpoint data opaque, context-invisible, and redacted from HTML export. The adaptor
+optionally registers a renderer for this existing custom entry. The renderer uses the fixed
+`Codex checkpoint` label and only the host-owned navigation role and `tokensBefore` metadata; it never
+reads checkpoint data. The same safe marker is therefore available when supported entries are
+reconstructed or reviewed in the Session Tree. Renderer registration is presentation-only, while
+the adaptor continues to use the checkpoint entry ID and `session_tree` lifecycle to restore or clear
+the active branch usage boundary.
 
 Provider/model/authentication changes never replay opaque output. The adaptor keeps canonical Pi
 history, emits one non-sensitive warning, and does not promise that the destination model can fit it.

@@ -46,5 +46,6 @@ The active immutable host baseline is:
 | Host navigation contract | Verified provider checkpoints carry host-owned navigation metadata and remain opaque/context-invisible |
 
 The adaptor consumes this host contract through the existing provider checkpoint transaction and
-`session_tree` lifecycle. It does not parse host navigation metadata, decrypt checkpoint output, or
-create a textual Pi compaction entry.
+`session_tree` lifecycle. Its optional custom-entry renderer reads only the host-owned checkpoint
+role and pre-compaction token count for a fixed safe marker; it never parses checkpoint data,
+decrypts checkpoint output, or creates a textual Pi compaction entry.

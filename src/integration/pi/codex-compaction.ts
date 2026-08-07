@@ -26,6 +26,12 @@ import {
 	restoreProviderCheckpointUsageBoundary,
 	scanRemoteCompactionCheckpoints,
 } from "./codex-compaction-replay.ts";
+import {
+	clearInline,
+	completeInline,
+	failInlineForTrigger,
+	registerEntryRenderer,
+} from "./codex-compaction-ui.ts";
 import type { CodexProviderRequestGuard } from "./codex-provider-request-guard.ts";
 import {
 	type CodexToolProfileCoordinator,
@@ -48,6 +54,8 @@ export function registerCodexCompaction(
 	profile: CodexToolProfileCoordinator = createUnavailableCodexToolProfile(),
 	requestGuard?: CodexProviderRequestGuard,
 ): void {
+	registerEntryRenderer(pi);
+
 	const restore = async (ctx: ExtensionContext): Promise<void> => {
 		try {
 			const connection = await resolveProviderConnection(
@@ -71,6 +79,7 @@ export function registerCodexCompaction(
 
 	pi.on("session_start", async (_event, ctx) => {
 		const sessionId = ctx.sessionManager.getSessionId();
+		clearInline(ctx);
 		coordinator.dispose(sessionId);
 		store.dispose(sessionId);
 		await restore(ctx);
@@ -85,8 +94,15 @@ export function registerCodexCompaction(
 	});
 	pi.on("session_shutdown", (_event, ctx) => {
 		const sessionId = ctx.sessionManager.getSessionId();
+		clearInline(ctx);
 		coordinator.dispose(sessionId);
 		store.dispose(sessionId);
+	});
+	pi.on("session_provider_checkpoint", (event, ctx) => {
+		completeInline(ctx, event.tokensBefore, event.trigger);
+	});
+	pi.on("session_provider_checkpoint_indeterminate", (event, ctx) => {
+		failInlineForTrigger(ctx, "indeterminate", event.trigger);
 	});
 	pi.on("session_before_compact", async (event, ctx) => {
 		return compactForPi(event, ctx, {

@@ -18,12 +18,18 @@ import { createDefaultConfig } from "../../src/domain/config.ts";
 import { registerCodexCompaction } from "../../src/integration/pi/codex-compaction.ts";
 import {
 	checkpointPayload,
+	IDENTITY_MISMATCH_WARNING,
 	projectCanonicalEntries,
 	providerCompactionIdentityFromValues,
-	registerCodexCompactionReplay,
 	restoreProviderCheckpointUsageBoundary,
 	scanRemoteCompactionCheckpoints,
 } from "../../src/integration/pi/codex-compaction-replay.ts";
+import {
+	beginInline,
+	CODEX_INLINE_COMPACTION_PHASE_LABELS,
+	CODEX_REMOTE_COMPACTION_LABEL,
+	CODEX_REMOTE_COMPACTION_STATUS_KEY,
+} from "../../src/integration/pi/codex-compaction-ui.ts";
 import { CodexProviderRequestGuard } from "../../src/integration/pi/codex-provider-request-guard.ts";
 import { createProviderConnection } from "../../src/integration/pi/provider-connection.ts";
 import type { ProviderCheckpointProposal } from "../../src/integration/pi/provider-payload-compaction-api.ts";
@@ -420,6 +426,7 @@ describe("remote compaction checkpoint contract", () => {
 
 		const runtime = {
 			compactCalls: 0,
+			compactMode: "success" as "success" | "error" | "cancel",
 			estimateContext: async () => ({
 				activeContextTokens: contextTokens,
 				fullEstimatedTokens: contextTokens,
@@ -430,9 +437,14 @@ describe("remote compaction checkpoint contract", () => {
 			}),
 			compact: async () => {
 				runtime.compactCalls += 1;
+				if (runtime.compactMode === "error") throw new Error("fixture remote failure");
+				if (runtime.compactMode === "cancel") return { status: "aborted" };
 				return { status: "completed", result: { output: [compactionItem] } };
 			},
-		} as unknown as CodexRuntime & { compactCalls: number };
+		} as unknown as CodexRuntime & {
+			compactCalls: number;
+			compactMode: "success" | "error" | "cancel";
+		};
 		const snapshot = {
 			compaction: { implementation: "compact_endpoint", threshold: 100 },
 			providerSupportsWebsockets: false,
@@ -440,20 +452,25 @@ describe("remote compaction checkpoint contract", () => {
 		};
 		const guard = new CodexProviderRequestGuard();
 		const activation = new ProviderActivationPolicy({ load: async () => config });
-		registerCodexCompactionReplay({
-			pi: pi.api,
+		registerCodexCompaction(
+			pi.api,
 			runtime,
-			configuration: { load: async () => config } as never,
+			{ load: async () => config } as never,
+			new CodexCompactionStore(),
 			activation,
-			store: new CodexCompactionStore(),
-			coordinator: new CodexCompactionCoordinator(),
-			capabilities: { resolve: async () => snapshot } as never,
-			profile: { isHealthy: () => true, registeredManagedTools: () => [] } as never,
+			new CodexCompactionCoordinator(),
+			{ resolve: async () => snapshot } as never,
+			{ isHealthy: () => true, registeredManagedTools: () => [] } as never,
 			guard,
-		});
+		);
 		const handler = pi.handlers.get("before_provider_payload")?.[0];
 		if (handler === undefined)
 			throw new Error("before_provider_payload handler was not registered");
+		const checkpointHandler = pi.handlers.get("session_provider_checkpoint")?.[0];
+		const indeterminateHandler = pi.handlers.get("session_provider_checkpoint_indeterminate")?.[0];
+		if (checkpointHandler === undefined || indeterminateHandler === undefined) {
+			throw new Error("checkpoint transaction handlers were not registered");
+		}
 		const signal = new AbortController().signal;
 		const request = {
 			model: model.id,
@@ -510,7 +527,26 @@ describe("remote compaction checkpoint contract", () => {
 		};
 
 		const first = await invoke();
+		expect(pi.status.get(CODEX_REMOTE_COMPACTION_STATUS_KEY)).toBe(
+			`${CODEX_INLINE_COMPACTION_PHASE_LABELS.threshold}: creating checkpoint`,
+		);
 		appendProposal(first);
+		await checkpointHandler(
+			{
+				type: "session_provider_checkpoint",
+				checkpointId: "checkpoint-1",
+				entry: {} as never,
+				trigger: "provider_inline",
+				reason: "provider_inline",
+				tokensBefore: 12,
+				willRetry: false,
+			},
+			context,
+		);
+		expect(pi.status.get(CODEX_REMOTE_COMPACTION_STATUS_KEY)).toBeUndefined();
+		expect(pi.notifications).toEqual([
+			`${CODEX_REMOTE_COMPACTION_LABEL} saved (12 tokens before compaction)`,
+		]);
 		expect(runtime.compactCalls).toBe(1);
 		expect(branch.filter((entry) => entry.type === "custom")).toHaveLength(1);
 		expect(guard.assertApproved(record, first.payload)).toBe(first.payload);
@@ -522,6 +558,7 @@ describe("remote compaction checkpoint contract", () => {
 		expect(unchanged.providerCheckpoint).toBeUndefined();
 		expect(runtime.compactCalls).toBe(1);
 		expect(branch.filter((entry) => entry.type === "custom")).toHaveLength(1);
+		expect(pi.notifications).toHaveLength(1);
 
 		branch.push(messageEntry("entry-2", leafId, "user", "small suffix"));
 		leafId = "entry-2";
@@ -533,10 +570,57 @@ describe("remote compaction checkpoint contract", () => {
 
 		contextTokens = 200;
 		const firstOverThreshold = await invoke();
+		expect(pi.status.get(CODEX_REMOTE_COMPACTION_STATUS_KEY)).toBe(
+			`${CODEX_INLINE_COMPACTION_PHASE_LABELS.recompact}: creating checkpoint`,
+		);
 		appendProposal(firstOverThreshold);
+		await checkpointHandler(
+			{
+				type: "session_provider_checkpoint",
+				checkpointId: "checkpoint-2",
+				entry: {} as never,
+				trigger: "provider_inline",
+				reason: "provider_inline",
+				tokensBefore: 200,
+				willRetry: false,
+			},
+			context,
+		);
+		expect(pi.status.get(CODEX_REMOTE_COMPACTION_STATUS_KEY)).toBeUndefined();
+		expect(pi.notifications).toHaveLength(2);
+		expect(pi.notifications[1]).toBe(
+			`${CODEX_REMOTE_COMPACTION_LABEL} saved (200 tokens before compaction)`,
+		);
 		expect(firstOverThreshold.providerCheckpoint).toBeDefined();
 		expect(runtime.compactCalls).toBe(2);
 		expect(branch.filter((entry) => entry.type === "custom")).toHaveLength(2);
+
+		branch.push(messageEntry("entry-3", leafId, "user", "failure suffix"));
+		leafId = "entry-3";
+		runtime.compactMode = "error";
+		const failed = invoke();
+		await expect(failed).rejects.toThrow();
+		expect(pi.status.get(CODEX_REMOTE_COMPACTION_STATUS_KEY)).toBeUndefined();
+		expect(pi.notifications.at(-1)).toBe("Codex checkpoint failed");
+
+		runtime.compactMode = "cancel";
+		const cancelled = invoke();
+		await expect(cancelled).rejects.toThrow("Compaction cancelled");
+		expect(pi.status.get(CODEX_REMOTE_COMPACTION_STATUS_KEY)).toBeUndefined();
+		expect(pi.notifications.at(-1)).toBe("Codex compaction cancelled");
+
+		beginInline(context, "threshold");
+		await indeterminateHandler(
+			{
+				type: "session_provider_checkpoint_indeterminate",
+				checkpointId: "checkpoint-indeterminate",
+				trigger: "provider_inline",
+			},
+			context,
+		);
+		expect(pi.status.get(CODEX_REMOTE_COMPACTION_STATUS_KEY)).toBeUndefined();
+		expect(pi.notifications.at(-1)).toBe("Codex checkpoint outcome could not be verified");
+		expect(pi.notifications.some((message) => message.includes("saved"))).toBe(true);
 		activation.dispose();
 	});
 
@@ -715,6 +799,8 @@ describe("remote compaction checkpoint contract", () => {
 		);
 		const handler = pi.handlers.get("session_before_compact")?.[0];
 		if (handler === undefined) throw new Error("session_before_compact handler was not registered");
+		const checkpointHandler = pi.handlers.get("session_provider_checkpoint")?.[0];
+		if (checkpointHandler === undefined) throw new Error("checkpoint handler was not registered");
 		const eventBase = {
 			customInstructions: undefined,
 			signal: new AbortController().signal,
@@ -729,6 +815,22 @@ describe("remote compaction checkpoint contract", () => {
 		const overflow = (await handler({ ...eventBase, reason: "overflow" }, ctx)) as
 			| { providerCheckpoint?: ProviderCheckpointProposal }
 			| undefined;
+		for (const reason of ["manual", "overflow"] as const) {
+			await checkpointHandler(
+				{
+					type: "session_provider_checkpoint",
+					checkpointId: `checkpoint-${reason}`,
+					entry: {} as never,
+					trigger: reason,
+					reason,
+					tokensBefore: 120,
+					willRetry: reason === "overflow",
+				},
+				ctx,
+			);
+			expect(pi.status.get(CODEX_REMOTE_COMPACTION_STATUS_KEY)).toBeUndefined();
+			expect(pi.notifications).toEqual([]);
+		}
 
 		expect(compactCalls).toBe(2);
 		expect(manual?.providerCheckpoint?.usage).toMatchObject({
@@ -810,6 +912,8 @@ describe("remote compaction checkpoint contract", () => {
 		);
 		const handler = pi.handlers.get("session_before_compact")?.[0];
 		if (handler === undefined) throw new Error("session_before_compact handler was not registered");
+		const checkpointHandler = pi.handlers.get("session_provider_checkpoint")?.[0];
+		if (checkpointHandler === undefined) throw new Error("checkpoint handler was not registered");
 		const event = {
 			customInstructions: undefined,
 			signal: new AbortController().signal,
@@ -822,8 +926,36 @@ describe("remote compaction checkpoint contract", () => {
 				| { providerCheckpoint?: ProviderCheckpointProposal }
 				| undefined;
 			expect(result?.providerCheckpoint).toBeDefined();
+			await checkpointHandler(
+				{
+					type: "session_provider_checkpoint",
+					checkpointId: `checkpoint-${reason}`,
+					entry: {} as never,
+					trigger: reason,
+					reason,
+					tokensBefore: 100,
+					willRetry: reason === "overflow",
+				},
+				ctx,
+			);
 		}
-		await handler({ ...event, reason: "manual", branchEntries: mismatchBranch }, ctx);
+		const mismatchResult = (await handler(
+			{ ...event, reason: "manual", branchEntries: mismatchBranch },
+			ctx,
+		)) as { providerCheckpoint?: ProviderCheckpointProposal } | undefined;
+		expect(mismatchResult?.providerCheckpoint).toBeDefined();
+		await checkpointHandler(
+			{
+				type: "session_provider_checkpoint",
+				checkpointId: "checkpoint-mismatch",
+				entry: {} as never,
+				trigger: "manual",
+				reason: "manual",
+				tokensBefore: 100,
+				willRetry: false,
+			},
+			ctx,
+		);
 
 		const expectedCheckpointInput = [
 			compactionItem,
@@ -836,7 +968,7 @@ describe("remote compaction checkpoint contract", () => {
 		expect(compactInputs.slice(0, 2)).toEqual([expectedCheckpointInput, expectedCheckpointInput]);
 		expect(JSON.stringify(compactInputs[2])).not.toContain("opaque-fixture-output");
 		expect(JSON.stringify(compactInputs[2])).toContain("covered canonical input");
-		expect(pi.notifications).toHaveLength(1);
+		expect(pi.notifications).toEqual([IDENTITY_MISMATCH_WARNING]);
 	});
 
 	test("projects canonical entries without checkpoint or context-invisible metadata", () => {

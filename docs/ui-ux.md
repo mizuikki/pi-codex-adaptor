@@ -29,19 +29,25 @@ prompt/tool status. Codex core isolation and reversible Pi restoration are lifec
 new user setting.
 
 The OpenAI section's manual compaction action commits an extension-owned provider checkpoint through
-Pi's atomic custom-entry transaction. The UI presents an explicit provider-checkpoint success with
-the verified entry ID and token counts; it never fabricates a textual summary or `CompactionEntry`.
-The UI never decrypts or displays encrypted output.
+Pi's atomic custom-entry transaction. Pi owns the manual and overflow compaction lifecycle feedback;
+the adaptor does not add a duplicate Codex completion notice. The UI never fabricates a textual
+summary or `CompactionEntry`, and never decrypts or displays encrypted output.
 
 The paired Pi host also exposes a verified provider checkpoint as a navigable Session Tree boundary.
-Its bounded label and parent/checkpoint navigation are host-owned; the adaptor does not duplicate the
-label or expose opaque checkpoint data.
+Its navigation role, parent/checkpoint navigation, persistence, and HTML redaction are host-owned. The
+adaptor's optional custom-entry renderer supplies the fixed `Codex checkpoint` marker and the safe
+pre-compaction token count from navigation metadata only. It does not read or expose checkpoint data.
 
-Inline automatic compaction remains silent in the live provider flow: it continues the current
-provider request and adds no synthetic conversational message or continuation turn. Pi verifies the
-custom checkpoint before dispatching the exact sealed rewritten payload. A matching checkpoint with
-no uncovered suffix makes no remote request. After a successful checkpoint, context usage is shown as
-unknown until the next valid assistant response reports usage.
+Inline automatic compaction remains non-conversational: it continues the current provider request
+and adds no synthetic conversational message or continuation turn. Once a new remote request is
+eligible, the adaptor shows a Codex-specific running status, distinguishing threshold compaction from
+re-compaction. Pi verifies the custom checkpoint before dispatching the exact sealed rewritten
+payload; only the verified `provider_inline` transaction produces one bounded success notice.
+Failure, cancellation, or an indeterminate commit clears the status and gives bounded outcome-only
+feedback. A matching checkpoint with no uncovered suffix is replayed without a remote request,
+status, or compaction notice. Missing optional UI methods leave checkpoint persistence and provider
+dispatch unchanged. After a successful checkpoint, context usage is shown as unknown until the next
+valid assistant response reports usage.
 
 When a Codex session leaves its checkpoint identity, the UI emits one bounded warning without
 identity values. Canonical Pi history is retained, but fit on the destination is not guaranteed; a
