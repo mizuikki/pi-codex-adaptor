@@ -9,11 +9,9 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
 use codex_utils_output_truncation::approx_tokens_from_byte_count;
 use serde::Deserialize;
-use serde::Serialize;
 
 const CONTEXT_WINDOW_TRUNCATED_OUTPUT_MESSAGE: &str =
     "Output exceeded the available model context and was truncated";
-const COMPACTION_REQUEST_OVERHEAD_TOKENS: u64 = 128;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct CompactionTokenEstimates {
@@ -42,41 +40,18 @@ pub(crate) struct OwnedCompactionInput {
     pub(crate) text: Option<TextControls>,
 }
 
-#[derive(Serialize)]
-struct CompactionRequestEstimate<'a> {
-    model: &'a str,
-    #[serde(skip_serializing_if = "str::is_empty")]
-    instructions: &'a str,
-    input: &'a [ResponseItem],
-    #[serde(skip_serializing_if = "Option::is_none")]
-    tools: Option<&'a ResponsesApiTools>,
-    tool_choice: &'static str,
-    parallel_tool_calls: bool,
-    reasoning: Option<&'a Reasoning>,
-    store: bool,
-    stream: bool,
-    include: [&'static str; 1],
-    service_tier: Option<&'a str>,
-    prompt_cache_key: Option<&'a str>,
-    text: Option<&'a TextControls>,
-}
-
-pub(crate) fn effective_context_window_limit(model: &ModelInfo) -> Option<u64> {
-    let context_window = model.resolved_context_window()?;
-    if context_window <= 0 {
-        return None;
-    }
-    let effective = i128::from(context_window)
-        .saturating_mul(i128::from(model.effective_context_window_percent))
-        / 100;
-    u64::try_from(effective).ok()
+/// Remote compaction is a standalone request boundary. Its history is fitted against the
+/// model's full context window, independently of the effective inference percentage used by
+/// ordinary turns.
+pub(crate) fn compaction_context_window_limit(model: &ModelInfo) -> Option<u64> {
+    u64::try_from(model.resolved_context_window()?).ok()
 }
 
 pub(crate) fn fit_compaction_input(
     request: &mut OwnedCompactionInput,
     model: &ModelInfo,
 ) -> Result<(), BridgeError> {
-    let Some(limit) = effective_context_window_limit(model) else {
+    let Some(limit) = compaction_context_window_limit(model) else {
         return Ok(());
     };
     let mut estimates = estimate_compaction_request_tokens(request);
@@ -102,37 +77,29 @@ pub(crate) fn fit_compaction_input(
 }
 
 fn estimate_compaction_request_tokens(request: &OwnedCompactionInput) -> CompactionTokenEstimates {
-    let mut input = request.input.clone();
-    input.push(ResponseItem::CompactionTrigger {});
-    let estimate = CompactionRequestEstimate {
-        model: &request.model,
-        instructions: &request.instructions,
-        input: &input,
-        tools: request.tools.as_ref(),
-        tool_choice: "auto",
-        parallel_tool_calls: request.parallel_tool_calls,
-        reasoning: request.reasoning.as_ref(),
-        store: false,
-        stream: true,
-        include: ["reasoning.encrypted_content"],
-        service_tier: request.service_tier.as_deref(),
-        prompt_cache_key: request.prompt_cache_key.as_deref(),
-        text: request.text.as_ref(),
-    };
-    serde_json::to_vec(&estimate).map_or(
+    // Match upstream's compaction preflight: count only model-visible history and base
+    // instructions. Request envelope fields (model, tools, stream flags, etc.) are not part of
+    // the history window and must not consume the standalone compaction input budget. Keep both
+    // UTF-8 and UTF-16 estimates because the provider accepts either representation's limit.
+    let serialized = serde_json::to_vec(&(&request.instructions, &request.input));
+    serialized.map_or(
         CompactionTokenEstimates {
             utf8_bytes: u64::MAX,
             utf16_code_units: u64::MAX,
         },
         |bytes| {
-            let utf8_bytes = approx_tokens_from_byte_count(bytes.len());
-            let utf16_code_units = std::str::from_utf8(&bytes).map_or(u64::MAX, |serialized| {
-                approx_tokens_from_byte_count(serialized.encode_utf16().count())
+            let utf8_bytes = u64::try_from(
+                crate::context_estimator::estimate_items(&request.input).saturating_add(
+                    crate::context_estimator::estimate_instructions(&request.instructions),
+                ),
+            )
+            .unwrap_or(u64::MAX);
+            let utf16_code_units = std::str::from_utf8(&bytes).map_or(u64::MAX, |value| {
+                approx_tokens_from_byte_count(value.encode_utf16().count())
             });
             CompactionTokenEstimates {
-                utf8_bytes: utf8_bytes.saturating_add(COMPACTION_REQUEST_OVERHEAD_TOKENS),
-                utf16_code_units: utf16_code_units
-                    .saturating_add(COMPACTION_REQUEST_OVERHEAD_TOKENS),
+                utf8_bytes,
+                utf16_code_units,
             }
         },
     )
@@ -244,10 +211,10 @@ mod tests {
     }
 
     #[test]
-    fn derives_effective_limit_and_automatic_threshold_from_model_metadata() {
+    fn derives_full_compaction_limit_independently_from_inference_threshold() {
         let model = fixture_model(272_000, 95);
 
-        assert_eq!(effective_context_window_limit(&model), Some(258_400));
+        assert_eq!(compaction_context_window_limit(&model), Some(272_000));
         assert_eq!(model.auto_compact_token_limit(), Some(244_800));
     }
 
@@ -274,14 +241,14 @@ mod tests {
     }
 
     #[test]
-    fn leaves_utf16_admissible_unicode_output_unchanged() {
+    fn allows_history_between_effective_and_full_context_limits() {
         let model = fixture_model(1_300, 50);
-        let mut request = request(vec![function_output("界".repeat(800))]);
+        let mut request = request(vec![function_output("x".repeat(3_000))]);
         let original = request.input.clone();
         let estimates = estimate_compaction_request_tokens(&request);
 
         assert!(estimates.utf8_bytes > 650);
-        assert!(estimates.utf16_code_units <= 650);
+        assert!(estimates.utf8_bytes <= 1_300);
 
         fit_compaction_input(&mut request, &model).expect("ambiguous input should reach upstream");
 
@@ -291,7 +258,7 @@ mod tests {
     #[test]
     fn rewrites_eligible_trailing_outputs_and_preserves_metadata() {
         let model = fixture_model(1_000, 50);
-        let mut request = request(vec![function_output("x".repeat(2_000))]);
+        let mut request = request(vec![function_output("x".repeat(6_000))]);
 
         fit_compaction_input(&mut request, &model).expect("eligible output should be rewritten");
 
@@ -328,7 +295,7 @@ mod tests {
                 id: Some(ResponseItemId::from_server("custom-output-id".to_owned())),
                 call_id: "custom-call-id".to_owned(),
                 name: Some("fixture-tool".to_owned()),
-                output: FunctionCallOutputPayload::from_text("x".repeat(2_000)),
+                output: FunctionCallOutputPayload::from_text("x".repeat(6_000)),
                 internal_chat_message_metadata_passthrough: None,
             },
             ResponseItem::ToolSearchOutput {
